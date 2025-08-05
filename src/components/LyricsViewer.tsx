@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { LyricLine } from '../stores/lyricsStore';
 import { useThemeStore } from '../stores/themeStore';
 
@@ -91,7 +91,6 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
         {line.words.map((wordTiming, wordIndex) => {
           const isPastWord = wordIndex < currentWordIndex;
           const isCurrentWord = wordIndex === currentWordIndex;
-          const isFutureWord = wordIndex > currentWordIndex;
           
           // Calculate progress within current word
           let wordProgress = 0;

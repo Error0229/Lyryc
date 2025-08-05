@@ -43,6 +43,10 @@ function connectToDesktopApp() {
           case 'pong':
             // Keep-alive response
             break;
+          case 'PLAYBACK_COMMAND':
+            // Forward playback command to content script
+            handlePlaybackCommand(message.data);
+            break;
           default:
             console.log('Unknown message type:', message.message_type);
         }
@@ -75,6 +79,38 @@ function connectToDesktopApp() {
   }
 }
 
+// Handle playback commands from desktop app
+async function handlePlaybackCommand(commandData) {
+  console.log('Handling playback command:', commandData);
+  
+  try {
+    // Get all tabs with music sites
+    const tabs = await chrome.tabs.query({
+      url: [
+        '*://open.spotify.com/*',
+        '*://music.youtube.com/*', 
+        '*://music.apple.com/*',
+        '*://soundcloud.com/*'
+      ]
+    });
+    
+    // Send command to all relevant tabs
+    for (const tab of tabs) {
+      try {
+        await chrome.tabs.sendMessage(tab.id, {
+          type: 'PLAYBACK_COMMAND',
+          command: commandData.command,
+          seekTime: commandData.seekTime
+        });
+      } catch (error) {
+        console.log(`Could not send command to tab ${tab.id}:`, error);
+      }
+    }
+  } catch (error) {
+    console.error('Error handling playback command:', error);
+  }
+}
+
 // Send track info to desktop app
 function sendTrackToApp(track, messageType = 'TRACK_DETECTED') {
   const message = {
@@ -86,7 +122,9 @@ function sendTrackToApp(track, messageType = 'TRACK_DETECTED') {
       source: track.source,
       url: track.url,
       timestamp: track.timestamp,
-      is_playing: messageType === 'TRACK_DETECTED'
+      is_playing: messageType === 'TRACK_DETECTED',
+      currentTime: track.currentTime || 0,
+      duration: track.duration || 0
     },
     timestamp: Date.now()
   };
@@ -146,6 +184,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     
     currentTrack = null;
+    
+    sendResponse({ success: true });
+  } else if (message.type === 'TRACK_PROGRESS') {
+    if (currentTrack) {
+      // Update current track with progress data
+      currentTrack = { ...currentTrack, ...message.data };
+      sendTrackToApp(currentTrack, 'TRACK_PROGRESS');
+    }
     
     sendResponse({ success: true });
   }

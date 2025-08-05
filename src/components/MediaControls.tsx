@@ -1,5 +1,6 @@
 import React from 'react';
 import { motion } from 'framer-motion';
+import { invoke } from '@tauri-apps/api/core';
 import { useLyricsStore } from '../stores/lyricsStore';
 
 interface MediaControlsProps {
@@ -23,6 +24,31 @@ const MediaControls: React.FC<MediaControlsProps> = ({
     const minutes = Math.floor(time / 60);
     const seconds = Math.floor(time % 60);
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  };
+
+  const handlePlayPause = async () => {
+    try {
+      await invoke('send_playback_command', { 
+        command: isPlaying ? 'pause' : 'play' 
+      });
+      onPlayPause(); // Still call the original handler for UI updates
+    } catch (error) {
+      console.error('Failed to send playback command:', error);
+      onPlayPause(); // Fallback to local control
+    }
+  };
+
+  const handleSeek = async (time: number) => {
+    try {
+      await invoke('send_playback_command', { 
+        command: 'seek',
+        seekTime: time 
+      });
+      onSeek(time); // Still call the original handler for UI updates
+    } catch (error) {
+      console.error('Failed to send seek command:', error);
+      onSeek(time); // Fallback to local control
+    }
   };
 
   const progress = Math.min(currentTime / duration, 1);
@@ -56,7 +82,7 @@ const MediaControls: React.FC<MediaControlsProps> = ({
             const rect = e.currentTarget.getBoundingClientRect();
             const clickX = e.clientX - rect.left;
             const newTime = (clickX / rect.width) * duration;
-            onSeek(newTime);
+            handleSeek(newTime);
           }}
         >
           <div 
@@ -87,7 +113,7 @@ const MediaControls: React.FC<MediaControlsProps> = ({
         <motion.button
           whileHover={{ scale: 1.05 }}
           whileTap={{ scale: 0.95 }}
-          onClick={onPlayPause}
+          onClick={handlePlayPause}
           className="p-4 bg-white/20 hover:bg-white/30 rounded-full transition-colors"
         >
           {isPlaying ? (
@@ -109,9 +135,9 @@ const MediaControls: React.FC<MediaControlsProps> = ({
         </button>
       </div>
 
-      {/* Demo note */}
+      {/* Control note */}
       <div className="text-center mt-4 text-white/40 text-xs">
-        🎯 Demo Mode - Controls simulate playback
+        🎵 Controls sync with your browser's music player
       </div>
     </div>
   );

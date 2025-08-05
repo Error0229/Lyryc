@@ -1,11 +1,10 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import LyricsViewer from "./components/LyricsViewer";
 import MediaControls from "./components/MediaControls";
 import { useLyricsStore } from "./stores/lyricsStore";
 import { useThemeStore } from "./stores/themeStore";
-import { LRCLibService } from "./services/lrclib";
 import { LyricsProcessor } from "./services/lyricsProcessor";
 import { useCurrentTime } from "./hooks/useCurrentTime";
 
@@ -14,6 +13,8 @@ function App() {
   const { currentTheme, themes, setTheme } = useThemeStore();
   const [isConnected, setIsConnected] = useState(false);
   const [isLoadingLyrics, setIsLoadingLyrics] = useState(false);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [lyricsError, setLyricsError] = useState<string | null>(null);
   const [lyricsProcessor] = useState(() => new LyricsProcessor({
     enableAIAlignment: true,
     enableWordLevel: true,
@@ -22,9 +23,12 @@ function App() {
     fallbackToOriginal: true
   }));
   
-  // Mock playback state for demo
-  const { currentTime, seekTo } = useCurrentTime({ 
-    isPlaying, 
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  
+  // Use real playback state instead of mock timer
+  const { seekTo } = useCurrentTime({ 
+    isPlaying: false, // Disable the mock timer
     startTime: 0 
   });
 
@@ -37,6 +41,7 @@ function App() {
 
   const fetchLyrics = async (title: string, artist: string) => {
     setIsLoadingLyrics(true);
+    setLyricsError(null);
     try {
       // Use the new lyrics processor for enhanced processing
       const processedResult = await lyricsProcessor.processTrackLyrics(
@@ -60,11 +65,13 @@ function App() {
           setLyrics(backendLyrics as any);
         } catch (backendError) {
           console.error("Backend lyrics fetch also failed:", backendError);
+          setLyricsError(`No lyrics found for "${title}" by ${artist}`);
           setLyrics([]);
         }
       }
     } catch (error) {
       console.error("Failed to fetch lyrics:", error);
+      setLyricsError(`Failed to fetch lyrics for "${title}" by ${artist}. Please check your internet connection.`);
       setLyrics([]);
     } finally {
       setIsLoadingLyrics(false);
@@ -80,8 +87,11 @@ function App() {
         // Check WebSocket status
         const wsStatus = await invoke("get_websocket_status");
         setIsConnected(wsStatus as boolean);
+        setConnectionError(null);
       } catch (error) {
         console.error("Failed to connect to extension:", error);
+        setConnectionError("Failed to connect to browser extension. Please make sure the extension is installed and active.");
+        setIsConnected(false);
       }
     };
 
@@ -98,6 +108,9 @@ function App() {
         };
         
         setCurrentTrack(track);
+        // Clear previous errors when new track is detected
+        setLyricsError(null);
+        setConnectionError(null);
       });
 
       const unlistenPlayback = await listen('playback-state', (event) => {
@@ -106,20 +119,23 @@ function App() {
         setIsPlaying(isPlaying);
       });
 
+      const unlistenTimeUpdate = await listen('track-time-update', (event) => {
+        const timeData = event.payload as { currentTime: number; duration: number; isPlaying: boolean };
+        console.log('Track time updated:', timeData);
+        setCurrentTime(timeData.currentTime);
+        setDuration(timeData.duration);
+        setIsPlaying(timeData.isPlaying);
+      });
+
       // Return cleanup function
       return () => {
         unlistenTrack();
         unlistenPlayback();
+        unlistenTimeUpdate();
       };
     };
 
-    // Test with a sample track for demo (remove in production)
-    const testTrack = {
-      title: "Blinding Lights",
-      artist: "The Weeknd",
-      thumbnail: "",
-    };
-    setCurrentTrack(testTrack);
+    // Removed demo track - will use real track data from extension
 
     initializeConnection();
     setupEventListeners();
@@ -236,10 +252,10 @@ function App() {
         )}
 
         {/* Media Controls */}
-        {currentTrack && (
+        {currentTrack && duration > 0 && (
           <MediaControls
             currentTime={currentTime}
-            duration={180} // 3 minutes demo
+            duration={duration}
             isPlaying={isPlaying}
             onPlayPause={() => setIsPlaying(!isPlaying)}
             onSeek={seekTo}
@@ -257,14 +273,65 @@ function App() {
           </div>
         )}
 
+        {/* Error Messages */}
+        {connectionError && (
+          <div 
+            className="backdrop-blur-md rounded-xl p-6 mb-8 border"
+            style={{
+              backgroundColor: `${currentTheme.colors.error}20`,
+              borderColor: `${currentTheme.colors.error}40`
+            }}
+          >
+            <div className="text-center">
+              <p 
+                className="text-lg font-medium mb-2"
+                style={{ color: currentTheme.colors.error }}
+              >
+                ⚠️ Connection Error
+              </p>
+              <p 
+                className="text-sm"
+                style={{ color: currentTheme.colors.textSecondary }}
+              >
+                {connectionError}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {lyricsError && (
+          <div 
+            className="backdrop-blur-md rounded-xl p-6 mb-8 border"
+            style={{
+              backgroundColor: `${currentTheme.colors.error}20`,
+              borderColor: `${currentTheme.colors.error}40`
+            }}
+          >
+            <div className="text-center">
+              <p 
+                className="text-lg font-medium mb-2"
+                style={{ color: currentTheme.colors.error }}
+              >
+                📝 Lyrics Error
+              </p>
+              <p 
+                className="text-sm"
+                style={{ color: currentTheme.colors.textSecondary }}
+              >
+                {lyricsError}
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Instructions */}
-        {!currentTrack && !isLoadingLyrics && (
+        {!currentTrack && !isLoadingLyrics && !connectionError && (
           <div className="text-center text-white/70 mt-12">
             <p className="text-lg mb-4">
               🎧 Play music in your browser to see lyrics here
             </p>
             <p className="text-sm">
-              Supported: Spotify Web Player, YouTube Music
+              Supported: Spotify Web Player, YouTube Music, Apple Music, SoundCloud
             </p>
           </div>
         )}

@@ -19,10 +19,6 @@ interface LRCLibSearchParams {
 }
 
 const LRCLIB_BASE_URL = 'https://lrclib.net/api';
-const FALLBACK_APIS = [
-  'https://lrclib.net/api',
-  // Add more fallback APIs if available
-];
 
 export class LRCLibService {
   private static cacheManager = new CacheManager();

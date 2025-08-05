@@ -2,7 +2,8 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use uuid::Uuid;
@@ -23,9 +24,16 @@ pub struct TrackUpdate {
     pub url: String,
     pub timestamp: u64,
     pub is_playing: bool,
+    #[serde(rename = "currentTime")]
+    pub current_time: Option<f64>,
+    pub duration: Option<f64>,
 }
 
-type ClientConnections = Arc<Mutex<HashMap<String, tokio_tungstenite::WebSocketStream<TcpStream>>>>;
+use futures_util::stream::SplitSink;
+use tokio_tungstenite::WebSocketStream;
+
+type ClientSender = SplitSink<WebSocketStream<TcpStream>, Message>;
+type ClientConnections = Arc<Mutex<HashMap<String, ClientSender>>>;
 
 pub struct WebSocketServer {
     port: u16,
@@ -73,16 +81,47 @@ impl WebSocketServer {
     }
 
     pub async fn broadcast_to_extension(&self, message: ExtensionMessage) -> Result<(), String> {
-        let clients = self.clients.lock().map_err(|e| e.to_string())?;
+        let mut clients = self.clients.lock().await;
         let message_text = serde_json::to_string(&message).map_err(|e| e.to_string())?;
+        let ws_message = Message::Text(message_text.clone());
         
-        for (client_id, _ws_stream) in clients.iter() {
-            // Note: In a real implementation, you'd need to handle sending properly
-            // This is a simplified version
-            println!("Would send to client {}: {}", client_id, message_text);
+        // Keep track of disconnected clients to remove them
+        let mut disconnected_clients = Vec::new();
+        
+        for (client_id, sender) in clients.iter_mut() {
+            match sender.send(ws_message.clone()).await {
+                Ok(_) => {
+                    println!("Sent message to client {}: {}", client_id, message_text);
+                }
+                Err(e) => {
+                    println!("Failed to send to client {}: {}", client_id, e);
+                    disconnected_clients.push(client_id.clone());
+                }
+            }
+        }
+        
+        // Remove disconnected clients
+        for client_id in disconnected_clients {
+            clients.remove(&client_id);
         }
         
         Ok(())
+    }
+
+    pub async fn send_playback_command(&self, command: String, seek_time: Option<f64>) -> Result<(), String> {
+        let message = ExtensionMessage {
+            message_type: "PLAYBACK_COMMAND".to_string(),
+            data: serde_json::json!({
+                "command": command,
+                "seekTime": seek_time
+            }),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64,
+        };
+        
+        self.broadcast_to_extension(message).await
     }
 }
 
@@ -99,12 +138,6 @@ async fn handle_connection(
 
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
 
-    // Add client to connections
-    {
-        let _clients_guard = clients.lock().unwrap();
-        // Note: This is simplified - in practice you'd store the sender part
-        println!("Client {} connected", client_id);
-    }
 
     // Send welcome message
     let welcome_msg = ExtensionMessage {
@@ -122,13 +155,20 @@ async fn handle_connection(
     let welcome_text = serde_json::to_string(&welcome_msg)?;
     ws_sender.send(Message::Text(welcome_text)).await?;
 
+    // Add client to connections after welcome message
+    {
+        let mut clients_guard = clients.lock().await;
+        clients_guard.insert(client_id.clone(), ws_sender);
+        println!("Client {} added to connections", client_id);
+    }
+
     // Handle incoming messages
     while let Some(msg) = ws_receiver.next().await {
         match msg? {
             Message::Text(text) => {
                 if let Ok(extension_msg) = serde_json::from_str::<ExtensionMessage>(&text) {
                     match extension_msg.message_type.as_str() {
-                        "TRACK_DETECTED" | "TRACK_PAUSED" | "TRACK_STOPPED" => {
+                        "TRACK_DETECTED" | "TRACK_PAUSED" | "TRACK_STOPPED" | "TRACK_PROGRESS" => {
                             if let Ok(track_update) = serde_json::from_value::<TrackUpdate>(extension_msg.data.clone()) {
                                 // Call the track callback if available
                                 if let Some(ref callback) = track_callback {
@@ -146,7 +186,12 @@ async fn handle_connection(
                                     .as_millis() as u64,
                             };
                             let pong_text = serde_json::to_string(&pong_msg)?;
-                            ws_sender.send(Message::Text(pong_text)).await?;
+                            
+                            // Get sender from connections to send pong
+                            let mut clients_guard = clients.lock().await;
+                            if let Some(sender) = clients_guard.get_mut(&client_id) {
+                                let _ = sender.send(Message::Text(pong_text)).await;
+                            }
                         }
                         _ => {
                             println!("Unknown message type: {}", extension_msg.message_type);
@@ -169,8 +214,9 @@ async fn handle_connection(
 
     // Remove client from connections
     {
-        let _clients_guard = clients.lock().unwrap();
-        println!("Client {} disconnected", client_id);
+        let mut clients_guard = clients.lock().await;
+        clients_guard.remove(&client_id);
+        println!("Client {} disconnected and removed", client_id);
     }
 
     Ok(())
