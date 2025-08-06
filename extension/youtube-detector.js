@@ -19,12 +19,12 @@ class YouTubeMusicDetector {
       const checkForElements = () => {
         // Check for YouTube Music app container
         const ytMusicApp = document.querySelector('ytmusic-app') ||
-                          document.querySelector('#main-panel') ||
-                          document.querySelector('.style-scope.ytmusic-app-layout') ||
-                          document.querySelector('ytmusic-player-bar') ||
-                          document.querySelector('.player-bar') ||
-                          document.querySelector('#layout .player-page');
-        
+          document.querySelector('#main-panel') ||
+          document.querySelector('.style-scope.ytmusic-app-layout') ||
+          document.querySelector('ytmusic-player-bar') ||
+          document.querySelector('.player-bar') ||
+          document.querySelector('#layout .player-page');
+
         if (ytMusicApp) {
           console.log('YouTube Music detected, initializing...');
           resolve();
@@ -51,7 +51,7 @@ class YouTubeMusicDetector {
 
     // Initial detection
     this.detectCurrentTrack();
-    
+
     // Periodic checks
     setInterval(() => {
       this.detectCurrentTrack();
@@ -68,28 +68,28 @@ class YouTubeMusicDetector {
       const trackSelectors = [
         // Player bar selectors
         'ytmusic-player-bar .content-info-wrapper .title',
-        'ytmusic-player-bar .middle-controls-buttons .title', 
+        'ytmusic-player-bar .middle-controls-buttons .title',
         'ytmusic-player-bar yt-formatted-string.title',
         '#layout ytmusic-player-bar .title',
         '.ytmusic-player-bar .title',
-        
+
         // Alternative player selectors
         '.player-bar-middle-section .song-title',
         '.middle-controls .content-info-wrapper .title',
         '.content-info-wrapper .title a',
-        
+
         // Modern YouTube Music selectors
         'ytmusic-player-bar .content-info-wrapper .title a',
         'ytmusic-player-bar .middle-controls .title',
         'ytmusic-player .song-title',
-        
+
         // Legacy selectors
         '.content-info-wrapper .title',
         '.player-bar-wrapper .song-title',
         '#layout .player-page .content-info-wrapper .title yt-formatted-string',
         '.middle-controls-buttons ~ div .title',
         '.player-bar-wrapper .content-info-wrapper .title yt-formatted-string',
-        
+
         // Fallback selectors
         '[class*="title"] a[href*="/watch"]',
         '.ytmusic-player-bar [class*="title"]',
@@ -101,19 +101,19 @@ class YouTubeMusicDetector {
         'ytmusic-player-bar .content-info-wrapper .byline',
         'ytmusic-player-bar .middle-controls-buttons .byline',
         'ytmusic-player-bar yt-formatted-string.byline',
-        '#layout ytmusic-player-bar .byline', 
+        '#layout ytmusic-player-bar .byline',
         '.ytmusic-player-bar .byline',
-        
+
         // Alternative artist selectors
         '.player-bar-middle-section .song-artist',
         '.middle-controls .content-info-wrapper .byline',
         '.content-info-wrapper .byline a',
-        
+
         // Modern YouTube Music artist selectors
         'ytmusic-player-bar .content-info-wrapper .byline a',
         'ytmusic-player-bar .middle-controls .byline',
         'ytmusic-player .song-artist',
-        
+
         // Legacy selectors
         '.content-info-wrapper .subtitle a',
         'ytmusic-player-bar .subtitle',
@@ -122,7 +122,7 @@ class YouTubeMusicDetector {
         '.ytmusic-player-bar .byline a',
         '.middle-controls-buttons ~ div .subtitle a',
         '.player-bar-wrapper .content-info-wrapper .subtitle a',
-        
+
         // Fallback artist selectors
         '[class*="byline"] a[href*="/channel"]',
         '.ytmusic-player-bar [class*="byline"]',
@@ -133,9 +133,16 @@ class YouTubeMusicDetector {
       for (const selector of trackSelectors) {
         const element = document.querySelector(selector);
         if (element) {
-          trackName = element.textContent?.trim() || 
-                     element.title?.trim() || 
-                     element.getAttribute('aria-label')?.trim();
+          trackName = element.textContent?.trim() ||
+            element.title?.trim() ||
+            element.getAttribute('aria-label')?.trim();
+          // clean up track name
+          // 1. if it contains 【*】 remove it
+          trackName = trackName?.replace(/【.*?】/g, '').trim();
+          // 2. if it contains " - YouTube Music" remove it
+          trackName = trackName?.replace(/ - YouTube Music$/, '').trim();
+          // 3. if it contains " - YouTube" remove it
+          trackName = trackName?.replace(/ - YouTube$/, '').trim();
           if (trackName && trackName !== 'YouTube Music') {
             console.log(`Found track with selector: ${selector} -> ${trackName}`);
             break;
@@ -147,9 +154,13 @@ class YouTubeMusicDetector {
       for (const selector of artistSelectors) {
         const element = document.querySelector(selector);
         if (element) {
-          artistName = element.textContent?.trim() || 
-                      element.title?.trim() || 
-                      element.getAttribute('aria-label')?.trim();
+          artistName = element.textContent?.trim() ||
+            element.title?.trim() ||
+            element.getAttribute('aria-label')?.trim();
+          // if the string in the format of "Artist • Album • Year" is found, we take the first part as artist
+          if (artistName && artistName.includes('•')) {
+            artistName = artistName.split('•')[0].trim();
+          }
           if (artistName && artistName !== 'YouTube Music') {
             console.log(`Found artist with selector: ${selector} -> ${artistName}`);
             break;
@@ -194,7 +205,7 @@ class YouTubeMusicDetector {
         '.play-pause-button',
         '.middle-controls-buttons .play-pause-button'
       ];
-      
+
       let isCurrentlyPlaying = false;
       for (const selector of playButtonSelectors) {
         const playButton = document.querySelector(selector);
@@ -202,15 +213,15 @@ class YouTubeMusicDetector {
           const ariaLabel = playButton.getAttribute('aria-label') || '';
           const title = playButton.getAttribute('title') || playButton.getAttribute('data-title-no-tooltip') || '';
           const tooltip = playButton.querySelector('[role="tooltip"]')?.textContent || '';
-          
+
           // If button says "Pause", music is playing
-          isCurrentlyPlaying = ariaLabel.toLowerCase().includes('pause') || 
-                             title.toLowerCase().includes('pause') ||
-                             tooltip.toLowerCase().includes('pause') ||
-                             playButton.querySelector('[aria-label*="pause" i]') !== null ||
-                             playButton.classList.contains('playing') ||
-                             document.querySelector('.playing') !== null;
-          
+          isCurrentlyPlaying = ariaLabel.toLowerCase().includes('pause') ||
+            title.toLowerCase().includes('pause') ||
+            tooltip.toLowerCase().includes('pause') ||
+            playButton.querySelector('[aria-label*="pause" i]') !== null ||
+            playButton.classList.contains('playing') ||
+            document.querySelector('.playing') !== null;
+
           if (isCurrentlyPlaying) {
             console.log(`Music is playing (detected via ${selector})`);
             break;
@@ -257,11 +268,11 @@ class YouTubeMusicDetector {
         };
 
         // Only send if changed
-        if (!this.currentTrack || 
-            this.currentTrack.title !== track.title || 
-            this.currentTrack.artist !== track.artist ||
-            this.isPlaying !== isCurrentlyPlaying) {
-          
+        if (!this.currentTrack ||
+          this.currentTrack.title !== track.title ||
+          this.currentTrack.artist !== track.artist ||
+          this.isPlaying !== isCurrentlyPlaying) {
+
           this.currentTrack = track;
           this.isPlaying = isCurrentlyPlaying;
 

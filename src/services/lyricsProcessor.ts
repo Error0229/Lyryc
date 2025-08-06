@@ -47,18 +47,34 @@ export class LyricsProcessor {
   async processTrackLyrics(
     trackName: string,
     artistName: string,
-    audioUrl?: string
+    audioUrl?: string,
+    abortSignal?: AbortSignal
   ): Promise<ProcessedLyrics> {
     const startTime = performance.now();
     
     try {
+      console.log(`[LyricsProcessor] Processing lyrics for: "${trackName}" by "${artistName}"`);
+      
+      // Check if cancelled before starting
+      if (abortSignal?.aborted) {
+        throw new Error('Request was cancelled');
+      }
+      
       // Step 1: Fetch lyrics from LRCLIB
       const lrclibLyrics = await LRCLibService.searchLyrics({
         track_name: trackName,
         artist_name: artistName
-      });
+      }, abortSignal);
+
+      // Check if cancelled after LRCLib fetch
+      if (abortSignal?.aborted) {
+        throw new Error('Request was cancelled');
+      }
+
+      console.log(`[LyricsProcessor] LRCLib returned ${lrclibLyrics.length} lyrics lines`);
 
       if (lrclibLyrics.length === 0) {
+        console.log('[LyricsProcessor] No lyrics found from LRCLib, returning empty result');
         return {
           lyrics: [],
           confidence: 0,

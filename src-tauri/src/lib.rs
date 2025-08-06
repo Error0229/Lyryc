@@ -43,12 +43,49 @@ async fn set_current_track(track: TrackInfo, state: State<'_, TrackState>) -> Re
 async fn fetch_lyrics(track_name: String, artist_name: String) -> Result<Vec<LyricLine>, String> {
     println!("Fetching lyrics for: {} by {}", track_name, artist_name);
     
+    // Try multiple search strategies with cleaned names
+    let search_strategies = vec![
+        // Original
+        (track_name.clone(), artist_name.clone()),
+        // Cleaned track name
+        (clean_track_name(&track_name), artist_name.clone()),
+        // Track name with artist removed
+        (remove_artist_from_track(&track_name, &artist_name), artist_name.clone()),
+        // Cleaned track name with artist removed
+        (clean_track_name(&remove_artist_from_track(&track_name, &artist_name)), artist_name.clone()),
+        // Without artist name
+        (clean_track_name(&track_name), "".to_string()),
+    ];
+    
+    for (search_track, search_artist) in search_strategies {
+        if search_track.trim().is_empty() {
+            continue;
+        }
+        
+        println!("Trying strategy: '{}' by '{}'", search_track, search_artist);
+        
+        if let Ok(result) = try_fetch_lyrics(&search_track, &search_artist).await {
+            if !result.is_empty() {
+                println!("Success with strategy: '{}' by '{}'", search_track, search_artist);
+                return Ok(result);
+            }
+        }
+    }
+    
+    Err("No lyrics found after all strategies".to_string())
+}
+
+async fn try_fetch_lyrics(track_name: &str, artist_name: &str) -> Result<Vec<LyricLine>, String> {
     // Build request URL
-    let url = format!(
-        "https://lrclib.net/api/search?track_name={}&artist_name={}",
-        urlencoding::encode(&track_name),
-        urlencoding::encode(&artist_name)
+    let mut url = format!(
+        "https://lrclib.net/api/search?track_name={}",
+        urlencoding::encode(track_name)
     );
+    
+    // Only add artist name if it's not empty
+    if !artist_name.trim().is_empty() {
+        url.push_str(&format!("&artist_name={}", urlencoding::encode(artist_name)));
+    }
     
     println!("Request URL: {}", url);
 
@@ -113,6 +150,83 @@ async fn fetch_lyrics(track_name: String, artist_name: String) -> Result<Vec<Lyr
     }
 
     Err("No usable lyrics found".to_string())
+}
+
+fn clean_track_name(track_name: &str) -> String {
+    use regex::Regex;
+    
+    let mut cleaned = track_name.to_string();
+    
+    // Remove common YouTube Music additions
+    let patterns = vec![
+        r"\s*\(.*?MV.*?\)",
+        r"\s*\[.*?MV.*?\]",
+        r"\s*\(.*?Official.*?Video.*?\)",
+        r"\s*\[.*?Official.*?Video.*?\]",
+        r"\s*\(.*?Official.*?Music.*?Video.*?\)",
+        r"\s*\[.*?Official.*?Music.*?Video.*?\]",
+        r"\s*\(.*?Audio.*?\)",
+        r"\s*\[.*?Audio.*?\]",
+        r"\s*\(.*?Lyric.*?Video.*?\)",
+        r"\s*\[.*?Lyric.*?Video.*?\]",
+        // Remove featuring
+        r"\s*\(.*?feat\..*?\)",
+        r"\s*\[.*?feat\..*?\]",
+        r"\s*\(.*?ft\..*?\)",
+        r"\s*\[.*?ft\..*?\]",
+        r"\s*\(.*?featuring.*?\)",
+        r"\s*\[.*?featuring.*?\]",
+        // Remove remix/version
+        r"\s*\(.*?remix.*?\)",
+        r"\s*\[.*?remix.*?\]",
+        r"\s*\(.*?version.*?\)",
+        r"\s*\[.*?version.*?\]",
+        r"\s*-\s*remaster.*$",
+        // Remove live
+        r"\s*\(.*?Live.*?\)",
+        r"\s*\[.*?Live.*?\]",
+    ];
+    
+    for pattern in patterns {
+        if let Ok(re) = Regex::new(&format!("(?i){}", pattern)) {
+            cleaned = re.replace_all(&cleaned, "").to_string();
+        }
+    }
+    
+    // Clean up multiple spaces
+    if let Ok(re) = Regex::new(r"\s+") {
+        cleaned = re.replace_all(&cleaned, " ").trim().to_string();
+    }
+    
+    cleaned
+}
+
+fn remove_artist_from_track(track_name: &str, artist_name: &str) -> String {
+    if artist_name.trim().is_empty() {
+        return track_name.to_string();
+    }
+    
+    use regex::Regex;
+    
+    // Create pattern to match artist name at the beginning with separators
+    let escaped_artist = regex::escape(artist_name);
+    let patterns = vec![
+        format!(r"^{}\s*[-–—]\s*", escaped_artist),
+        format!(r"\s*[-–—]\s*{}$", escaped_artist),
+    ];
+    
+    let mut result = track_name.to_string();
+    
+    for pattern in patterns {
+        if let Ok(re) = Regex::new(&format!("(?i){}", pattern)) {
+            let new_result = re.replace_all(&result, "").trim().to_string();
+            if new_result.len() < result.len() && !new_result.is_empty() {
+                result = new_result;
+            }
+        }
+    }
+    
+    result
 }
 
 fn parse_lrc_format(lrc_content: &str) -> Vec<LyricLine> {

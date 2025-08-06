@@ -334,7 +334,22 @@ export class CacheManager {
 
   private generateCacheKey(trackName: string, artistName: string): string {
     const normalized = `${trackName.toLowerCase().trim()}-${artistName.toLowerCase().trim()}`;
-    return btoa(normalized).replace(/[+/=]/g, ''); // Base64 encode and remove special chars
+    
+    console.log('[CacheManager] Generating Unicode-safe cache key for:', normalized);
+    
+    // Use TextEncoder for Unicode-safe encoding instead of btoa
+    const encoder = new TextEncoder();
+    const data = encoder.encode(normalized);
+    
+    // Convert to hex string (Unicode-safe alternative to base64)
+    const hexString = Array.from(data)
+      .map(byte => byte.toString(16).padStart(2, '0'))
+      .join('');
+    
+    // Truncate to reasonable length for IndexedDB key
+    const cacheKey = hexString.substring(0, 64);
+    console.log('[CacheManager] Generated cache key:', cacheKey);
+    return cacheKey;
   }
 
   private startCleanupTimer(): void {

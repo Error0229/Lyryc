@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import LyricsViewer from "./components/LyricsViewer";
@@ -26,6 +26,10 @@ function App() {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   
+  // Request cancellation and sequencing to prevent race conditions
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const requestSequenceRef = useRef(0);
+  
   // Use real playback state instead of mock timer
   const { seekTo } = useCurrentTime({ 
     isPlaying: false, // Disable the mock timer
@@ -39,42 +43,98 @@ function App() {
     }
   }, [currentTrack]);
 
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      // Cancel any pending request on unmount
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
+  }, []);
+
   const fetchLyrics = async (title: string, artist: string) => {
+    // Cancel any existing request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    
+    // Create new abort controller for this request
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+    
+    // Increment and capture sequence number for this request
+    const currentSequence = ++requestSequenceRef.current;
+    
+    console.log(`[App] Starting lyrics fetch #${currentSequence} for: "${title}" by "${artist}"`);
+    
     setIsLoadingLyrics(true);
     setLyricsError(null);
+    
     try {
       // Use the new lyrics processor for enhanced processing
       const processedResult = await lyricsProcessor.processTrackLyrics(
         title,
-        artist
+        artist,
+        undefined, // audioUrl
+        abortController.signal // Pass abort signal
       );
 
+      // Check if this request was cancelled or superseded
+      if (abortController.signal.aborted || currentSequence !== requestSequenceRef.current) {
+        console.log(`[App] Request #${currentSequence} was cancelled or superseded`);
+        return;
+      }
+
       if (processedResult.lyrics.length > 0) {
-        console.log(`Lyrics processed with ${processedResult.method} method, confidence: ${processedResult.confidence}`);
+        console.log(`[App] Request #${currentSequence} succeeded with ${processedResult.method} method, confidence: ${processedResult.confidence}`);
         console.log(`Processing time: ${processedResult.processingTime.toFixed(2)}ms`);
         console.log(`Has word timings: ${processedResult.hasWordTimings}`);
         
         setLyrics(processedResult.lyrics);
       } else {
+        // Check again before fallback
+        if (abortController.signal.aborted || currentSequence !== requestSequenceRef.current) {
+          console.log(`[App] Request #${currentSequence} was cancelled before fallback`);
+          return;
+        }
+        
         // Fallback to Tauri backend
         try {
           const backendLyrics = await invoke("fetch_lyrics", {
             trackName: title,
             artistName: artist
           });
+          
+          // Final check before setting results
+          if (abortController.signal.aborted || currentSequence !== requestSequenceRef.current) {
+            console.log(`[App] Request #${currentSequence} was cancelled after backend fetch`);
+            return;
+          }
+          
+          console.log(`[App] Request #${currentSequence} succeeded with backend fallback`);
           setLyrics(backendLyrics as any);
         } catch (backendError) {
-          console.error("Backend lyrics fetch also failed:", backendError);
-          setLyricsError(`No lyrics found for "${title}" by ${artist}`);
-          setLyrics([]);
+          // Check if still valid before showing error
+          if (!abortController.signal.aborted && currentSequence === requestSequenceRef.current) {
+            console.error(`[App] Request #${currentSequence} - Backend lyrics fetch also failed:`, backendError);
+            setLyricsError(`No lyrics found for "${title}" by ${artist}`);
+            setLyrics([]);
+          }
         }
       }
     } catch (error) {
-      console.error("Failed to fetch lyrics:", error);
-      setLyricsError(`Failed to fetch lyrics for "${title}" by ${artist}. Please check your internet connection.`);
-      setLyrics([]);
+      // Only show error if this request wasn't cancelled
+      if (!abortController.signal.aborted && currentSequence === requestSequenceRef.current) {
+        console.error(`[App] Request #${currentSequence} failed:`, error);
+        setLyricsError(`Failed to fetch lyrics for "${title}" by ${artist}. Please check your internet connection.`);
+        setLyrics([]);
+      }
     } finally {
-      setIsLoadingLyrics(false);
+      // Only update loading state if this is still the current request
+      if (currentSequence === requestSequenceRef.current) {
+        setIsLoadingLyrics(false);
+      }
     }
   };
 
