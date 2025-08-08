@@ -1,6 +1,6 @@
 import { LyricLine, WordTiming } from '../stores/lyricsStore';
 import { AudioSyncService, AudioSyncConfig, SyncResult } from './audioSync';
-import { LRCLibService } from './lrclib';
+import { invoke } from '@tauri-apps/api/core';
 
 export interface ProcessorConfig {
   enableAIAlignment: boolean;
@@ -31,7 +31,7 @@ export class LyricsProcessor {
     fallbackToOriginal: true
   }) {
     this.config = config;
-    
+
     const syncConfig: AudioSyncConfig = {
       enableAIAlignment: config.enableAIAlignment,
       alignmentSensitivity: 0.7,
@@ -40,7 +40,7 @@ export class LyricsProcessor {
       autoDetectLanguage: config.language === 'auto',
       fallbackToOriginal: config.fallbackToOriginal
     };
-    
+
     this.audioSyncService = new AudioSyncService(syncConfig);
   }
 
@@ -51,30 +51,30 @@ export class LyricsProcessor {
     abortSignal?: AbortSignal
   ): Promise<ProcessedLyrics> {
     const startTime = performance.now();
-    
+
     try {
       console.log(`[LyricsProcessor] Processing lyrics for: "${trackName}" by "${artistName}"`);
-      
+
       // Check if cancelled before starting
       if (abortSignal?.aborted) {
         throw new Error('Request was cancelled');
       }
-      
-      // Step 1: Fetch lyrics from LRCLIB
-      const lrclibLyrics = await LRCLibService.searchLyrics({
+
+      // Step 1: Fetch lyrics from backend (Tauri)
+      const lrclibLyrics = await invoke('fetch_lyrics', {
         track_name: trackName,
         artist_name: artistName
-      }, abortSignal);
+      }) as LyricLine[];
 
       // Check if cancelled after LRCLib fetch
       if (abortSignal?.aborted) {
         throw new Error('Request was cancelled');
       }
 
-      console.log(`[LyricsProcessor] LRCLib returned ${lrclibLyrics.length} lyrics lines`);
+      console.log(`[LyricsProcessor] Backend returned ${lrclibLyrics?.length || 0} lyrics lines`);
 
-      if (lrclibLyrics.length === 0) {
-        console.log('[LyricsProcessor] No lyrics found from LRCLib, returning empty result');
+      if (!lrclibLyrics || lrclibLyrics.length === 0) {
+        console.log('[LyricsProcessor] No lyrics found from backend, returning empty result');
         return {
           lyrics: [],
           confidence: 0,
@@ -126,7 +126,7 @@ export class LyricsProcessor {
 
     } catch (error) {
       console.error('Error processing track lyrics:', error);
-      
+
       return {
         lyrics: [],
         confidence: 0,
@@ -161,22 +161,22 @@ export class LyricsProcessor {
   private generateWordTimings(line: LyricLine): WordTiming[] {
     const words = line.text.split(/\s+/).filter(w => w.length > 0);
     const wordTimings: WordTiming[] = [];
-    
+
     if (words.length === 0) return wordTimings;
 
     const lineDuration = line.duration || 3000;
     const wordsPerSecond = words.length / (lineDuration / 1000);
-    
+
     // Calculate relative durations based on word characteristics
     const wordWeights = words.map(word => this.calculateWordWeight(word));
     const totalWeight = wordWeights.reduce((sum, weight) => sum + weight, 0);
-    
+
     let currentTime = line.time;
-    
+
     for (let i = 0; i < words.length; i++) {
       const wordDuration = (wordWeights[i] / totalWeight) * lineDuration;
       const endTime = currentTime + wordDuration;
-      
+
       // Apply language-specific timing adjustments
       const adjustedTiming = this.adjustWordTiming(
         words[i],
@@ -184,13 +184,13 @@ export class LyricsProcessor {
         endTime,
         this.config.language
       );
-      
+
       wordTimings.push({
         start: Math.round(adjustedTiming.start),
         end: Math.round(adjustedTiming.end),
         word: words[i]
       });
-      
+
       currentTime = adjustedTiming.end;
     }
 
@@ -199,25 +199,25 @@ export class LyricsProcessor {
 
   private calculateWordWeight(word: string): number {
     let weight = 1; // Base weight
-    
+
     // Length factor
     weight += word.length * 0.1;
-    
+
     // Syllable estimation (rough)
     const vowels = word.match(/[aeiouAEIOU]/g)?.length || 0;
     const consonantClusters = word.match(/[bcdfghjklmnpqrstvwxyzBCDFGHJKLMNPQRSTVWXYZ]{2,}/g)?.length || 0;
     weight += vowels * 0.3 + consonantClusters * 0.2;
-    
+
     // Special characters (indicate complex words)
     const specialChars = word.match(/[^\w]/g)?.length || 0;
     weight += specialChars * 0.1;
-    
+
     // Common short words get less time
     const shortWords = ['a', 'an', 'the', 'in', 'on', 'at', 'to', 'of', 'and', 'or', 'but'];
     if (shortWords.includes(word.toLowerCase())) {
       weight *= 0.7;
     }
-    
+
     return Math.max(weight, 0.3); // Minimum weight
   }
 
@@ -229,21 +229,21 @@ export class LyricsProcessor {
   ): { start: number; end: number } {
     // Language-specific timing adjustments
     const adjustments = this.getLanguageTimingAdjustments(language);
-    
+
     let duration = endTime - startTime;
-    
+
     // Apply language-specific multipliers
     if (this.isComplexWord(word, language)) {
       duration *= adjustments.complexWordMultiplier;
     }
-    
+
     if (this.isPunctuatedWord(word)) {
       duration *= adjustments.punctuationMultiplier;
     }
-    
+
     // Ensure minimum and maximum durations
     duration = Math.max(adjustments.minWordDuration, Math.min(adjustments.maxWordDuration, duration));
-    
+
     return {
       start: startTime,
       end: startTime + duration
@@ -340,7 +340,7 @@ export class LyricsProcessor {
   // Public configuration methods
   updateConfig(newConfig: Partial<ProcessorConfig>): void {
     this.config = { ...this.config, ...newConfig };
-    
+
     // Update audio sync service config
     this.audioSyncService.updateConfig({
       enableAIAlignment: this.config.enableAIAlignment,

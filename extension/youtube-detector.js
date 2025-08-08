@@ -4,6 +4,7 @@ class YouTubeMusicDetector {
     this.currentTrack = null;
     this.isPlaying = false;
     this.observer = null;
+    this.timeUpdateInterval = null;
     this.init();
   }
 
@@ -42,20 +43,22 @@ class YouTubeMusicDetector {
       this.detectCurrentTrack();
     });
 
-    this.observer.observe(document.body, {
+    // Only observe player bar area instead of entire document
+    const playerBar = /* document.querySelector('ytmusic-player-bar') || */ document.body;
+    this.observer.observe(playerBar, {
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ['aria-label', 'title', 'alt']
+      attributeFilter: ['aria-label', 'title']
     });
 
     // Initial detection
     this.detectCurrentTrack();
 
-    // Periodic checks
+    // Periodic checks - reduced frequency
     setInterval(() => {
       this.detectCurrentTrack();
-    }, 2000);
+    }, 5000);
   }
 
   detectCurrentTrack() {
@@ -66,67 +69,27 @@ class YouTubeMusicDetector {
 
       // YouTube Music uses various selectors across different layouts
       const trackSelectors = [
-        // Player bar selectors
+        // Primary selectors (most reliable)
         'ytmusic-player-bar .content-info-wrapper .title',
-        'ytmusic-player-bar .middle-controls-buttons .title',
         'ytmusic-player-bar yt-formatted-string.title',
-        '#layout ytmusic-player-bar .title',
+        '.content-info-wrapper .title a',
         '.ytmusic-player-bar .title',
 
-        // Alternative player selectors
-        '.player-bar-middle-section .song-title',
-        '.middle-controls .content-info-wrapper .title',
-        '.content-info-wrapper .title a',
-
-        // Modern YouTube Music selectors
-        'ytmusic-player-bar .content-info-wrapper .title a',
-        'ytmusic-player-bar .middle-controls .title',
-        'ytmusic-player .song-title',
-
-        // Legacy selectors
-        '.content-info-wrapper .title',
-        '.player-bar-wrapper .song-title',
-        '#layout .player-page .content-info-wrapper .title yt-formatted-string',
-        '.middle-controls-buttons ~ div .title',
-        '.player-bar-wrapper .content-info-wrapper .title yt-formatted-string',
-
         // Fallback selectors
-        '[class*="title"] a[href*="/watch"]',
-        '.ytmusic-player-bar [class*="title"]',
-        '#player-bar .title'
+        '.middle-controls .content-info-wrapper .title',
+        '#layout ytmusic-player-bar .title'
       ];
 
       const artistSelectors = [
-        // Artist selectors corresponding to track selectors
+        // Primary artist selectors
         'ytmusic-player-bar .content-info-wrapper .byline',
-        'ytmusic-player-bar .middle-controls-buttons .byline',
         'ytmusic-player-bar yt-formatted-string.byline',
-        '#layout ytmusic-player-bar .byline',
+        '.content-info-wrapper .byline a',
         '.ytmusic-player-bar .byline',
 
-        // Alternative artist selectors
-        '.player-bar-middle-section .song-artist',
+        // Fallback selectors
         '.middle-controls .content-info-wrapper .byline',
-        '.content-info-wrapper .byline a',
-
-        // Modern YouTube Music artist selectors
-        'ytmusic-player-bar .content-info-wrapper .byline a',
-        'ytmusic-player-bar .middle-controls .byline',
-        'ytmusic-player .song-artist',
-
-        // Legacy selectors
-        '.content-info-wrapper .subtitle a',
-        'ytmusic-player-bar .subtitle',
-        '.player-bar-wrapper .song-info .subtitle',
-        '#layout .player-page .content-info-wrapper .subtitle a',
-        '.ytmusic-player-bar .byline a',
-        '.middle-controls-buttons ~ div .subtitle a',
-        '.player-bar-wrapper .content-info-wrapper .subtitle a',
-
-        // Fallback artist selectors
-        '[class*="byline"] a[href*="/channel"]',
-        '.ytmusic-player-bar [class*="byline"]',
-        '#player-bar .byline'
+        '#layout ytmusic-player-bar .byline'
       ];
 
       // Try to find track name
@@ -143,8 +106,10 @@ class YouTubeMusicDetector {
           trackName = trackName?.replace(/ - YouTube Music$/, '').trim();
           // 3. if it contains " - YouTube" remove it
           trackName = trackName?.replace(/ - YouTube$/, '').trim();
+          // 4. remove everything after first '/', '-', or '｜' (covers, artists, etc)
+          trackName = trackName?.split(/[/-｜]/)[0].trim();
           if (trackName && trackName !== 'YouTube Music') {
-            console.log(`Found track with selector: ${selector} -> ${trackName}`);
+            // console.log(`Found track with selector: ${selector} -> ${trackName}`);
             break;
           }
         }
@@ -162,48 +127,27 @@ class YouTubeMusicDetector {
             artistName = artistName.split('•')[0].trim();
           }
           if (artistName && artistName !== 'YouTube Music') {
-            console.log(`Found artist with selector: ${selector} -> ${artistName}`);
+            // console.log(`Found artist with selector: ${selector} -> ${artistName}`);
             break;
           }
         }
       }
 
-      // Alternative method: use document title
-      if (!trackName || !artistName) {
-        const title = document.title;
-        if (title && title !== 'YouTube Music' && !title.includes('YouTube')) {
-          // YouTube Music title format: "Song - Artist - YouTube Music"
-          const parts = title.split(' - ');
-          if (parts.length >= 2) {
-            trackName = trackName || parts[0]?.trim();
-            artistName = artistName || parts[1]?.trim();
-            console.log(`Found track from title: ${trackName} by ${artistName}`);
-          }
-        }
-      }
 
       // Alternative method: use media session API
       if ((!trackName || !artistName) && 'mediaSession' in navigator && navigator.mediaSession.metadata) {
         const metadata = navigator.mediaSession.metadata;
         trackName = trackName || metadata.title;
         artistName = artistName || metadata.artist;
-        console.log(`Found track from mediaSession: ${trackName} by ${artistName}`);
+        // console.log(`Found track from mediaSession: ${trackName} by ${artistName}`);
       }
 
       // Play state detection - YouTube Music play/pause button
       const playButtonSelectors = [
         'ytmusic-player-bar #play-pause-button',
         'ytmusic-player-bar .play-pause-button',
-        '#player-bar-middle .play-pause-button',
         '.middle-controls .play-pause-button',
-        'ytmusic-player .play-pause-button',
-        '[aria-label*="pause" i][role="button"]',
-        '[aria-label*="play" i][role="button"]',
-        'button[data-title-no-tooltip*="pause" i]',
-        'button[data-title-no-tooltip*="play" i]',
-        '#play-pause-button',
-        '.play-pause-button',
-        '.middle-controls-buttons .play-pause-button'
+        '#play-pause-button'
       ];
 
       let isCurrentlyPlaying = false;
@@ -223,7 +167,7 @@ class YouTubeMusicDetector {
             document.querySelector('.playing') !== null;
 
           if (isCurrentlyPlaying) {
-            console.log(`Music is playing (detected via ${selector})`);
+            // console.log(`Music is playing (detected via ${selector})`);
             break;
           }
         }
@@ -243,9 +187,7 @@ class YouTubeMusicDetector {
 
       // Get thumbnail
       const thumbnailSelectors = [
-        '.player-bar-wrapper .song-image img',
         'ytmusic-player-bar .image img',
-        '#layout .player-page .song-image img',
         '.content-info-wrapper img'
       ];
 
@@ -281,11 +223,15 @@ class YouTubeMusicDetector {
               type: 'TRACK_DETECTED',
               data: track
             });
+            // Start sending time updates
+            this.startTimeUpdates();
           } else {
             chrome.runtime.sendMessage({
               type: 'TRACK_PAUSED',
               data: track
             });
+            // Stop sending time updates
+            this.stopTimeUpdates();
           }
 
           console.log('YouTube Music track detected:', track, 'Playing:', isCurrentlyPlaying);
@@ -294,6 +240,7 @@ class YouTubeMusicDetector {
         // Track stopped
         this.currentTrack = null;
         this.isPlaying = false;
+        this.stopTimeUpdates();
         chrome.runtime.sendMessage({
           type: 'TRACK_STOPPED'
         });
@@ -304,11 +251,336 @@ class YouTubeMusicDetector {
     }
   }
 
+  getCurrentTime() {
+    // Try multiple methods to get current time
+    const timeSelectors = [
+      '.time-info .ytmusic-player-bar .time-info .current-time',
+      '.ytmusic-player-bar .time-info .current-time',
+      '#movie_player .ytp-time-current',
+      '.ytp-time-current',
+      '.time-info .time-info-text',
+      '.ytmusic-player-bar .progress-bar .time-info',
+    ];
+
+    for (const selector of timeSelectors) {
+      const timeElement = document.querySelector(selector);
+      if (timeElement) {
+        const timeText = timeElement.textContent || timeElement.innerText;
+        if (timeText && timeText.includes(':')) {
+          return this.parseTimeString(timeText);
+        }
+      }
+    }
+
+    // Try to get time from video element directly
+    const videoElement = document.querySelector('video');
+    if (videoElement && !isNaN(videoElement.currentTime)) {
+      return videoElement.currentTime;
+    }
+
+    return null;
+  }
+
+  getDuration() {
+    // Try multiple methods to get duration
+    const durationSelectors = [
+      '.time-info .ytmusic-player-bar .time-info .duration',
+      '.ytmusic-player-bar .time-info .duration',
+      '#movie_player .ytp-time-duration',
+      '.ytp-time-duration',
+      '.time-info .duration-text',
+    ];
+
+    for (const selector of durationSelectors) {
+      const durationElement = document.querySelector(selector);
+      if (durationElement) {
+        const timeText = durationElement.textContent || durationElement.innerText;
+        if (timeText && timeText.includes(':')) {
+          return this.parseTimeString(timeText);
+        }
+      }
+    }
+
+    // Try to get duration from video element directly
+    const videoElement = document.querySelector('video');
+    if (videoElement && !isNaN(videoElement.duration)) {
+      return videoElement.duration;
+    }
+
+    return null;
+  }
+
+  parseTimeString(timeStr) {
+    const parts = timeStr.trim().split(':');
+    if (parts.length === 2) {
+      // mm:ss format
+      const minutes = parseInt(parts[0], 10) || 0;
+      const seconds = parseInt(parts[1], 10) || 0;
+      return minutes * 60 + seconds;
+    } else if (parts.length === 3) {
+      // hh:mm:ss format
+      const hours = parseInt(parts[0], 10) || 0;
+      const minutes = parseInt(parts[1], 10) || 0;
+      const seconds = parseInt(parts[2], 10) || 0;
+      return hours * 3600 + minutes * 60 + seconds;
+    }
+    return null;
+  }
+
+  startTimeUpdates() {
+    // Clear existing interval
+    if (this.timeUpdateInterval) {
+      clearInterval(this.timeUpdateInterval);
+    }
+
+    // Send time updates every second when playing
+    this.timeUpdateInterval = setInterval(() => {
+      if (this.isPlaying && this.currentTrack) {
+        const currentTime = this.getCurrentTime();
+        const duration = this.getDuration();
+
+        if (currentTime !== null) {
+          const trackWithTime = {
+            ...this.currentTrack,
+            currentTime: currentTime,
+            duration: duration,
+            isPlaying: this.isPlaying
+          };
+
+          chrome.runtime.sendMessage({
+            type: 'TRACK_PROGRESS',
+            data: trackWithTime
+          });
+
+          // console.log('Time update:', currentTime, '/', duration);
+        }
+      }
+    }, 200); // Update every 200ms for smooth progress
+  }
+
+  stopTimeUpdates() {
+    if (this.timeUpdateInterval) {
+      clearInterval(this.timeUpdateInterval);
+      this.timeUpdateInterval = null;
+    }
+  }
+
   destroy() {
     if (this.observer) {
       this.observer.disconnect();
     }
+    this.stopTimeUpdates();
   }
+}
+
+// Listen for playback commands from desktop app
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  console.log('🟡 [Content] Received message:', message);
+
+  if (message.type === 'PLAYBACK_COMMAND') {
+    console.log('🟢 [Content] Processing PLAYBACK_COMMAND:', message);
+    const universalSelectors = [
+      'ytmusic-player-bar button[aria-label*="lay" i]',
+      '[role="button"][aria-label*="lay" i]',
+      'button[title*="lay" i]'
+    ];
+
+    switch (message.command) {
+      case 'play':
+        // Try to find and click play button
+        const playSelectors = [
+          'ytmusic-player-bar #play-pause-button',
+          '#play-pause-button',
+          '.play-pause-button',
+          'ytmusic-player-bar .play-pause-button',
+          '[aria-label*="play" i][role="button"]',
+          '[title*="play" i]'
+        ];
+
+        for (const selector of playSelectors) {
+          const playButton = document.querySelector(selector);
+          if (playButton) {
+            const ariaLabel = playButton.getAttribute('aria-label') || '';
+            const title = playButton.getAttribute('title') || '';
+            // Check if this is actually a play button (not pause)
+            if (ariaLabel.toLowerCase().includes('play') || title.toLowerCase().includes('play')) {
+              playButton.click();
+              console.log('✅ Clicked play button via', selector);
+              sendResponse({ success: true });
+              return;
+            }
+          }
+        }
+
+        // Fallback: try to use keyboard event
+        try {
+          const playEvent = new KeyboardEvent('keydown', { code: 'Space' });
+          document.dispatchEvent(playEvent);
+          console.log('✅ Triggered play via keyboard event');
+          sendResponse({ success: true });
+          return;
+        } catch (e) {
+          console.log('Failed to use keyboard event:', e);
+        }
+
+        // Last resort: click any play/pause button we can find
+
+        for (const selector of universalSelectors) {
+          const button = document.querySelector(selector);
+          if (button) {
+            button.click();
+            console.log('✅ Clicked universal play button via', selector);
+            sendResponse({ success: true });
+            return;
+          }
+        }
+        break;
+
+      case 'pause':
+        // Try to find and click pause button
+        const pauseSelectors = [
+          'ytmusic-player-bar #play-pause-button',
+          '#play-pause-button',
+          '.play-pause-button',
+          'ytmusic-player-bar .play-pause-button',
+          '[aria-label*="pause" i][role="button"]',
+          '[title*="pause" i]'
+        ];
+
+        for (const selector of pauseSelectors) {
+          const pauseButton = document.querySelector(selector);
+          if (pauseButton) {
+            const ariaLabel = pauseButton.getAttribute('aria-label') || '';
+            const title = pauseButton.getAttribute('title') || '';
+            // Check if this is actually a pause button (not play)
+            if (ariaLabel.toLowerCase().includes('pause') || title.toLowerCase().includes('pause')) {
+              pauseButton.click();
+              console.log('✅ Clicked pause button via', selector);
+              sendResponse({ success: true });
+              return;
+            }
+          }
+        }
+
+        // Fallback: try to use keyboard event
+        try {
+          const pauseEvent = new KeyboardEvent('keydown', { code: 'Space' });
+          document.dispatchEvent(pauseEvent);
+          console.log('✅ Triggered pause via keyboard event');
+          sendResponse({ success: true });
+          return;
+        } catch (e) {
+          console.log('Failed to use keyboard event:', e);
+        }
+
+        for (const selector of universalSelectors) {
+          const button = document.querySelector(selector);
+          if (button) {
+            button.click();
+            console.log('✅ Clicked universal pause button via', selector);
+            sendResponse({ success: true });
+            return;
+          }
+        }
+        break;
+
+      case 'seek':
+        if (message.seekTime !== undefined) {
+          // Try to seek using video element directly first (most reliable)
+          const videoElement = document.querySelector('video');
+          if (videoElement) {
+            try {
+              videoElement.currentTime = message.seekTime;
+              console.log('✅ Seeked via video element to:', message.seekTime);
+              sendResponse({ success: true });
+              return;
+            } catch (e) {
+              console.log('Failed to seek via video element:', e);
+            }
+          }
+
+          // Fallback to progress bar clicking
+          const progressSelectors = [
+            '.ytmusic-player-bar .progress-bar',
+            'ytmusic-player-bar .progress-bar input',
+            '#progress-bar',
+            '.progress-bar',
+            '.ytmusic-player-bar .slider-bar',
+            '.time-info .progress-bar'
+          ];
+
+          for (const selector of progressSelectors) {
+            const progressBar = document.querySelector(selector);
+            if (progressBar) {
+              const duration = getCurrentDuration();
+              if (duration && duration > 0) {
+                const seekPercent = Math.max(0, Math.min(1, message.seekTime / duration));
+
+                if (progressBar.tagName === 'INPUT') {
+                  // If it's an input element (slider), set value directly
+                  progressBar.value = seekPercent * 100;
+                  progressBar.dispatchEvent(new Event('input', { bubbles: true }));
+                  progressBar.dispatchEvent(new Event('change', { bubbles: true }));
+                } else {
+                  // Otherwise, click on progress bar
+                  const rect = progressBar.getBoundingClientRect();
+                  const clickX = rect.left + (rect.width * seekPercent);
+
+                  const clickEvent = new MouseEvent('click', {
+                    clientX: clickX,
+                    clientY: rect.top + (rect.height / 2),
+                    bubbles: true
+                  });
+                  progressBar.dispatchEvent(clickEvent);
+                }
+
+                console.log('✅ Seeked via', selector, 'to:', message.seekTime);
+                sendResponse({ success: true });
+                return;
+              }
+            }
+          }
+        }
+        break;
+    }
+
+    console.log('❌ [Content] All playback command attempts failed for:', message.command);
+    sendResponse({ success: false, error: `Command '${message.command}' could not be executed` });
+  } else {
+    console.log('🟡 [Content] Ignoring message type:', message.type);
+    sendResponse({ success: false, error: 'Unknown message type' });
+  }
+
+  return true; // Keep message channel open
+});
+
+// Helper function to get current duration
+function getCurrentDuration() {
+  const durationSelectors = [
+    '.time-info .duration',
+    '.ytp-time-duration'
+  ];
+
+  for (const selector of durationSelectors) {
+    const element = document.querySelector(selector);
+    if (element) {
+      const timeText = element.textContent;
+      if (timeText && timeText.includes(':')) {
+        const parts = timeText.split(':');
+        if (parts.length === 2) {
+          return parseInt(parts[0]) * 60 + parseInt(parts[1]);
+        }
+      }
+    }
+  }
+
+  // Try video element
+  const video = document.querySelector('video');
+  if (video && !isNaN(video.duration)) {
+    return video.duration;
+  }
+
+  return null;
 }
 
 // Initialize detector

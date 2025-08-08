@@ -2,32 +2,41 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { LyricLine } from '../stores/lyricsStore';
 import { useThemeStore } from '../stores/themeStore';
+import { useOffsetStore } from '../stores/offsetStore';
 
 interface LyricsViewerProps {
   lyrics: LyricLine[];
   currentTime: number;
   isPlaying: boolean;
   className?: string;
+  artist?: string;
+  title?: string;
 }
 
 const LyricsViewer: React.FC<LyricsViewerProps> = ({ 
   lyrics, 
   currentTime, 
   isPlaying,
-  className = '' 
+  className = '',
+  artist = '',
+  title = ''
 }) => {
   const { currentTheme } = useThemeStore();
+  const { getTotalOffset } = useOffsetStore();
   const containerRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
 
-  // Find current line index
+  // Apply offset to current time
+  const adjustedTime = currentTime + getTotalOffset(artist, title);
+
+  // Find current line index using adjusted time
   const getCurrentLineIndex = () => {
     for (let i = 0; i < lyrics.length; i++) {
       const currentLine = lyrics[i];
       const nextLine = lyrics[i + 1];
       
-      if (currentTime >= currentLine.time && 
-          (!nextLine || currentTime < nextLine.time)) {
+      if (adjustedTime >= currentLine.time && 
+          (!nextLine || adjustedTime < nextLine.time)) {
         return i;
       }
     }
@@ -58,7 +67,7 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
     if (lineIndex !== currentLineIndex) return 1;
     
     const lineProgress = Math.min(
-      (currentTime - line.time) / (line.duration || 3000),
+      (adjustedTime - line.time) / (line.duration || 3000),
       1
     );
     
@@ -71,7 +80,7 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
     
     for (let i = 0; i < line.words.length; i++) {
       const word = line.words[i];
-      if (currentTime >= word.start && currentTime < word.end) {
+      if (adjustedTime >= word.start && adjustedTime < word.end) {
         return i;
       }
     }
@@ -97,7 +106,7 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
           if (isCurrentWord) {
             const wordDuration = wordTiming.end - wordTiming.start;
             wordProgress = Math.min(
-              (currentTime - wordTiming.start) / wordDuration,
+              (adjustedTime - wordTiming.start) / wordDuration,
               1
             );
           } else if (isPastWord) {
@@ -170,11 +179,11 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
 
   return (
     <div className={`relative ${className}`}>
-      {/* Auto-scroll toggle */}
-      <div className="absolute top-4 right-4 z-10">
+      {/* Auto-scroll toggle and time debug */}
+      <div className="absolute top-4 right-4 z-10 space-y-2">
         <button
           onClick={() => setAutoScroll(!autoScroll)}
-          className="px-3 py-1 rounded-full text-xs font-medium transition-all duration-300 hover:scale-105"
+          className="block px-3 py-1 rounded-full text-xs font-medium transition-all duration-300 hover:scale-105"
           style={{
             backgroundColor: autoScroll 
               ? `${currentTheme.colors.primary}40` 
@@ -187,6 +196,16 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
         >
           {autoScroll ? '🔒 Auto-scroll' : '🔓 Manual'}
         </button>
+        
+        {/* Debug time display */}
+        <div className="text-xs text-white/50 font-mono bg-black/30 px-2 py-1 rounded space-y-1">
+          <div>Time: {currentTime.toFixed(1)}s</div>
+          <div>Adj: {adjustedTime.toFixed(1)}s</div>
+          <div>Line: {currentLineIndex + 1}/{lyrics.length}</div>
+          <div className={isPlaying ? 'text-green-400' : 'text-yellow-400'}>
+            {isPlaying ? '▶ Playing' : '⏸ Paused'}
+          </div>
+        </div>
       </div>
 
       {/* Lyrics container */}

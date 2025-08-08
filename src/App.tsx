@@ -3,10 +3,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import LyricsViewer from "./components/LyricsViewer";
 import MediaControls from "./components/MediaControls";
+import OffsetControls from "./components/OffsetControls";
 import { useLyricsStore } from "./stores/lyricsStore";
 import { useThemeStore } from "./stores/themeStore";
 import { LyricsProcessor } from "./services/lyricsProcessor";
 import { useCurrentTime } from "./hooks/useCurrentTime";
+import { useIndependentTimer } from "./hooks/useSmoothTime";
 
 function App() {
   const { currentTrack, lyrics, setCurrentTrack, setLyrics, isPlaying, setIsPlaying } = useLyricsStore();
@@ -23,8 +25,15 @@ function App() {
     fallbackToOriginal: true
   }));
   
-  const [currentTime, setCurrentTime] = useState(0);
+  const [browserTime, setBrowserTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  
+  // Use independent timer with periodic sync
+  const { currentTime, syncWithBrowser } = useIndependentTimer(browserTime, {
+    isPlaying,
+    syncInterval: 1000, // Sync with browser every 1 second (browser updates every 200ms)
+    updateInterval: 50  // Update frontend every 50ms for very smooth progress
+  });
   
   // Request cancellation and sequencing to prevent race conditions
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -175,14 +184,19 @@ function App() {
 
       const unlistenPlayback = await listen('playback-state', (event) => {
         const isPlaying = event.payload as boolean;
-        console.log('Playback state updated:', isPlaying);
+        console.log('🔄 Playback state updated from WebSocket:', isPlaying);
         setIsPlaying(isPlaying);
       });
 
       const unlistenTimeUpdate = await listen('track-time-update', (event) => {
         const timeData = event.payload as { currentTime: number; duration: number; isPlaying: boolean };
-        console.log('Track time updated:', timeData);
-        setCurrentTime(timeData.currentTime);
+        console.log('🕒 Time Update Received:', {
+          currentTime: timeData.currentTime,
+          duration: timeData.duration,
+          isPlaying: timeData.isPlaying,
+          timestamp: new Date().toLocaleTimeString()
+        });
+        setBrowserTime(timeData.currentTime);
         setDuration(timeData.duration);
         setIsPlaying(timeData.isPlaying);
       });
@@ -303,12 +317,26 @@ function App() {
 
         {/* Lyrics Display */}
         {lyrics.length > 0 && (
-          <LyricsViewer 
-            lyrics={lyrics} 
-            currentTime={currentTime}
-            isPlaying={isPlaying}
-            className="mb-8"
-          />
+          <div className="space-y-6">
+            <LyricsViewer 
+              lyrics={lyrics} 
+              currentTime={currentTime}
+              isPlaying={isPlaying}
+              className="mb-4"
+              artist={currentTrack?.artist || ''}
+              title={currentTrack?.title || ''}
+            />
+            
+            {/* Offset Controls */}
+            {currentTrack && (
+              <div className="flex justify-center">
+                <OffsetControls
+                  artist={currentTrack.artist}
+                  title={currentTrack.title}
+                />
+              </div>
+            )}
+          </div>
         )}
 
         {/* Media Controls */}
@@ -317,8 +345,16 @@ function App() {
             currentTime={currentTime}
             duration={duration}
             isPlaying={isPlaying}
-            onPlayPause={() => setIsPlaying(!isPlaying)}
-            onSeek={seekTo}
+            onPlayPause={() => {
+              // This should rarely be called - only as fallback
+              console.log('⚠️ Fallback play/pause called');
+              setIsPlaying(!isPlaying);
+            }}
+            onSeek={(time) => {
+              // This should rarely be called - only as fallback  
+              console.log('⚠️ Fallback seek called:', time);
+              setBrowserTime(time);
+            }}
           />
         )}
 

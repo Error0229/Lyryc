@@ -14,7 +14,9 @@
     "*://open.spotify.com/*",
     "*://music.youtube.com/*",
     "*://music.apple.com/*",
-    "*://soundcloud.com/*"
+    "*://soundcloud.com/*",
+    "ws://localhost:8765/*",
+    "http://localhost:8765/*"
   ],
   
   "background": {

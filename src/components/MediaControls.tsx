@@ -27,27 +27,53 @@ const MediaControls: React.FC<MediaControlsProps> = ({
   };
 
   const handlePlayPause = async () => {
+    const command = isPlaying ? 'pause' : 'play';
     try {
-      await invoke('send_playback_command', { 
-        command: isPlaying ? 'pause' : 'play' 
+      // Check WebSocket clients first
+      const clientsCount = await invoke('get_websocket_clients_count');
+      console.log('🔍 WebSocket clients connected:', clientsCount);
+      
+      if (clientsCount === 0) {
+        console.warn('⚠️ No WebSocket clients connected - using fallback');
+        
+        // Debug WebSocket server
+        try {
+          const debugInfo = await invoke('debug_websocket_server');
+          console.log('🔍 WebSocket Debug Info:', debugInfo);
+        } catch (e) {
+          console.error('Failed to get debug info:', e);
+        }
+        
+        onPlayPause();
+        return;
+      }
+      
+      const result = await invoke('send_playback_command', { 
+        command: command
       });
-      onPlayPause(); // Still call the original handler for UI updates
+      console.log('🎵 Successfully sent playback command:', command, result);
+      // Don't call onPlayPause() - let the browser state update come through WebSocket
     } catch (error) {
-      console.error('Failed to send playback command:', error);
-      onPlayPause(); // Fallback to local control
+      console.error('❌ Failed to send playback command:', command, error);
+      // Fallback to local control if command fails
+      console.log('⚠️ Using fallback local control');
+      onPlayPause();
     }
   };
 
   const handleSeek = async (time: number) => {
     try {
-      await invoke('send_playback_command', { 
+      const result = await invoke('send_playback_command', { 
         command: 'seek',
         seekTime: time 
       });
-      onSeek(time); // Still call the original handler for UI updates
+      console.log('🎵 Successfully sent seek command:', time, result);
+      // Don't call onSeek() immediately - let the browser update come through
     } catch (error) {
-      console.error('Failed to send seek command:', error);
-      onSeek(time); // Fallback to local control
+      console.error('❌ Failed to send seek command:', time, error);
+      // Fallback to local control if command fails
+      console.log('⚠️ Using fallback local seek');
+      onSeek(time);
     }
   };
 
