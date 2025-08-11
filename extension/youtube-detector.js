@@ -5,6 +5,7 @@ class YouTubeMusicDetector {
     this.isPlaying = false;
     this.observer = null;
     this.timeUpdateInterval = null;
+    this.videoListenersAttached = false;
     this.init();
   }
 
@@ -41,6 +42,7 @@ class YouTubeMusicDetector {
     // Set up mutation observer
     this.observer = new MutationObserver(() => {
       this.detectCurrentTrack();
+      this.attachVideoListeners();
     });
 
     // Only observe player bar area instead of entire document
@@ -52,8 +54,9 @@ class YouTubeMusicDetector {
       attributeFilter: ['aria-label', 'title']
     });
 
-    // Initial detection
+    // Initial detection and listeners
     this.detectCurrentTrack();
+    this.attachVideoListeners();
 
     // Periodic checks - reduced frequency
     setInterval(() => {
@@ -173,17 +176,7 @@ class YouTubeMusicDetector {
         }
       }
 
-      // Alternative play state detection using media session
-      if (!isCurrentlyPlaying && 'mediaSession' in navigator) {
-        // Check if media session indicates playing state
-        try {
-          // This is a fallback - we can't directly check mediaSession playback state
-          // but we can infer from the presence of metadata
-          isCurrentlyPlaying = navigator.mediaSession.metadata !== null;
-        } catch (e) {
-          // Ignore errors
-        }
-      }
+      // Do not infer playing state from mediaSession metadata; it's present even when paused
 
       // Get thumbnail
       const thumbnailSelectors = [
@@ -249,6 +242,44 @@ class YouTubeMusicDetector {
     } catch (error) {
       console.error('Error detecting YouTube Music track:', error);
     }
+  }
+
+  attachVideoListeners() {
+    if (this.videoListenersAttached) return;
+    const video = document.querySelector('video');
+    if (!video) return;
+    this.videoListenersAttached = true;
+
+    const ensureTrack = () => {
+      // make sure we have currentTrack populated
+      if (!this.currentTrack) {
+        this.detectCurrentTrack();
+      }
+    };
+
+    video.addEventListener('play', () => {
+      this.isPlaying = true;
+      ensureTrack();
+      if (this.currentTrack) {
+        chrome.runtime.sendMessage({ type: 'TRACK_DETECTED', data: this.currentTrack });
+      }
+      this.startTimeUpdates();
+    });
+
+    video.addEventListener('pause', () => {
+      this.isPlaying = false;
+      ensureTrack();
+      if (this.currentTrack) {
+        chrome.runtime.sendMessage({ type: 'TRACK_PAUSED', data: this.currentTrack });
+      }
+      this.stopTimeUpdates();
+    });
+
+    video.addEventListener('ended', () => {
+      this.isPlaying = false;
+      this.stopTimeUpdates();
+      chrome.runtime.sendMessage({ type: 'TRACK_STOPPED' });
+    });
   }
 
   getCurrentTime() {
@@ -374,7 +405,7 @@ class YouTubeMusicDetector {
 }
 
 // Listen for playback commands from desktop app
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
   console.log('🟡 [Content] Received message:', message);
 
   if (message.type === 'PLAYBACK_COMMAND') {
@@ -387,6 +418,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     switch (message.command) {
       case 'play':
+        // Prefer media API (language-agnostic)
+        try {
+          const video = document.querySelector('video');
+          if (video) {
+            await video.play();
+            console.log('✅ Played via video.play()');
+            sendResponse({ success: true });
+            return true;
+          }
+        } catch (e) { console.log('video.play() failed, falling back:', e); }
         // Try to find and click play button
         const playSelectors = [
           'ytmusic-player-bar #play-pause-button',
@@ -437,6 +478,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         break;
 
       case 'pause':
+        // Prefer media API
+        try {
+          const video = document.querySelector('video');
+          if (video) {
+            video.pause();
+            console.log('✅ Paused via video.pause()');
+            sendResponse({ success: true });
+            return true;
+          }
+        } catch (e) { console.log('video.pause() failed, falling back:', e); }
         // Try to find and click pause button
         const pauseSelectors = [
           'ytmusic-player-bar #play-pause-button',
@@ -483,6 +534,42 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           }
         }
         break;
+
+      case 'next': {
+        // Try button
+        const nextSelectors = [
+          'ytmusic-player-bar #next-button',
+          '#next-button',
+          'ytmusic-player-bar tp-yt-paper-icon-button[aria-label*="ext" i]'
+        ];
+        for (const sel of nextSelectors) {
+          const btn = document.querySelector(sel);
+          if (btn) { btn.click(); console.log('✅ Clicked next via', sel); sendResponse({ success: true }); return true; }
+        }
+        // Fallback: keyboard
+        try {
+          document.dispatchEvent(new KeyboardEvent('keydown', { key: 'N', shiftKey: true, bubbles: true }));
+          sendResponse({ success: true }); return true;
+        } catch (e) {}
+        break;
+      }
+
+      case 'previous': {
+        const prevSelectors = [
+          'ytmusic-player-bar #previous-button',
+          '#previous-button',
+          'ytmusic-player-bar tp-yt-paper-icon-button[aria-label*="revious" i]'
+        ];
+        for (const sel of prevSelectors) {
+          const btn = document.querySelector(sel);
+          if (btn) { btn.click(); console.log('✅ Clicked previous via', sel); sendResponse({ success: true }); return true; }
+        }
+        try {
+          document.dispatchEvent(new KeyboardEvent('keydown', { key: 'P', shiftKey: true, bubbles: true }));
+          sendResponse({ success: true }); return true;
+        } catch (e) {}
+        break;
+      }
 
       case 'seek':
         if (message.seekTime !== undefined) {

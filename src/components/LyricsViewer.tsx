@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { motion } from 'framer-motion';
 import { LyricLine } from '../stores/lyricsStore';
 import { useThemeStore } from '../stores/themeStore';
@@ -25,6 +26,7 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
   const { getTotalOffset } = useOffsetStore();
   const containerRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
+  const ignoreScrollRef = useRef(false);
 
   // Apply offset to current time
   const adjustedTime = currentTime + getTotalOffset(artist, title);
@@ -55,11 +57,16 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
     const currentLineElement = container.querySelector(`[data-line-index="${currentLineIndex}"]`);
     if (!currentLineElement) return;
 
+    // Mark programmatic scroll to avoid disabling auto-scroll
+    ignoreScrollRef.current = true;
     currentLineElement.scrollIntoView({
       behavior: 'smooth',
       block: 'center',
       inline: 'nearest'
     });
+    // Reset the flag after the smooth scroll likely finishes
+    const t = setTimeout(() => { ignoreScrollRef.current = false; }, 350);
+    return () => clearTimeout(t);
   }, [currentLineIndex, autoScroll]);
 
   // Calculate word-level progress for current line
@@ -212,7 +219,7 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
       <div 
         ref={containerRef}
         className="max-h-[500px] overflow-y-auto scrollbar-thin scrollbar-thumb-white/20 scrollbar-track-transparent"
-        onScroll={() => setAutoScroll(false)}
+        onScroll={() => { if (!ignoreScrollRef.current) setAutoScroll(false); }}
       >
         <div className="space-y-6 py-8 px-4">
           {lyrics.map((line, index) => {
@@ -245,9 +252,12 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
                   }
                   hover:text-white/80
                 `}
-                onClick={() => {
-                  // TODO: Implement seek functionality
-                  console.log(`Seek to ${line.time}s`);
+                onClick={async () => {
+                  try {
+                    await invoke('send_playback_command', { command: 'seek', seekTime: line.time });
+                  } catch (e) {
+                    console.error('Failed to seek to line', e);
+                  }
                 }}
               >
                 {/* Background highlight for current line */}

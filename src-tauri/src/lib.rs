@@ -506,59 +506,64 @@ async fn init_extension_connection(
     ws_state: State<'_, WebSocketState>,
     app_handle: tauri::AppHandle,
 ) -> Result<String, String> {
-    let mut ws_server = create_websocket_server();
-
-    // Set up callback to handle track updates from extension
-    let app_handle_clone = app_handle.clone();
-    ws_server.set_track_callback(move |track_update: TrackUpdate| {
-        let track_info = TrackInfo {
-            title: track_update.title.clone(),
-            artist: track_update.artist.clone(),
-            album: None,
-            duration: track_update.duration,
-            thumbnail: track_update.thumbnail.clone(),
-        };
-
-        // Always emit track update for new songs
-        if track_update.current_time.is_none() || track_update.current_time == Some(0.0) {
-            // This is a track change, emit track updated
-            if let Err(e) = app_handle_clone.emit("track-updated", &track_info) {
-                error!("Failed to emit track-updated event: {}", e);
-            }
-        }
-
-        // Always emit playback state
-        if let Err(e) = app_handle_clone.emit("playback-state", &track_update.is_playing) {
-            error!("Failed to emit playback-state event: {}", e);
-        }
-
-        // Emit time updates if we have timing info
-        if let Some(current_time) = track_update.current_time {
-            if let Err(e) = app_handle_clone.emit(
-                "track-time-update",
-                &serde_json::json!({
-                    "currentTime": current_time,
-                    "duration": track_update.duration.unwrap_or(0.0),
-                    "isPlaying": track_update.is_playing
-                }),
-            ) {
-                error!("Failed to emit track-time-update event: {}", e);
-            }
-        }
-    });
-
-    // Store the server instance before starting it
-    let server_arc = Arc::new(ws_server);
-    {
+    // Ensure idempotent initialization under a single lock
+    let server_arc = {
         let mut server_guard = ws_state.lock().await;
-        *server_guard = Some(server_arc.clone());
-    }
+        if server_guard.is_some() {
+            info!("WebSocket server already initialized; skipping re-bind");
+            return Ok("WebSocket server already running".to_string());
+        }
 
-    // Start WebSocket server in background
+        // Create server and register callbacks
+        let mut ws_server = create_websocket_server();
+        let app_handle_clone = app_handle.clone();
+        ws_server.set_track_callback(move |track_update: TrackUpdate| {
+            let track_info = TrackInfo {
+                title: track_update.title.clone(),
+                artist: track_update.artist.clone(),
+                album: None,
+                duration: track_update.duration,
+                thumbnail: track_update.thumbnail.clone(),
+            };
+
+            if track_update.current_time.is_none() || track_update.current_time == Some(0.0) {
+                if let Err(e) = app_handle_clone.emit("track-updated", &track_info) {
+                    error!("Failed to emit track-updated event: {}", e);
+                }
+            }
+
+            if let Err(e) = app_handle_clone.emit("playback-state", &track_update.is_playing) {
+                error!("Failed to emit playback-state event: {}", e);
+            }
+
+            if let Some(current_time) = track_update.current_time {
+                if let Err(e) = app_handle_clone.emit(
+                    "track-time-update",
+                    &serde_json::json!({
+                        "currentTime": current_time,
+                        "duration": track_update.duration.unwrap_or(0.0),
+                        "isPlaying": track_update.is_playing
+                    }),
+                ) {
+                    error!("Failed to emit track-time-update event: {}", e);
+                }
+            }
+        });
+
+        let server_arc = Arc::new(ws_server);
+        *server_guard = Some(server_arc.clone());
+        server_arc
+    };
+
+    // Clone state handle so we can clear it on bind failure
+    let ws_state_for_spawn = ws_state.inner().clone();
     let server_for_spawn = server_arc.clone();
     tokio::spawn(async move {
         if let Err(e) = server_for_spawn.start().await {
-            error!("WebSocket server error: {}", e);
+            error!("WebSocket server failed to start: {}", e);
+            // Clear stored server to allow retry on next init call
+            let mut guard = ws_state_for_spawn.lock().await;
+            *guard = None;
         }
     });
 

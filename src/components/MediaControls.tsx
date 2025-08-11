@@ -52,7 +52,8 @@ const MediaControls: React.FC<MediaControlsProps> = ({
         command: command
       });
       console.log('🎵 Successfully sent playback command:', command, result);
-      // Don't call onPlayPause() - let the browser state update come through WebSocket
+      // Optimistically update UI; WebSocket events will reconcile if needed
+      onPlayPause();
     } catch (error) {
       console.error('❌ Failed to send playback command:', command, error);
       // Fallback to local control if command fails
@@ -77,7 +78,57 @@ const MediaControls: React.FC<MediaControlsProps> = ({
     }
   };
 
-  const progress = Math.min(currentTime / duration, 1);
+  const [isDragging, setIsDragging] = React.useState(false);
+  const [dragTime, setDragTime] = React.useState<number | null>(null);
+  const barRef = React.useRef<HTMLDivElement>(null);
+
+  const effectiveTime = isDragging && dragTime !== null ? dragTime : currentTime;
+  const progress = Math.min(effectiveTime / duration, 1);
+
+  const onDragStart = (clientX: number, rect: DOMRect) => {
+    const x = Math.max(0, Math.min(clientX - rect.left, rect.width));
+    const nt = (x / rect.width) * duration;
+    setIsDragging(true);
+    setDragTime(nt);
+  };
+
+  const onDragMove = (clientX: number, rect: DOMRect) => {
+    if (!isDragging) return;
+    const x = Math.max(0, Math.min(clientX - rect.left, rect.width));
+    const nt = (x / rect.width) * duration;
+    setDragTime(nt);
+  };
+
+  const onDragEnd = async () => {
+    if (isDragging && dragTime !== null) {
+      await handleSeek(dragTime);
+    }
+    setIsDragging(false);
+    setDragTime(null);
+  };
+
+  React.useEffect(() => {
+    const handleWindowMove = (e: MouseEvent) => {
+      if (!isDragging || !barRef.current) return;
+      const rect = barRef.current.getBoundingClientRect();
+      onDragMove(e.clientX, rect);
+    };
+    const handleWindowUp = () => {
+      if (!isDragging) return;
+      onDragEnd();
+      window.removeEventListener('mousemove', handleWindowMove);
+      window.removeEventListener('mouseup', handleWindowUp);
+    };
+
+    if (isDragging) {
+      window.addEventListener('mousemove', handleWindowMove);
+      window.addEventListener('mouseup', handleWindowUp);
+    }
+    return () => {
+      window.removeEventListener('mousemove', handleWindowMove);
+      window.removeEventListener('mouseup', handleWindowUp);
+    };
+  }, [isDragging, dragTime]);
 
   return (
     <div className="bg-black/20 backdrop-blur-sm rounded-xl p-6 mt-6">
@@ -103,13 +154,23 @@ const MediaControls: React.FC<MediaControlsProps> = ({
       {/* Progress bar */}
       <div className="mb-4">
         <div 
-          className="w-full h-2 bg-white/20 rounded-full cursor-pointer group"
-          onClick={(e) => {
+          ref={barRef}
+          className="w-full h-2 bg-white/20 rounded-full cursor-pointer group select-none"
+          onMouseDown={(e) => {
             const rect = e.currentTarget.getBoundingClientRect();
-            const clickX = e.clientX - rect.left;
-            const newTime = (clickX / rect.width) * duration;
-            handleSeek(newTime);
+            onDragStart(e.clientX, rect);
           }}
+          onTouchStart={(e) => {
+            const touch = e.touches[0];
+            const rect = e.currentTarget.getBoundingClientRect();
+            onDragStart(touch.clientX, rect);
+          }}
+          onTouchMove={(e) => {
+            const touch = e.touches[0];
+            const rect = e.currentTarget.getBoundingClientRect();
+            onDragMove(touch.clientX, rect);
+          }}
+          onTouchEnd={onDragEnd}
         >
           <div 
             className="h-full bg-gradient-to-r from-blue-400 to-purple-400 rounded-full relative transition-all group-hover:shadow-lg"
@@ -128,8 +189,17 @@ const MediaControls: React.FC<MediaControlsProps> = ({
 
       {/* Controls */}
       <div className="flex items-center justify-center space-x-6">
-        {/* Previous (placeholder) */}
-        <button className="p-2 text-white/60 hover:text-white transition-colors">
+        {/* Previous */}
+        <button 
+          className="p-2 text-white/60 hover:text-white transition-colors"
+          onClick={async () => {
+            try {
+              await invoke('send_playback_command', { command: 'previous' });
+            } catch (e) {
+              console.error('Failed to send previous command', e);
+            }
+          }}
+        >
           <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
             <path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/>
           </svg>
@@ -153,8 +223,17 @@ const MediaControls: React.FC<MediaControlsProps> = ({
           )}
         </motion.button>
 
-        {/* Next (placeholder) */}
-        <button className="p-2 text-white/60 hover:text-white transition-colors">
+        {/* Next */}
+        <button 
+          className="p-2 text-white/60 hover:text-white transition-colors"
+          onClick={async () => {
+            try {
+              await invoke('send_playback_command', { command: 'next' });
+            } catch (e) {
+              console.error('Failed to send next command', e);
+            }
+          }}
+        >
           <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
             <path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/>
           </svg>
@@ -170,3 +249,15 @@ const MediaControls: React.FC<MediaControlsProps> = ({
 };
 
 export default MediaControls;
+
+// window-level handlers to support mouse dragging
+function mouseMoveHandler(e: MouseEvent) {
+  const el = document.querySelector('.w-full.h-2.bg-white\\/20.rounded-full.cursor-pointer.group.select-none') as HTMLElement | null;
+  if (!el) return;
+  const rect = el.getBoundingClientRect();
+  // No direct access to component state here; this handler is a placeholder to satisfy TS when bundling.
+}
+
+function mouseUpHandler() {
+  window.removeEventListener('mousemove', mouseMoveHandler);
+}

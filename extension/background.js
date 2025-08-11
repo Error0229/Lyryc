@@ -118,6 +118,7 @@ async function handlePlaybackCommand(commandData) {
     console.log('🟢 [Background] Found', tabs.length, 'music tabs:', tabs.map(t => t.url));
     
     // Send command to all relevant tabs
+    let anySucceeded = false;
     for (const tab of tabs) {
       try {
         console.log('🟢 [Background] Sending PLAYBACK_COMMAND to tab', tab.id, ':', {
@@ -133,9 +134,19 @@ async function handlePlaybackCommand(commandData) {
         });
         
         console.log('🟢 [Background] Response from tab', tab.id, ':', response);
+        if (response && response.success) {
+          anySucceeded = true;
+        }
       } catch (error) {
         console.log(`❌ [Background] Could not send command to tab ${tab.id}:`, error);
       }
+    }
+
+    // Optimistically echo play/pause state to desktop app if a tab handled it
+    if (anySucceeded && currentTrack && (commandData.command === 'play' || commandData.command === 'pause')) {
+      const playing = commandData.command === 'play';
+      currentTrack = { ...currentTrack, isPlaying: playing };
+      sendTrackToApp(currentTrack, playing ? 'TRACK_DETECTED' : 'TRACK_PAUSED');
     }
   } catch (error) {
     console.error('❌ [Background] Error handling playback command:', error);
@@ -144,6 +155,11 @@ async function handlePlaybackCommand(commandData) {
 
 // Send track info to desktop app
 function sendTrackToApp(track, messageType = 'TRACK_DETECTED') {
+  const inferredIsPlaying =
+    typeof track.isPlaying === 'boolean'
+      ? track.isPlaying
+      : !(messageType === 'TRACK_PAUSED' || messageType === 'TRACK_STOPPED');
+
   const message = {
     message_type: messageType,
     data: {
@@ -153,7 +169,7 @@ function sendTrackToApp(track, messageType = 'TRACK_DETECTED') {
       source: track.source,
       url: track.url,
       timestamp: track.timestamp,
-      is_playing: messageType === 'TRACK_DETECTED',
+      is_playing: inferredIsPlaying,
       currentTime: track.currentTime || 0,
       duration: track.duration || 0
     },
@@ -172,7 +188,7 @@ function sendTrackToApp(track, messageType = 'TRACK_DETECTED') {
 // Listen for messages from content scripts
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'TRACK_DETECTED') {
-    currentTrack = message.data;
+    currentTrack = { ...message.data, isPlaying: true };
     console.log('Track detected:', currentTrack);
     
     // Send to desktop app
@@ -191,6 +207,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ success: true });
   } else if (message.type === 'TRACK_PAUSED') {
     if (currentTrack) {
+      currentTrack = { ...currentTrack, isPlaying: false };
       sendTrackToApp(currentTrack, 'TRACK_PAUSED');
     }
     
@@ -206,7 +223,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ success: true });
   } else if (message.type === 'TRACK_STOPPED') {
     if (currentTrack) {
-      sendTrackToApp(currentTrack, 'TRACK_STOPPED');
+      const trackToSend = { ...currentTrack, isPlaying: false };
+      sendTrackToApp(trackToSend, 'TRACK_STOPPED');
     }
     
     chrome.action.setBadgeText({
@@ -219,7 +237,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ success: true });
   } else if (message.type === 'TRACK_PROGRESS') {
     if (currentTrack) {
-      // Update current track with progress data
+      // Update current track with progress data (preserve explicit isPlaying from content script)
       currentTrack = { ...currentTrack, ...message.data };
       sendTrackToApp(currentTrack, 'TRACK_PROGRESS');
     }

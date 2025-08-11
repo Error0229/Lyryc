@@ -5,6 +5,7 @@ class SpotifyDetector {
     this.isPlaying = false;
     this.observer = null;
     this.lastProgressUpdate = 0;
+    this.lastSampleTime = 0;
     this.trackDuration = 0;
     this.currentProgress = 0;
     this.init();
@@ -38,6 +39,7 @@ class SpotifyDetector {
     // Set up mutation observer to watch for changes
     this.observer = new MutationObserver(() => {
       this.detectCurrentTrack();
+      this.attachMediaListeners();
     });
 
     // Observe the entire body for changes
@@ -50,6 +52,7 @@ class SpotifyDetector {
 
     // Initial detection
     this.detectCurrentTrack();
+    this.attachMediaListeners();
     
     // Set up periodic checks
     setInterval(() => {
@@ -115,24 +118,13 @@ class SpotifyDetector {
         }
       }
 
-      // Enhanced play state detection
-      const playButtons = [
-        '[data-testid="control-button-playpause"]',
-        '.player-controls__buttons .control-button--play-pause',
-        '.main-playPauseButton-button'
-      ];
-      
+      // Language-agnostic play state detection
       let isCurrentlyPlaying = false;
-      for (const selector of playButtons) {
-        const playButton = document.querySelector(selector);
-        if (playButton) {
-          const ariaLabel = playButton.getAttribute('aria-label') || '';
-          const title = playButton.getAttribute('title') || '';
-          isCurrentlyPlaying = ariaLabel.includes('Pause') || title.includes('Pause') || 
-                             playButton.classList.contains('playing') ||
-                             playButton.querySelector('.playing') !== null;
-          if (isCurrentlyPlaying) break;
-        }
+      const mediaEl = document.querySelector('audio, video');
+      if (mediaEl) {
+        try {
+          isCurrentlyPlaying = !mediaEl.paused && !mediaEl.ended;
+        } catch (_) {}
       }
 
       // Get album art
@@ -180,6 +172,20 @@ class SpotifyDetector {
       
       this.currentProgress = currentTime;
       this.trackDuration = duration;
+      
+      // Fallback inference when no media element is accessible
+      if (!mediaEl) {
+        const now = Date.now();
+        if (this.lastSampleTime > 0) {
+          const dt = (now - this.lastSampleTime) / 1000;
+          const dp = currentTime - this.lastProgressUpdate;
+          // Consider playing if progress advanced roughly in real time
+          if (dt > 0.25) {
+            isCurrentlyPlaying = dp > 0.2;
+          }
+        }
+        this.lastSampleTime = now;
+      }
 
       if (trackName && artistName) {
         const track = {
@@ -263,6 +269,12 @@ class SpotifyDetector {
         case 'pause':
           this.clickPlayButton(true); // true = pause
           break;
+        case 'next':
+          this.clickSkip(true);
+          break;
+        case 'previous':
+          this.clickSkip(false);
+          break;
         case 'seek':
           this.seekToTime(seekTime);
           break;
@@ -284,10 +296,8 @@ class SpotifyDetector {
     for (const selector of playButtons) {
       const playButton = document.querySelector(selector);
       if (playButton) {
-        const ariaLabel = playButton.getAttribute('aria-label') || '';
-        const title = playButton.getAttribute('title') || '';
-        const currentlyPlaying = ariaLabel.includes('Pause') || title.includes('Pause');
-        
+        // Use our tracked state instead of localized labels
+        const currentlyPlaying = this.isPlaying;
         // Only click if state needs to change
         if ((shouldPause && currentlyPlaying) || (!shouldPause && !currentlyPlaying)) {
           playButton.click();
@@ -297,6 +307,52 @@ class SpotifyDetector {
       }
     }
     return false;
+  }
+
+  clickSkip(isNext) {
+    const selectors = isNext
+      ? [
+          '[data-testid="control-button-skip-forward"]',
+          '.player-controls__buttons [aria-label*="ext" i]'
+        ]
+      : [
+          '[data-testid="control-button-skip-back"]',
+          '.player-controls__buttons [aria-label*="revious" i]'
+        ];
+    for (const sel of selectors) {
+      const btn = document.querySelector(sel);
+      if (btn) { btn.click(); console.log(`✅ Clicked ${isNext ? 'next' : 'previous'}`); return true; }
+    }
+    return false;
+  }
+
+  attachMediaListeners() {
+    const mediaEl = document.querySelector('audio, video');
+    if (!mediaEl || this._mediaListenersAttached) return;
+    this._mediaListenersAttached = true;
+
+    mediaEl.addEventListener('play', () => {
+      this.isPlaying = true;
+      if (this.currentTrack) {
+        const currentTime = this.currentProgress;
+        const duration = this.trackDuration;
+        chrome.runtime.sendMessage({ type: 'TRACK_DETECTED', data: { ...this.currentTrack, currentTime, duration } });
+      }
+    });
+
+    mediaEl.addEventListener('pause', () => {
+      this.isPlaying = false;
+      if (this.currentTrack) {
+        const currentTime = this.currentProgress;
+        const duration = this.trackDuration;
+        chrome.runtime.sendMessage({ type: 'TRACK_PAUSED', data: { ...this.currentTrack, currentTime, duration } });
+      }
+    });
+
+    mediaEl.addEventListener('ended', () => {
+      this.isPlaying = false;
+      chrome.runtime.sendMessage({ type: 'TRACK_STOPPED' });
+    });
   }
 
   seekToTime(timeInSeconds) {

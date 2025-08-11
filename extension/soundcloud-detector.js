@@ -4,6 +4,7 @@ class SoundCloudDetector {
     this.currentTrack = null;
     this.isPlaying = false;
     this.observer = null;
+    this.mediaListenersAttached = false;
     this.init();
   }
 
@@ -33,6 +34,7 @@ class SoundCloudDetector {
   startTracking() {
     this.observer = new MutationObserver(() => {
       this.detectCurrentTrack();
+      this.attachMediaListeners();
     });
 
     this.observer.observe(document.body, {
@@ -43,6 +45,7 @@ class SoundCloudDetector {
     });
 
     this.detectCurrentTrack();
+    this.attachMediaListeners();
     
     setInterval(() => {
       this.detectCurrentTrack();
@@ -102,24 +105,11 @@ class SoundCloudDetector {
         }
       }
 
-      // Check if playing
-      const playButtonSelectors = [
-        '.playControl[title*="Pause"]',
-        '.playControls__play[title*="Pause"]',
-        '.sc-button-pause',
-        '.playButton[title*="Pause"]'
-      ];
-      
+      // Language-agnostic: prefer media element state
       let isCurrentlyPlaying = false;
-      for (const selector of playButtonSelectors) {
-        const playButton = document.querySelector(selector);
-        if (playButton) {
-          const title = playButton.getAttribute('title') || '';
-          const ariaLabel = playButton.getAttribute('aria-label') || '';
-          isCurrentlyPlaying = title.includes('Pause') || ariaLabel.includes('Pause') ||
-                             playButton.classList.contains('playing');
-          if (isCurrentlyPlaying) break;
-        }
+      const mediaEl = document.querySelector('audio, video');
+      if (mediaEl) {
+        try { isCurrentlyPlaying = !mediaEl.paused && !mediaEl.ended; } catch (_) {}
       }
 
       // Get thumbnail
@@ -183,12 +173,76 @@ class SoundCloudDetector {
     }
   }
 
+  attachMediaListeners() {
+    if (this.mediaListenersAttached) return;
+    const mediaEl = document.querySelector('audio, video');
+    if (!mediaEl) return;
+    this.mediaListenersAttached = true;
+
+    mediaEl.addEventListener('play', () => {
+      this.isPlaying = true;
+      if (this.currentTrack) {
+        chrome.runtime.sendMessage({ type: 'TRACK_DETECTED', data: this.currentTrack });
+      }
+    });
+
+    mediaEl.addEventListener('pause', () => {
+      this.isPlaying = false;
+      if (this.currentTrack) {
+        chrome.runtime.sendMessage({ type: 'TRACK_PAUSED', data: this.currentTrack });
+      }
+    });
+
+    mediaEl.addEventListener('ended', () => {
+      this.isPlaying = false;
+      chrome.runtime.sendMessage({ type: 'TRACK_STOPPED' });
+    });
+  }
+
   destroy() {
     if (this.observer) {
       this.observer.disconnect();
     }
   }
 }
+
+// Listen for playback commands from background script
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'PLAYBACK_COMMAND') {
+    try {
+      const mediaEl = document.querySelector('audio, video');
+      switch (message.command) {
+        case 'play':
+          if (mediaEl && mediaEl.paused) { mediaEl.play(); sendResponse({ success: true }); return true; }
+          break;
+        case 'pause':
+          if (mediaEl && !mediaEl.paused) { mediaEl.pause(); sendResponse({ success: true }); return true; }
+          break;
+        case 'next': {
+          const selectors = [
+            '.skipControl__next',
+            '.playControls__next'
+          ];
+          for (const sel of selectors) { const btn = document.querySelector(sel); if (btn) { btn.click(); sendResponse({ success: true }); return true; } }
+          break;
+        }
+        case 'previous': {
+          const selectors = [
+            '.skipControl__previous',
+            '.playControls__prev'
+          ];
+          for (const sel of selectors) { const btn = document.querySelector(sel); if (btn) { btn.click(); sendResponse({ success: true }); return true; } }
+          break;
+        }
+        case 'seek':
+          if (mediaEl && typeof message.seekTime === 'number') { mediaEl.currentTime = message.seekTime; sendResponse({ success: true }); return true; }
+          break;
+      }
+    } catch (e) { console.log('SoundCloud PLAYBACK_COMMAND failed', e); }
+    sendResponse({ success: false });
+  }
+  return true;
+});
 
 // Initialize detector
 if (document.readyState === 'loading') {
