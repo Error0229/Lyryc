@@ -62,8 +62,8 @@ export class LyricsProcessor {
 
       // Step 1: Fetch lyrics from backend (Tauri)
       const lrclibLyrics = await invoke('fetch_lyrics', {
-        track_name: trackName,
-        artist_name: artistName
+        trackName: trackName,
+        artistName: artistName
       }) as LyricLine[];
 
       // Check if cancelled after LRCLib fetch

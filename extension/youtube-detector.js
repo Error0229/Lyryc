@@ -150,6 +150,8 @@ class YouTubeMusicDetector {
       ];
 
       let isCurrentlyPlaying = false;
+      
+      // Method 1: Check play/pause button state
       for (const selector of playButtonSelectors) {
         const playButton = document.querySelector(selector);
         if (playButton) {
@@ -169,6 +171,52 @@ class YouTubeMusicDetector {
             // console.log(`Music is playing (detected via ${selector})`);
             break;
           }
+        }
+      }
+      
+      // Method 2: Fallback - Check for media session playback state
+      if (!isCurrentlyPlaying && navigator.mediaSession && navigator.mediaSession.playbackState) {
+        isCurrentlyPlaying = navigator.mediaSession.playbackState === 'playing';
+        if (isCurrentlyPlaying) {
+          console.log('Music playing state detected via MediaSession API');
+        }
+      }
+      
+      // Method 3: Fallback - Check for visual indicators of playback
+      if (!isCurrentlyPlaying) {
+        const playingIndicators = [
+          '.ytmusic-player-bar.playing',
+          '[class*="playing"]',
+          '.ytmusic-player .playing',
+          '.progress-bar.playing'
+        ];
+        
+        for (const indicator of playingIndicators) {
+          if (document.querySelector(indicator)) {
+            isCurrentlyPlaying = true;
+            console.log(`Music playing state detected via visual indicator: ${indicator}`);
+            break;
+          }
+        }
+      }
+      
+      // Method 4: Fallback - Check if progress bar is updating (for audio-only content)
+      if (!isCurrentlyPlaying) {
+        const progressBar = document.querySelector('.progress-bar, #progress-bar, [role="progressbar"]');
+        if (progressBar && this.lastProgressValue !== undefined) {
+          const currentProgress = progressBar.getAttribute('aria-valuenow') || 
+                                progressBar.style.width || 
+                                (progressBar.value !== undefined ? progressBar.value : null);
+          
+          if (currentProgress !== null && currentProgress !== this.lastProgressValue) {
+            const timeDiff = Date.now() - (this.lastProgressCheck || 0);
+            if (timeDiff > 500 && timeDiff < 2000) { // Check if progress changed in reasonable time
+              isCurrentlyPlaying = true;
+              console.log('Music playing state detected via progress bar updates');
+            }
+          }
+          this.lastProgressValue = currentProgress;
+          this.lastProgressCheck = Date.now();
         }
       }
 

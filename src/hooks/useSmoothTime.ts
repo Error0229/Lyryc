@@ -12,7 +12,7 @@ export const useIndependentTimer = (
 ) => {
   const { isPlaying, syncInterval = 5000, updateInterval = 100 } = options;
   const [currentTime, setCurrentTime] = useState(browserTime);
-  
+
   // Internal timer state
   const timerRef = useRef<NodeJS.Timeout>();
   const syncTimerRef = useRef<NodeJS.Timeout>();
@@ -26,17 +26,17 @@ export const useIndependentTimer = (
     const timeSinceLastSync = (now - lastSyncTimestamp.current) / 1000;
     const expectedTime = lastSyncTime.current + timeSinceLastSync;
     const actualTime = browserTime;
-    
+
     // Calculate drift between our timer and browser time
     const drift = Math.abs(actualTime - expectedTime);
-    
-    console.log('🔄 Time Sync:', {
-      expected: expectedTime.toFixed(2),
-      actual: actualTime.toFixed(2),
-      drift: drift.toFixed(2),
-      correction: drift > 1 ? 'APPLIED' : 'none'
-    });
-    
+
+    // console.log('🔄 Time Sync:', {
+    //   expected: expectedTime.toFixed(2),
+    //   actual: actualTime.toFixed(2),
+    //   drift: drift.toFixed(2),
+    //   correction: drift > 1 ? 'APPLIED' : 'none'
+    // });
+
     // If drift is more than 0.5 seconds, sync immediately (reduced from 1.0 for faster correction)
     if (drift > 0.5) {
       console.log('⚠️ Large drift detected, syncing to browser time');
@@ -46,7 +46,7 @@ export const useIndependentTimer = (
       // Small drift, update reference for smooth correction
       lastSyncTime.current = browserTime;
     }
-    
+
     lastSyncTimestamp.current = now;
   }, [browserTime]);
 
@@ -72,9 +72,9 @@ export const useIndependentTimer = (
         syncWithBrowser();
       }, syncInterval);
 
-      console.log('▶️ Independent timer started');
+      // console.log('▶️ Independent timer started');
     } else {
-      console.log('⏸️ Independent timer paused');
+      // console.log('⏸️ Independent timer paused');
     }
 
     return () => {
@@ -85,7 +85,7 @@ export const useIndependentTimer = (
 
   // Handle play state changes - sync immediately and reset timer
   useEffect(() => {
-    console.log('🎵 Play state changed:', isPlaying, 'Browser time:', browserTime);
+    // console.log('🎵 Play state changed:', isPlaying, 'Browser time:', browserTime);
     setCurrentTime(browserTime);
     lastSyncTime.current = browserTime;
     lastSyncTimestamp.current = Date.now();

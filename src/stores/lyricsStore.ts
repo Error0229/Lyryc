@@ -2,6 +2,7 @@ import { create } from 'zustand';
 
 export interface TrackInfo {
   title: string;
+  originalTitle?: string;
   artist: string;
   duration?: number;
   thumbnail?: string;

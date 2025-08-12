@@ -143,7 +143,7 @@ const MediaControls: React.FC<MediaControlsProps> = ({
         )}
         <div className="flex-1 min-w-0">
           <div className="text-white font-medium truncate">
-            {currentTrack?.title || 'Unknown Track'}
+            {currentTrack?.originalTitle || currentTrack?.title || 'Unknown Track'}
           </div>
           <div className="text-white/60 text-sm truncate">
             {currentTrack?.artist || 'Unknown Artist'}

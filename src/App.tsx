@@ -12,38 +12,48 @@ import { useIndependentTimer } from "./hooks/useSmoothTime";
 import AlignmentTester from "./components/AlignmentTester";
 
 function App() {
-  const { currentTrack, lyrics, setCurrentTrack, setLyrics, isPlaying, setIsPlaying } = useLyricsStore();
+  const {
+    currentTrack,
+    lyrics,
+    setCurrentTrack,
+    setLyrics,
+    isPlaying,
+    setIsPlaying,
+  } = useLyricsStore();
   const { currentTheme, themes, setTheme } = useThemeStore();
   const [isConnected, setIsConnected] = useState(false);
   const [isLoadingLyrics, setIsLoadingLyrics] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [lyricsError, setLyricsError] = useState<string | null>(null);
-  const [lyricsProcessor] = useState(() => new LyricsProcessor({
-    enableAIAlignment: true,
-    enableWordLevel: true,
-    language: 'auto',
-    confidenceThreshold: 0.6,
-    fallbackToOriginal: true
-  }));
-  
+  const [lyricsProcessor] = useState(
+    () =>
+      new LyricsProcessor({
+        enableAIAlignment: true,
+        enableWordLevel: true,
+        language: "auto",
+        confidenceThreshold: 0.6,
+        fallbackToOriginal: true,
+      })
+  );
+
   const [browserTime, setBrowserTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  
+
   // Use independent timer with periodic sync
   const { currentTime, syncWithBrowser } = useIndependentTimer(browserTime, {
     isPlaying,
     syncInterval: 1000, // Sync with browser every 1 second (browser updates every 200ms)
-    updateInterval: 50  // Update frontend every 50ms for very smooth progress
+    updateInterval: 50, // Update frontend every 50ms for very smooth progress
   });
-  
+
   // Request cancellation and sequencing to prevent race conditions
   const abortControllerRef = useRef<AbortController | null>(null);
   const requestSequenceRef = useRef(0);
-  
+
   // Use real playback state instead of mock timer
-  const { seekTo } = useCurrentTime({ 
+  const { seekTo } = useCurrentTime({
     isPlaying: false, // Disable the mock timer
-    startTime: 0 
+    startTime: 0,
   });
 
   // Fetch lyrics when track changes
@@ -68,19 +78,21 @@ function App() {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
-    
+
     // Create new abort controller for this request
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
-    
+
     // Increment and capture sequence number for this request
     const currentSequence = ++requestSequenceRef.current;
-    
-    console.log(`[App] Starting lyrics fetch #${currentSequence} for: "${title}" by "${artist}"`);
-    
+
+    console.log(
+      `[App] Starting lyrics fetch #${currentSequence} for: "${title}" by "${artist}"`
+    );
+
     setIsLoadingLyrics(true);
     setLyricsError(null);
-    
+
     try {
       // Use the new lyrics processor for enhanced processing
       const processedResult = await lyricsProcessor.processTrackLyrics(
@@ -91,43 +103,70 @@ function App() {
       );
 
       // Check if this request was cancelled or superseded
-      if (abortController.signal.aborted || currentSequence !== requestSequenceRef.current) {
-        console.log(`[App] Request #${currentSequence} was cancelled or superseded`);
+      if (
+        abortController.signal.aborted ||
+        currentSequence !== requestSequenceRef.current
+      ) {
+        console.log(
+          `[App] Request #${currentSequence} was cancelled or superseded`
+        );
         return;
       }
 
       if (processedResult.lyrics.length > 0) {
-        console.log(`[App] Request #${currentSequence} succeeded with ${processedResult.method} method, confidence: ${processedResult.confidence}`);
-        console.log(`Processing time: ${processedResult.processingTime.toFixed(2)}ms`);
+        console.log(
+          `[App] Request #${currentSequence} succeeded with ${processedResult.method} method, confidence: ${processedResult.confidence}`
+        );
+        console.log(
+          `Processing time: ${processedResult.processingTime.toFixed(2)}ms`
+        );
         console.log(`Has word timings: ${processedResult.hasWordTimings}`);
-        
+
         setLyrics(processedResult.lyrics);
       } else {
         // Check again before fallback
-        if (abortController.signal.aborted || currentSequence !== requestSequenceRef.current) {
-          console.log(`[App] Request #${currentSequence} was cancelled before fallback`);
+        if (
+          abortController.signal.aborted ||
+          currentSequence !== requestSequenceRef.current
+        ) {
+          console.log(
+            `[App] Request #${currentSequence} was cancelled before fallback`
+          );
           return;
         }
-        
+
         // Fallback to Tauri backend
         try {
           const backendLyrics = await invoke("fetch_lyrics", {
             trackName: title,
-            artistName: artist
+            artistName: artist,
           });
-          
+
           // Final check before setting results
-          if (abortController.signal.aborted || currentSequence !== requestSequenceRef.current) {
-            console.log(`[App] Request #${currentSequence} was cancelled after backend fetch`);
+          if (
+            abortController.signal.aborted ||
+            currentSequence !== requestSequenceRef.current
+          ) {
+            console.log(
+              `[App] Request #${currentSequence} was cancelled after backend fetch`
+            );
             return;
           }
-          
-          console.log(`[App] Request #${currentSequence} succeeded with backend fallback`);
+
+          console.log(
+            `[App] Request #${currentSequence} succeeded with backend fallback`
+          );
           setLyrics(backendLyrics as any);
         } catch (backendError) {
           // Check if still valid before showing error
-          if (!abortController.signal.aborted && currentSequence === requestSequenceRef.current) {
-            console.error(`[App] Request #${currentSequence} - Backend lyrics fetch also failed:`, backendError);
+          if (
+            !abortController.signal.aborted &&
+            currentSequence === requestSequenceRef.current
+          ) {
+            console.error(
+              `[App] Request #${currentSequence} - Backend lyrics fetch also failed:`,
+              backendError
+            );
             setLyricsError(`No lyrics found for "${title}" by ${artist}`);
             setLyrics([]);
           }
@@ -135,9 +174,14 @@ function App() {
       }
     } catch (error) {
       // Only show error if this request wasn't cancelled
-      if (!abortController.signal.aborted && currentSequence === requestSequenceRef.current) {
+      if (
+        !abortController.signal.aborted &&
+        currentSequence === requestSequenceRef.current
+      ) {
         console.error(`[App] Request #${currentSequence} failed:`, error);
-        setLyricsError(`Failed to fetch lyrics for "${title}" by ${artist}. Please check your internet connection.`);
+        setLyricsError(
+          `Failed to fetch lyrics for "${title}" by ${artist}. Please check your internet connection.`
+        );
         setLyrics([]);
       }
     } finally {
@@ -153,50 +197,57 @@ function App() {
     const initializeConnection = async () => {
       try {
         await invoke("init_extension_connection");
-        
+
         // Check WebSocket status
         const wsStatus = await invoke("get_websocket_status");
         setIsConnected(wsStatus as boolean);
         setConnectionError(null);
       } catch (error) {
         console.error("Failed to connect to extension:", error);
-        setConnectionError("Failed to connect to browser extension. Please make sure the extension is installed and active.");
+        setConnectionError(
+          "Failed to connect to browser extension. Please make sure the extension is installed and active."
+        );
         setIsConnected(false);
       }
     };
 
     // Listen for track updates from extension via WebSocket
     const setupEventListeners = async () => {
-      const unlistenTrack = await listen('track-updated', (event) => {
+      const unlistenTrack = await listen("track-updated", (event) => {
         const trackData = event.payload as any;
-        console.log('Track updated from extension:', trackData);
-        
+        console.log("Track updated from extension:", trackData);
+
         const track = {
           title: trackData.title,
+          originalTitle: trackData.originalTitle || trackData.title,
           artist: trackData.artist,
           thumbnail: trackData.thumbnail || "",
         };
-        
+
         setCurrentTrack(track);
         // Clear previous errors when new track is detected
         setLyricsError(null);
         setConnectionError(null);
       });
 
-      const unlistenPlayback = await listen('playback-state', (event) => {
+      const unlistenPlayback = await listen("playback-state", (event) => {
         const isPlaying = event.payload as boolean;
-        console.log('🔄 Playback state updated from WebSocket:', isPlaying);
+        // console.log('🔄 Playback state updated from WebSocket:', isPlaying);
         setIsPlaying(isPlaying);
       });
 
-      const unlistenTimeUpdate = await listen('track-time-update', (event) => {
-        const timeData = event.payload as { currentTime: number; duration: number; isPlaying: boolean };
-        console.log('🕒 Time Update Received:', {
-          currentTime: timeData.currentTime,
-          duration: timeData.duration,
-          isPlaying: timeData.isPlaying,
-          timestamp: new Date().toLocaleTimeString()
-        });
+      const unlistenTimeUpdate = await listen("track-time-update", (event) => {
+        const timeData = event.payload as {
+          currentTime: number;
+          duration: number;
+          isPlaying: boolean;
+        };
+        // console.log("🕒 Time Update Received:", {
+        //   currentTime: timeData.currentTime,
+        //   duration: timeData.duration,
+        //   isPlaying: timeData.isPlaying,
+        //   timestamp: new Date().toLocaleTimeString(),
+        // });
         setBrowserTime(timeData.currentTime);
         setDuration(timeData.duration);
         setIsPlaying(timeData.isPlaying);
@@ -217,11 +268,11 @@ function App() {
   }, [setCurrentTrack, setIsPlaying]);
 
   return (
-    <div 
+    <div
       className="min-h-screen transition-all duration-500"
-      style={{ 
+      style={{
         background: currentTheme.colors.background,
-        fontFamily: currentTheme.typography.fontFamily 
+        fontFamily: currentTheme.typography.fontFamily,
       }}
     >
       <div className="container mx-auto px-4 py-8">
@@ -236,14 +287,15 @@ function App() {
                   onClick={() => setTheme(theme.id)}
                   className={`
                     px-3 py-1 rounded-full text-xs font-medium transition-all duration-300
-                    ${currentTheme.id === theme.id 
-                      ? 'ring-2 ring-white/50 shadow-lg transform scale-105' 
-                      : 'hover:scale-105 opacity-70 hover:opacity-100'
+                    ${
+                      currentTheme.id === theme.id
+                        ? "ring-2 ring-white/50 shadow-lg transform scale-105"
+                        : "hover:scale-105 opacity-70 hover:opacity-100"
                     }
                   `}
                   style={{
                     background: theme.colors.primary,
-                    color: theme.colors.text
+                    color: theme.colors.text,
                   }}
                   title={theme.description}
                 >
@@ -254,15 +306,15 @@ function App() {
 
             {/* Connection Status */}
             <div>
-              <span 
+              <span
                 className="inline-flex items-center px-3 py-1 rounded-full text-sm transition-all duration-300"
                 style={{
-                  backgroundColor: isConnected 
-                    ? `${currentTheme.colors.success}20` 
+                  backgroundColor: isConnected
+                    ? `${currentTheme.colors.success}20`
                     : `${currentTheme.colors.error}20`,
-                  color: isConnected 
-                    ? currentTheme.colors.success 
-                    : currentTheme.colors.error
+                  color: isConnected
+                    ? currentTheme.colors.success
+                    : currentTheme.colors.error,
                 }}
               >
                 {isConnected ? "🟢 Connected" : "🔴 Disconnected"}
@@ -270,16 +322,16 @@ function App() {
             </div>
           </div>
 
-          <h1 
+          <h1
             className="text-4xl font-bold mb-2 transition-colors duration-300"
-            style={{ 
+            style={{
               color: currentTheme.colors.text,
-              fontWeight: currentTheme.typography.fontWeight.bold
+              fontWeight: currentTheme.typography.fontWeight.bold,
             }}
           >
             🎵 Lyryc
           </h1>
-          <p 
+          <p
             className="transition-colors duration-300"
             style={{ color: currentTheme.colors.textSecondary }}
           >
@@ -289,24 +341,24 @@ function App() {
 
         {/* Current Track Info */}
         {currentTrack && (
-          <div 
+          <div
             className="backdrop-blur-md rounded-xl p-6 mb-8 transition-all duration-300"
             style={{
               backgroundColor: `${currentTheme.colors.backgroundSecondary}80`,
-              border: `1px solid ${currentTheme.colors.border}40`
+              border: `1px solid ${currentTheme.colors.border}40`,
             }}
           >
             <div className="text-center">
-              <h2 
+              <h2
                 className="text-2xl mb-2 transition-colors duration-300"
-                style={{ 
+                style={{
                   color: currentTheme.colors.text,
-                  fontWeight: currentTheme.typography.fontWeight.semibold
+                  fontWeight: currentTheme.typography.fontWeight.semibold,
                 }}
               >
-                {currentTrack.title}
+                {currentTrack.originalTitle || currentTrack.title}
               </h2>
-              <p 
+              <p
                 className="text-lg transition-colors duration-300"
                 style={{ color: currentTheme.colors.textSecondary }}
               >
@@ -319,13 +371,13 @@ function App() {
         {/* Lyrics Display */}
         {lyrics.length > 0 && (
           <div className="space-y-6">
-            <LyricsViewer 
-              lyrics={lyrics} 
+            <LyricsViewer
+              lyrics={lyrics}
               currentTime={currentTime}
               isPlaying={isPlaying}
               className="mb-4"
-              artist={currentTrack?.artist || ''}
-              title={currentTrack?.title || ''}
+              artist={currentTrack?.artist || ""}
+              title={currentTrack?.title || ""}
             />
 
             {/* Offset Controls */}
@@ -337,9 +389,6 @@ function App() {
                 />
               </div>
             )}
-
-            {/* Alignment Tester (YouTube Music) */}
-            <AlignmentTester totalDurationSec={duration} />
           </div>
         )}
 
@@ -351,45 +400,50 @@ function App() {
             isPlaying={isPlaying}
             onPlayPause={() => {
               // This should rarely be called - only as fallback
-              console.log('⚠️ Fallback play/pause called');
+              console.log("⚠️ Fallback play/pause called");
               setIsPlaying(!isPlaying);
             }}
             onSeek={(time) => {
-              // This should rarely be called - only as fallback  
-              console.log('⚠️ Fallback seek called:', time);
+              // This should rarely be called - only as fallback
+              console.log("⚠️ Fallback seek called:", time);
               setBrowserTime(time);
             }}
           />
+        )}
+
+        {/* Developer Tools - Alignment Tester */}
+        {currentTrack && duration > 0 && (
+          <div className="mt-8">
+            <AlignmentTester totalDurationSec={duration} />
+          </div>
         )}
 
         {/* Loading State */}
         {isLoadingLyrics && (
           <div className="text-center text-white/70 mt-8">
             <div className="animate-pulse">
-              <p className="text-lg mb-4">
-                🔍 Searching for lyrics...
-              </p>
+              <p className="text-lg mb-4">🔍 Searching for lyrics...</p>
             </div>
           </div>
         )}
 
         {/* Error Messages */}
         {connectionError && (
-          <div 
+          <div
             className="backdrop-blur-md rounded-xl p-6 mb-8 border"
             style={{
               backgroundColor: `${currentTheme.colors.error}20`,
-              borderColor: `${currentTheme.colors.error}40`
+              borderColor: `${currentTheme.colors.error}40`,
             }}
           >
             <div className="text-center">
-              <p 
+              <p
                 className="text-lg font-medium mb-2"
                 style={{ color: currentTheme.colors.error }}
               >
                 ⚠️ Connection Error
               </p>
-              <p 
+              <p
                 className="text-sm"
                 style={{ color: currentTheme.colors.textSecondary }}
               >
@@ -400,21 +454,21 @@ function App() {
         )}
 
         {lyricsError && (
-          <div 
+          <div
             className="backdrop-blur-md rounded-xl p-6 mb-8 border"
             style={{
               backgroundColor: `${currentTheme.colors.error}20`,
-              borderColor: `${currentTheme.colors.error}40`
+              borderColor: `${currentTheme.colors.error}40`,
             }}
           >
             <div className="text-center">
-              <p 
+              <p
                 className="text-lg font-medium mb-2"
                 style={{ color: currentTheme.colors.error }}
               >
                 📝 Lyrics Error
               </p>
-              <p 
+              <p
                 className="text-sm"
                 style={{ color: currentTheme.colors.textSecondary }}
               >
@@ -431,7 +485,8 @@ function App() {
               🎧 Play music in your browser to see lyrics here
             </p>
             <p className="text-sm">
-              Supported: Spotify Web Player, YouTube Music, Apple Music, SoundCloud
+              Supported: Spotify Web Player, YouTube Music, Apple Music,
+              SoundCloud
             </p>
           </div>
         )}

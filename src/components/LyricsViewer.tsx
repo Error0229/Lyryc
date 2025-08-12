@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { motion } from 'framer-motion';
-import { LyricLine } from '../stores/lyricsStore';
-import { useThemeStore } from '../stores/themeStore';
-import { useOffsetStore } from '../stores/offsetStore';
+import React, { useState, useEffect, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { motion } from "framer-motion";
+import { LyricLine } from "../stores/lyricsStore";
+import { useThemeStore } from "../stores/themeStore";
+import { useOffsetStore } from "../stores/offsetStore";
 
 interface LyricsViewerProps {
   lyrics: LyricLine[];
@@ -14,31 +14,47 @@ interface LyricsViewerProps {
   title?: string;
 }
 
-const LyricsViewer: React.FC<LyricsViewerProps> = ({ 
-  lyrics, 
-  currentTime, 
+const LyricsViewer: React.FC<LyricsViewerProps> = ({
+  lyrics,
+  currentTime,
   isPlaying,
-  className = '',
-  artist = '',
-  title = ''
+  className = "",
+  artist = "",
+  title = "",
 }) => {
   const { currentTheme } = useThemeStore();
   const { getTotalOffset } = useOffsetStore();
   const containerRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const ignoreScrollRef = useRef(false);
+  const previousTimeRef = useRef(currentTime);
+  const timeCheckRef = useRef(Date.now());
 
   // Apply offset to current time
   const adjustedTime = currentTime + getTotalOffset(artist, title);
+
+  // Detect if time is progressing (backup for when isPlaying might be incorrectly false)
+  const now = Date.now();
+  const timeDiff = Math.abs(currentTime - previousTimeRef.current);
+  const realTimeDiff = now - timeCheckRef.current;
+  const isTimeProgressing =
+    timeDiff > 0.1 && realTimeDiff > 100 && realTimeDiff < 2000;
+  const effectivelyPlaying = isPlaying || isTimeProgressing;
+
+  // Update refs for next check
+  previousTimeRef.current = currentTime;
+  timeCheckRef.current = now;
 
   // Find current line index using adjusted time
   const getCurrentLineIndex = () => {
     for (let i = 0; i < lyrics.length; i++) {
       const currentLine = lyrics[i];
       const nextLine = lyrics[i + 1];
-      
-      if (adjustedTime >= currentLine.time && 
-          (!nextLine || adjustedTime < nextLine.time)) {
+
+      if (
+        adjustedTime >= currentLine.time &&
+        (!nextLine || adjustedTime < nextLine.time)
+      ) {
         return i;
       }
     }
@@ -54,37 +70,41 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
     const container = containerRef.current;
     if (!container) return;
 
-    const currentLineElement = container.querySelector(`[data-line-index="${currentLineIndex}"]`);
+    const currentLineElement = container.querySelector(
+      `[data-line-index="${currentLineIndex}"]`
+    );
     if (!currentLineElement) return;
 
     // Mark programmatic scroll to avoid disabling auto-scroll
     ignoreScrollRef.current = true;
     currentLineElement.scrollIntoView({
-      behavior: 'smooth',
-      block: 'center',
-      inline: 'nearest'
+      behavior: "smooth",
+      block: "center",
+      inline: "nearest",
     });
     // Reset the flag after the smooth scroll likely finishes
-    const t = setTimeout(() => { ignoreScrollRef.current = false; }, 350);
+    const t = setTimeout(() => {
+      ignoreScrollRef.current = false;
+    }, 350);
     return () => clearTimeout(t);
   }, [currentLineIndex, autoScroll]);
 
   // Calculate word-level progress for current line
   const getWordProgress = (line: LyricLine, lineIndex: number) => {
     if (lineIndex !== currentLineIndex) return 1;
-    
+
     const lineProgress = Math.min(
       (adjustedTime - line.time) / (line.duration || 3000),
       1
     );
-    
+
     return Math.max(0, lineProgress);
   };
 
   // Get current word index for word-level highlighting
   const getCurrentWordIndex = (line: LyricLine) => {
     if (!line.words || !line.words.length) return -1;
-    
+
     for (let i = 0; i < line.words.length; i++) {
       const word = line.words[i];
       if (adjustedTime >= word.start && adjustedTime < word.end) {
@@ -101,13 +121,13 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
     }
 
     const currentWordIndex = getCurrentWordIndex(line);
-    
+
     return (
       <span className="inline-flex flex-wrap justify-center gap-1">
         {line.words.map((wordTiming, wordIndex) => {
           const isPastWord = wordIndex < currentWordIndex;
           const isCurrentWord = wordIndex === currentWordIndex;
-          
+
           // Calculate progress within current word
           let wordProgress = 0;
           if (isCurrentWord) {
@@ -125,11 +145,12 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
               key={wordIndex}
               className={`
                 relative transition-all duration-200 
-                ${isPastWord 
-                  ? 'text-blue-300' 
-                  : isCurrentWord 
-                    ? 'text-white font-semibold' 
-                    : 'text-white/60'
+                ${
+                  isPastWord
+                    ? "text-blue-300"
+                    : isCurrentWord
+                    ? "text-white font-semibold"
+                    : "text-white/60"
                 }
               `}
               animate={{
@@ -138,15 +159,15 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
               }}
               transition={{ duration: 0.2 }}
             >
-              {isCurrentWord && isPlaying ? (
+              {isCurrentWord ? (
                 <span className="relative">
                   {/* Background word */}
                   <span className="text-white/40">{wordTiming.word}</span>
                   {/* Progressive highlight */}
-                  <span 
+                  <span
                     className="absolute inset-0 text-white overflow-hidden transition-all duration-100"
                     style={{
-                      clipPath: `inset(0 ${(1 - wordProgress) * 100}% 0 0)`
+                      clipPath: `inset(0 ${(1 - wordProgress) * 100}% 0 0)`,
                     }}
                   >
                     {wordTiming.word}
@@ -164,16 +185,18 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
 
   if (!lyrics.length) {
     return (
-      <div className={`flex items-center justify-center min-h-[400px] ${className}`}>
+      <div
+        className={`flex items-center justify-center min-h-[400px] ${className}`}
+      >
         <div className="text-center">
           <div className="text-6xl mb-4">🎵</div>
-          <div 
+          <div
             className="text-lg mb-2"
             style={{ color: `${currentTheme.colors.textMuted}` }}
           >
             No lyrics available
           </div>
-          <div 
+          <div
             className="text-sm"
             style={{ color: `${currentTheme.colors.textMuted}80` }}
           >
@@ -192,34 +215,45 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
           onClick={() => setAutoScroll(!autoScroll)}
           className="block px-3 py-1 rounded-full text-xs font-medium transition-all duration-300 hover:scale-105"
           style={{
-            backgroundColor: autoScroll 
-              ? `${currentTheme.colors.primary}40` 
+            backgroundColor: autoScroll
+              ? `${currentTheme.colors.primary}40`
               : `${currentTheme.colors.backgroundSecondary}60`,
-            color: autoScroll 
-              ? currentTheme.colors.text 
+            color: autoScroll
+              ? currentTheme.colors.text
               : currentTheme.colors.textMuted,
-            border: `1px solid ${currentTheme.colors.border}30`
+            border: `1px solid ${currentTheme.colors.border}30`,
           }}
         >
-          {autoScroll ? '🔒 Auto-scroll' : '🔓 Manual'}
+          {autoScroll ? "🔒 Auto-scroll" : "🔓 Manual"}
         </button>
-        
+
         {/* Debug time display */}
         <div className="text-xs text-white/50 font-mono bg-black/30 px-2 py-1 rounded space-y-1">
           <div>Time: {currentTime.toFixed(1)}s</div>
           <div>Adj: {adjustedTime.toFixed(1)}s</div>
-          <div>Line: {currentLineIndex + 1}/{lyrics.length}</div>
-          <div className={isPlaying ? 'text-green-400' : 'text-yellow-400'}>
-            {isPlaying ? '▶ Playing' : '⏸ Paused'}
+          <div>
+            Line: {currentLineIndex + 1}/{lyrics.length}
+          </div>
+          <div
+            className={
+              effectivelyPlaying ? "text-green-400" : "text-yellow-400"
+            }
+          >
+            {effectivelyPlaying ? "▶ Playing" : "⏸ Paused"}
+            {isTimeProgressing && !isPlaying && (
+              <span className="text-xs text-blue-300 ml-1">(auto)</span>
+            )}
           </div>
         </div>
       </div>
 
       {/* Lyrics container */}
-      <div 
+      <div
         ref={containerRef}
         className="max-h-[500px] overflow-y-auto scrollbar-thin scrollbar-thumb-white/20 scrollbar-track-transparent"
-        onScroll={() => { if (!ignoreScrollRef.current) setAutoScroll(false); }}
+        onScroll={() => {
+          if (!ignoreScrollRef.current) setAutoScroll(false);
+        }}
       >
         <div className="space-y-6 py-8 px-4">
           {lyrics.map((line, index) => {
@@ -233,30 +267,34 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
                 key={index}
                 data-line-index={index}
                 initial={{ opacity: 0, y: 20 }}
-                animate={{ 
+                animate={{
                   opacity: isActive ? 1 : isFuture ? 0.4 : 0.7,
                   y: 0,
                   scale: isActive ? 1.02 : 1,
                 }}
-                transition={{ 
+                transition={{
                   duration: 0.3,
-                  ease: "easeInOut"
+                  ease: "easeInOut",
                 }}
                 className={`
                   relative text-center cursor-pointer transition-all duration-300
-                  ${isActive 
-                    ? 'text-white text-2xl font-semibold' 
-                    : isPast 
-                      ? 'text-blue-200 text-lg' 
-                      : 'text-white/50 text-lg'
+                  ${
+                    isActive
+                      ? "text-white text-2xl font-semibold"
+                      : isPast
+                      ? "text-blue-200 text-lg"
+                      : "text-white/50 text-lg"
                   }
                   hover:text-white/80
                 `}
                 onClick={async () => {
                   try {
-                    await invoke('send_playback_command', { command: 'seek', seekTime: line.time });
+                    await invoke("send_playback_command", {
+                      command: "seek",
+                      seekTime: line.time,
+                    });
                   } catch (e) {
-                    console.error('Failed to seek to line', e);
+                    console.error("Failed to seek to line", e);
                   }
                 }}
               >
@@ -273,17 +311,15 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
                 {/* Enhanced word-level or line-level highlighting */}
                 {line.words && line.words.length > 0 ? (
                   renderLineWithWordTiming(line, isActive)
-                ) : isActive && isPlaying ? (
+                ) : isActive ? (
                   <div className="relative">
                     {/* Background text */}
-                    <div className="text-white/30">
-                      {line.text}
-                    </div>
-                    {/* Highlighted text */}
-                    <div 
+                    <div className="text-white/30">{line.text}</div>
+                    {/* Highlighted text - using same progress as progress bar */}
+                    <div
                       className="absolute inset-0 text-white overflow-hidden transition-all duration-100"
                       style={{
-                        clipPath: `inset(0 ${(1 - wordProgress) * 100}% 0 0)`
+                        clipPath: `inset(0 ${(1 - wordProgress) * 100}% 0 0)`,
                       }}
                     >
                       {line.text}
@@ -300,8 +336,8 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
                       <motion.div
                         className="h-full bg-gradient-to-r from-blue-400 to-purple-400"
                         initial={{ width: 0 }}
-                        animate={{ 
-                          width: `${wordProgress * 100}%` 
+                        animate={{
+                          width: `${wordProgress * 100}%`,
                         }}
                         transition={{ duration: 0.1 }}
                       />
@@ -321,11 +357,12 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
             key={index}
             className={`
               w-1.5 h-1.5 rounded-full transition-all duration-300 cursor-pointer
-              ${index === currentLineIndex 
-                ? 'bg-white scale-125 shadow-lg' 
-                : index < currentLineIndex 
-                  ? 'bg-blue-400' 
-                  : 'bg-white/30 hover:bg-white/50'
+              ${
+                index === currentLineIndex
+                  ? "bg-white scale-125 shadow-lg"
+                  : index < currentLineIndex
+                  ? "bg-blue-400"
+                  : "bg-white/30 hover:bg-white/50"
               }
             `}
             onClick={() => {
