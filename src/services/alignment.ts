@@ -206,21 +206,38 @@ export class LyricsAlignment {
     // Backtrack to find optimal path
     const path = this.backtrackDTW(dtw, audioFrames, textFrames);
     
-    // Generate aligned lyrics with new timings
-    const alignedLyrics: LyricLine[] = [];
-    
+    // First compute new start times for all lines
+    const newTimes: number[] = [];
     for (let i = 0; i < originalLyrics.length; i++) {
       const pathPoint = path.find(p => p.textFrame === i);
-      const newTime = pathPoint ? (pathPoint.audioFrame / frameRate) * 1000 : originalLyrics[i].time;
-      
+      const newTime = pathPoint ? pathPoint.audioFrame / frameRate : originalLyrics[i].time;
+      newTimes.push(newTime);
+    }
+
+    // Compute durations from successive start times; default last to 3s if missing
+    const newDurations: number[] = [];
+    for (let i = 0; i < originalLyrics.length; i++) {
+      const start = newTimes[i];
+      const nextStart = i < originalLyrics.length - 1 ? newTimes[i + 1] : undefined;
+      const duration = nextStart !== undefined ? Math.max(0.1, nextStart - start) : (originalLyrics[i].duration ?? 3);
+      newDurations.push(duration);
+    }
+
+    // Generate aligned lyrics with updated times and durations
+    const alignedLyrics: LyricLine[] = [];
+    for (let i = 0; i < originalLyrics.length; i++) {
+      const startTime = newTimes[i];
+      const duration = newDurations[i];
+
       let words: WordTiming[] | undefined;
       if (this.config.enableWordLevel && originalLyrics[i].words) {
-        words = await this.alignWordsInLine(originalLyrics[i], newTime, audioFeatures, frameRate);
+        words = await this.alignWordsInLine(originalLyrics[i], startTime, duration, audioFeatures, frameRate);
       }
-      
+
       alignedLyrics.push({
         ...originalLyrics[i],
-        time: newTime,
+        time: startTime,
+        duration,
         words
       });
     }
@@ -229,21 +246,23 @@ export class LyricsAlignment {
   }
 
   private async alignWordsInLine(
-    line: LyricLine, 
-    lineStartTime: number, 
-    audioFeatures: AudioFeatures, 
+    line: LyricLine,
+    lineStartTime: number,
+    lineDuration: number,
+    audioFeatures: AudioFeatures,
     frameRate: number
   ): Promise<WordTiming[]> {
     if (!line.words) return [];
     
     const words = line.text.split(/\s+/);
     const alignedWords: WordTiming[] = [];
-    const lineDuration = line.duration || 3000;
+    // Use provided duration (already computed)
+    const duration = lineDuration > 0 ? lineDuration : (line.duration ?? 3);
     
     for (let i = 0; i < words.length; i++) {
       const word = words[i];
-      const estimatedStart = lineStartTime + (i / words.length) * lineDuration;
-      const estimatedDuration = lineDuration / words.length;
+      const estimatedStart = lineStartTime + (i / words.length) * duration;
+      const estimatedDuration = duration / words.length;
       
       // Fine-tune word timing using audio features
       const refinedTiming = this.refineWordTiming(
@@ -261,6 +280,29 @@ export class LyricsAlignment {
       });
     }
     
+    // Normalize to exactly fit [lineStartTime, lineStartTime + duration]
+    if (alignedWords.length > 0) {
+      const total = alignedWords[alignedWords.length - 1].end - alignedWords[0].start;
+      if (total > 0) {
+        const scale = duration / total;
+        const start0 = alignedWords[0].start;
+        for (let i = 0; i < alignedWords.length; i++) {
+          const relStart = alignedWords[i].start - start0;
+          const relEnd = alignedWords[i].end - start0;
+          alignedWords[i].start = lineStartTime + relStart * scale;
+          alignedWords[i].end = lineStartTime + relEnd * scale;
+        }
+      }
+      // Ensure monotonicity and clamp bounds
+      for (let i = 0; i < alignedWords.length; i++) {
+        const prevEnd = i > 0 ? alignedWords[i - 1].end : lineStartTime;
+        alignedWords[i].start = Math.max(lineStartTime, Math.min(alignedWords[i].start, lineStartTime + duration));
+        alignedWords[i].end = Math.max(alignedWords[i].start, Math.min(alignedWords[i].end, lineStartTime + duration));
+        if (alignedWords[i].start < prevEnd) alignedWords[i].start = prevEnd;
+        if (alignedWords[i].end < alignedWords[i].start) alignedWords[i].end = alignedWords[i].start;
+      }
+    }
+
     return alignedWords;
   }
 
@@ -271,8 +313,8 @@ export class LyricsAlignment {
     audioFeatures: AudioFeatures, 
     frameRate: number
   ): { start: number; end: number } {
-    const startFrame = Math.floor((estimatedStart / 1000) * frameRate);
-    const endFrame = Math.floor(((estimatedStart + estimatedDuration) / 1000) * frameRate);
+    const startFrame = Math.floor(estimatedStart * frameRate);
+    const endFrame = Math.floor((estimatedStart + estimatedDuration) * frameRate);
     
     // Find energy peaks around estimated timing
     let bestStart = startFrame;
@@ -298,8 +340,8 @@ export class LyricsAlignment {
     }
     
     return {
-      start: (bestStart / frameRate) * 1000,
-      end: (bestEnd / frameRate) * 1000
+      start: bestStart / frameRate,
+      end: bestEnd / frameRate
     };
   }
 

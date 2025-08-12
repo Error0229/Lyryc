@@ -41,9 +41,9 @@ const OffsetControls: React.FC<OffsetControlsProps> = ({
     }
   };
 
-  const formatOffset = (offset: number) => {
-    const sign = offset >= 0 ? '+' : '';
-    return `${sign}${(offset / 1000).toFixed(1)}s`;
+  const formatOffset = (offsetSeconds: number) => {
+    const sign = offsetSeconds >= 0 ? '+' : '';
+    return `${sign}${offsetSeconds.toFixed(1)}s`;
   };
 
   return (
@@ -51,7 +51,7 @@ const OffsetControls: React.FC<OffsetControlsProps> = ({
       <div className="text-center">
         <h3 className="text-white font-semibold text-lg mb-2">Lyrics Sync</h3>
         <div className="text-white/70 text-sm">
-          Total offset: <span className="font-mono text-cyan-400">{formatOffset(totalOffset * 1000)}</span>
+          Total offset: <span className="font-mono text-cyan-400">{formatOffset(totalOffset)}</span>
         </div>
       </div>
 
@@ -59,14 +59,14 @@ const OffsetControls: React.FC<OffsetControlsProps> = ({
       <div className="space-y-2">
         <div className="text-white/80 text-sm font-medium flex items-center justify-between">
           <span>Track Offset</span>
-          <span className="font-mono text-cyan-300">{formatOffset(trackOffset * 1000)}</span>
+          <span className="font-mono text-cyan-300">{formatOffset(trackOffset)}</span>
         </div>
         
         <div className="flex items-center justify-center space-x-2">
           <motion.button
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
-            onClick={() => adjustOffset(-1000)}
+            onClick={() => adjustOffset(-1)}
             className="px-3 py-2 bg-red-500/20 hover:bg-red-500/30 text-white rounded-lg transition-colors text-sm font-medium"
           >
             -1.0s
@@ -75,7 +75,7 @@ const OffsetControls: React.FC<OffsetControlsProps> = ({
           <motion.button
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
-            onClick={() => adjustOffset(-100)}
+            onClick={() => adjustOffset(-0.1)}
             className="px-2 py-2 bg-red-500/15 hover:bg-red-500/25 text-white rounded-lg transition-colors text-xs"
           >
             -0.1s
@@ -94,7 +94,7 @@ const OffsetControls: React.FC<OffsetControlsProps> = ({
           <motion.button
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
-            onClick={() => adjustOffset(100)}
+            onClick={() => adjustOffset(0.1)}
             className="px-2 py-2 bg-green-500/15 hover:bg-green-500/25 text-white rounded-lg transition-colors text-xs"
           >
             +0.1s
@@ -103,7 +103,7 @@ const OffsetControls: React.FC<OffsetControlsProps> = ({
           <motion.button
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
-            onClick={() => adjustOffset(1000)}
+            onClick={() => adjustOffset(1)}
             className="px-3 py-2 bg-green-500/20 hover:bg-green-500/30 text-white rounded-lg transition-colors text-sm font-medium"
           >
             +1.0s
@@ -115,14 +115,14 @@ const OffsetControls: React.FC<OffsetControlsProps> = ({
       <div className="space-y-2 pt-2 border-t border-white/10">
         <div className="text-white/80 text-sm font-medium flex items-center justify-between">
           <span>Global Offset</span>
-          <span className="font-mono text-orange-300">{formatOffset(globalOffset * 1000)}</span>
+          <span className="font-mono text-orange-300">{formatOffset(globalOffset)}</span>
         </div>
         
         <div className="flex items-center justify-center space-x-2">
           <motion.button
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
-            onClick={() => adjustOffset(-500, true)}
+            onClick={() => adjustOffset(-0.5, true)}
             className="px-2 py-1 bg-orange-500/20 hover:bg-orange-500/30 text-white rounded text-xs"
           >
             -0.5s
@@ -141,7 +141,7 @@ const OffsetControls: React.FC<OffsetControlsProps> = ({
           <motion.button
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
-            onClick={() => adjustOffset(500, true)}
+            onClick={() => adjustOffset(0.5, true)}
             className="px-2 py-1 bg-orange-500/20 hover:bg-orange-500/30 text-white rounded text-xs"
           >
             +0.5s

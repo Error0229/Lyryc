@@ -9,15 +9,15 @@ export interface TrackInfo {
 }
 
 export interface WordTiming {
-  start: number; // milliseconds
-  end: number; // milliseconds
+  start: number; // seconds
+  end: number; // seconds
   word: string;
 }
 
 export interface LyricLine {
-  time: number; // milliseconds
+  time: number; // seconds (matches backend and extension)
   text: string;
-  duration?: number;
+  duration?: number; // seconds
   words?: WordTiming[]; // For word-level synchronization
 }
 

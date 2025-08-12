@@ -164,8 +164,8 @@ export class LyricsProcessor {
 
     if (words.length === 0) return wordTimings;
 
-    const lineDuration = line.duration || 3000;
-    const wordsPerSecond = words.length / (lineDuration / 1000);
+    // Use seconds consistently. Default line duration: 3s
+    const lineDuration = line.duration ?? 3;
 
     // Calculate relative durations based on word characteristics
     const wordWeights = words.map(word => this.calculateWordWeight(word));
@@ -173,25 +173,41 @@ export class LyricsProcessor {
 
     let currentTime = line.time;
 
+    // First pass: compute base segments
+    const baseSegments: Array<{ start: number; end: number; word: string }> = [];
     for (let i = 0; i < words.length; i++) {
       const wordDuration = (wordWeights[i] / totalWeight) * lineDuration;
       const endTime = currentTime + wordDuration;
+      baseSegments.push({ start: currentTime, end: endTime, word: words[i] });
+      currentTime = endTime;
+    }
 
-      // Apply language-specific timing adjustments
-      const adjustedTiming = this.adjustWordTiming(
-        words[i],
-        currentTime,
-        endTime,
-        this.config.language
-      );
+    // Second pass: apply language adjustments to durations, then normalize back to fit line
+    const adjusted: Array<{ start: number; end: number; word: string }> = [];
+    for (let i = 0; i < baseSegments.length; i++) {
+      const seg = baseSegments[i];
+      const adj = this.adjustWordTiming(seg.word, seg.start, seg.end, this.config.language);
+      adjusted.push({ start: adj.start, end: adj.end, word: seg.word });
+    }
 
-      wordTimings.push({
-        start: Math.round(adjustedTiming.start),
-        end: Math.round(adjustedTiming.end),
-        word: words[i]
-      });
-
-      currentTime = adjustedTiming.end;
+    // Normalize
+    if (adjusted.length > 0) {
+      const total = adjusted[adjusted.length - 1].end - adjusted[0].start;
+      const scale = total > 0 ? lineDuration / total : 1;
+      const start0 = adjusted[0].start;
+      let prevEnd = line.time;
+      for (let i = 0; i < adjusted.length; i++) {
+        const relStart = adjusted[i].start - start0;
+        const relEnd = adjusted[i].end - start0;
+        let s = line.time + relStart * scale;
+        let e = line.time + relEnd * scale;
+        s = Math.max(prevEnd, s);
+        e = Math.max(s, Math.min(e, line.time + lineDuration));
+        wordTimings.push({ start: s, end: e, word: words[i] });
+        prevEnd = e;
+      }
+      // Ensure last word ends exactly at line end
+      wordTimings[wordTimings.length - 1].end = line.time + lineDuration;
     }
 
     return wordTimings;
@@ -241,8 +257,11 @@ export class LyricsProcessor {
       duration *= adjustments.punctuationMultiplier;
     }
 
-    // Ensure minimum and maximum durations
-    duration = Math.max(adjustments.minWordDuration, Math.min(adjustments.maxWordDuration, duration));
+    // Ensure minimum and maximum durations (seconds)
+    duration = Math.max(
+      adjustments.minWordDuration,
+      Math.min(adjustments.maxWordDuration, duration)
+    );
 
     return {
       start: startTime,
@@ -254,8 +273,9 @@ export class LyricsProcessor {
     const defaults = {
       complexWordMultiplier: 1.2,
       punctuationMultiplier: 1.1,
-      minWordDuration: 200,
-      maxWordDuration: 2000
+      // seconds
+      minWordDuration: 0.15,
+      maxWordDuration: 4.0,
     };
 
     switch (language) {
@@ -263,25 +283,25 @@ export class LyricsProcessor {
         return {
           ...defaults,
           complexWordMultiplier: 1.4, // Kanji takes longer
-          minWordDuration: 300
+          minWordDuration: 0.3
         };
       case 'zh': // Chinese
         return {
           ...defaults,
           complexWordMultiplier: 1.3,
-          minWordDuration: 250
+          minWordDuration: 0.25
         };
       case 'de': // German
         return {
           ...defaults,
           complexWordMultiplier: 1.5, // Compound words
-          maxWordDuration: 3000
+          maxWordDuration: 3.0
         };
       case 'fi': // Finnish
         return {
           ...defaults,
           complexWordMultiplier: 1.4,
-          maxWordDuration: 2500
+          maxWordDuration: 2.5
         };
       default:
         return defaults;

@@ -230,7 +230,8 @@ export class AudioSyncService {
       const estimatedDuration = this.estimateDuration(textLength, wordCount, complexity);
       
       // Adjust timing if it seems off
-      if (line.duration && Math.abs(line.duration - estimatedDuration) > 1000) {
+      // All durations are in seconds now; adjust if difference > 0.5s
+      if (line.duration && Math.abs(line.duration - estimatedDuration) > 0.5) {
         improvedLyrics[i] = {
           ...line,
           duration: estimatedDuration
@@ -279,13 +280,13 @@ export class AudioSyncService {
     
     const adjustedWPM = baseWordsPerMinute * singingMultiplier * (2 - complexity);
     const estimatedMinutes = wordCount / adjustedWPM;
-    const estimatedMs = estimatedMinutes * 60 * 1000;
-    
-    // Add minimum and maximum bounds
-    const minDuration = Math.max(wordCount * 300, 1000); // Min 300ms per word, 1s minimum
-    const maxDuration = wordCount * 2000; // Max 2s per word
-    
-    return Math.max(minDuration, Math.min(maxDuration, estimatedMs));
+    const estimatedSeconds = estimatedMinutes * 60;
+
+    // Bounds in seconds
+    const minDuration = Math.max(wordCount * 0.3, 1.0); // Min 0.3s per word, 1s minimum
+    const maxDuration = wordCount * 2.0; // Max 2s per word
+
+    return Math.max(minDuration, Math.min(maxDuration, estimatedSeconds));
   }
 
   private generateWordTiming(text: string, startTime: number, duration: number): Array<{ start: number; end: number; word: string }> {
@@ -303,20 +304,36 @@ export class AudioSyncService {
     
     const totalWeight = wordWeights.reduce((sum, weight) => sum + weight, 0);
     let currentTime = startTime;
-    
+
+    // base segments
+    const segments: Array<{ start: number; end: number; word: string }> = [];
     for (let i = 0; i < words.length; i++) {
       const wordDuration = (wordWeights[i] / totalWeight) * duration;
       const endTime = currentTime + wordDuration;
-      
-      wordTimings.push({
-        start: Math.round(currentTime),
-        end: Math.round(endTime),
-        word: words[i]
-      });
-      
+      segments.push({ start: currentTime, end: endTime, word: words[i] });
       currentTime = endTime;
     }
-    
+
+    // normalize to exactly [startTime, startTime + duration]
+    if (segments.length > 0) {
+      const total = segments[segments.length - 1].end - segments[0].start;
+      const scale = total > 0 ? duration / total : 1;
+      const start0 = segments[0].start;
+      let prevEnd = startTime;
+      for (let i = 0; i < segments.length; i++) {
+        const relStart = segments[i].start - start0;
+        const relEnd = segments[i].end - start0;
+        let s = startTime + relStart * scale;
+        let e = startTime + relEnd * scale;
+        s = Math.max(prevEnd, s);
+        e = Math.max(s, Math.min(e, startTime + duration));
+        wordTimings.push({ start: s, end: e, word: words[i] });
+        prevEnd = e;
+      }
+      // ensure last word end matches line end
+      wordTimings[wordTimings.length - 1].end = startTime + duration;
+    }
+
     return wordTimings;
   }
 

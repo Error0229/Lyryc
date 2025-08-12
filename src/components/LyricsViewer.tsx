@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { motion } from "framer-motion";
-import { LyricLine } from "../stores/lyricsStore";
+import { LyricLine, WordTiming } from "../stores/lyricsStore";
 import { useThemeStore } from "../stores/themeStore";
 import { useOffsetStore } from "../stores/offsetStore";
 
@@ -26,11 +26,12 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
   const { getTotalOffset } = useOffsetStore();
   const containerRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
+  const [wordHighlightEnabled, setWordHighlightEnabled] = useState(true);
   const ignoreScrollRef = useRef(false);
   const previousTimeRef = useRef(currentTime);
   const timeCheckRef = useRef(Date.now());
 
-  // Apply offset to current time
+  // Apply offset to current time (all in seconds)
   const adjustedTime = currentTime + getTotalOffset(artist, title);
 
   // Detect if time is progressing (backup for when isPlaying might be incorrectly false)
@@ -93,12 +94,50 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
   const getWordProgress = (line: LyricLine, lineIndex: number) => {
     if (lineIndex !== currentLineIndex) return 1;
 
+    // line.duration is in seconds; default to 3s if missing
     const lineProgress = Math.min(
-      (adjustedTime - line.time) / (line.duration || 3000),
+      (adjustedTime - line.time) / (line.duration ?? 3),
       1
     );
 
     return Math.max(0, lineProgress);
+  };
+
+  // Calculate progress for a specific word
+  const getIndividualWordProgress = (word: WordTiming) => {
+    if (adjustedTime < word.start) return 0;
+    if (adjustedTime >= word.end) return 1;
+    
+    const wordDuration = word.end - word.start;
+    if (wordDuration <= 0) return 1; // Handle zero duration words
+    
+    return Math.max(0, Math.min(1, (adjustedTime - word.start) / wordDuration));
+  };
+
+  // Calculate overall progress through a line with word timings
+  const getOverallWordLineProgress = (line: LyricLine): number => {
+    if (!line.words || line.words.length === 0) return 0;
+    
+    let completedWords = 0;
+    let currentWordProgress = 0;
+    
+    for (let i = 0; i < line.words.length; i++) {
+      const word = line.words[i];
+      if (adjustedTime >= word.end) {
+        // Word is completely finished
+        completedWords++;
+      } else if (adjustedTime >= word.start) {
+        // Currently singing this word
+        currentWordProgress = getIndividualWordProgress(word);
+        break;
+      } else {
+        // Haven't reached this word yet
+        break;
+      }
+    }
+    
+    // Total progress = (completed words + current word progress) / total words
+    return (completedWords + currentWordProgress) / line.words.length;
   };
 
   // Get current word index for word-level highlighting
@@ -131,11 +170,7 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
           // Calculate progress within current word
           let wordProgress = 0;
           if (isCurrentWord) {
-            const wordDuration = wordTiming.end - wordTiming.start;
-            wordProgress = Math.min(
-              (adjustedTime - wordTiming.start) / wordDuration,
-              1
-            );
+            wordProgress = getIndividualWordProgress(wordTiming);
           } else if (isPastWord) {
             wordProgress = 1;
           }
@@ -227,6 +262,24 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
           {autoScroll ? "🔒 Auto-scroll" : "🔓 Manual"}
         </button>
 
+        {/* Toggle word-level alignment/highlight for debug */}
+        <button
+          onClick={() => setWordHighlightEnabled((v) => !v)}
+          className="block px-3 py-1 rounded-full text-xs font-medium transition-all duration-300 hover:scale-105"
+          style={{
+            backgroundColor: wordHighlightEnabled
+              ? `${currentTheme.colors.success}30`
+              : `${currentTheme.colors.backgroundSecondary}60`,
+            color: wordHighlightEnabled
+              ? currentTheme.colors.text
+              : currentTheme.colors.textMuted,
+            border: `1px solid ${currentTheme.colors.border}30`,
+          }}
+          title="Enable/disable word alignment highlight"
+        >
+          {wordHighlightEnabled ? "🟢 Word Align: On" : "⚪ Word Align: Off"}
+        </button>
+
         {/* Debug time display */}
         <div className="text-xs text-white/50 font-mono bg-black/30 px-2 py-1 rounded space-y-1">
           <div>Time: {currentTime.toFixed(1)}s</div>
@@ -260,7 +313,13 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
             const isActive = index === currentLineIndex;
             const isPast = index < currentLineIndex;
             const isFuture = index > currentLineIndex;
-            const wordProgress = getWordProgress(line, index);
+            const lineProgress = getWordProgress(line, index); // This is actually line progress
+            
+            // For lines with word timing, calculate overall progress based on completed words
+            const hasWordTiming = !!(line.words && line.words.length > 0 && wordHighlightEnabled);
+            const overallLineProgress = isActive && hasWordTiming
+              ? getOverallWordLineProgress(line)
+              : lineProgress;
 
             return (
               <motion.div
@@ -309,17 +368,17 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
                 )}
 
                 {/* Enhanced word-level or line-level highlighting */}
-                {line.words && line.words.length > 0 ? (
+                {line.words && line.words.length > 0 && wordHighlightEnabled ? (
                   renderLineWithWordTiming(line, isActive)
                 ) : isActive ? (
                   <div className="relative">
                     {/* Background text */}
                     <div className="text-white/30">{line.text}</div>
-                    {/* Highlighted text - using same progress as progress bar */}
+                    {/* Highlighted text - using line progress for non-word timing */}
                     <div
                       className="absolute inset-0 text-white overflow-hidden transition-all duration-100"
                       style={{
-                        clipPath: `inset(0 ${(1 - wordProgress) * 100}% 0 0)`,
+                        clipPath: `inset(0 ${(1 - lineProgress) * 100}% 0 0)`,
                       }}
                     >
                       {line.text}
@@ -337,7 +396,7 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
                         className="h-full bg-gradient-to-r from-blue-400 to-purple-400"
                         initial={{ width: 0 }}
                         animate={{
-                          width: `${wordProgress * 100}%`,
+                          width: `${overallLineProgress * 100}%`,
                         }}
                         transition={{ duration: 0.1 }}
                       />
