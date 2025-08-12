@@ -1,4 +1,5 @@
 import { defineConfig } from "vite";
+import type { UserConfig as VitestUserConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
 // @ts-expect-error process is a nodejs global
@@ -29,4 +30,17 @@ export default defineConfig(async () => ({
       ignored: ["**/src-tauri/**"],
     },
   },
+  test: {
+    environment: "node",
+    globals: true,
+    include: [
+      "src/**/*.{test,spec}.{ts,tsx}",
+      "tests/**/*.{test,spec}.{ts,tsx}"
+    ],
+    hookTimeout: 120_000,
+    testTimeout: 180_000,
+    poolOptions: {
+      threads: { singleThread: true }
+    }
+  } as VitestUserConfig["test"],
 }));
