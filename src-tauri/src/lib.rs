@@ -55,15 +55,15 @@ async fn fetch_lyrics(track_name: String, artist_name: String) -> Result<Vec<Lyr
     let cleaned_track_without_artist = clean_track_name(&track_without_artist);
 
     let search_strategies = vec![
-        // Wildcard searches (often most effective)
+        // Wildcard searches (often most effective) - try original first, then cleaned
         SearchStrategy::Wildcard(format!("{} {}", track_name, artist_name)),
-        SearchStrategy::Wildcard(format!("{} {}", cleaned_track, artist_name)),
         SearchStrategy::Wildcard(track_name.clone()),
+        SearchStrategy::Wildcard(format!("{} {}", cleaned_track, artist_name)),
         SearchStrategy::Wildcard(cleaned_track.clone()),
-        // Exact searches
+        // Exact searches - try original first, then cleaned
         SearchStrategy::Exact(track_name.clone(), artist_name.clone()),
-        SearchStrategy::Exact(cleaned_track.clone(), artist_name.clone()),
         SearchStrategy::Exact(track_without_artist.clone(), artist_name.clone()),
+        SearchStrategy::Exact(cleaned_track.clone(), artist_name.clone()),
         SearchStrategy::Exact(cleaned_track_without_artist.clone(), artist_name.clone()),
     ];
 

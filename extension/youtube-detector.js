@@ -102,15 +102,11 @@ class YouTubeMusicDetector {
           trackName = element.textContent?.trim() ||
             element.title?.trim() ||
             element.getAttribute('aria-label')?.trim();
-          // clean up track name
-          // 1. if it contains 【*】 remove it
-          trackName = trackName?.replace(/【.*?】/g, '').trim();
-          // 2. if it contains " - YouTube Music" remove it
+          // minimal cleanup - only remove platform suffixes, preserve song titles
+          // 1. if it contains " - YouTube Music" remove it
           trackName = trackName?.replace(/ - YouTube Music$/, '').trim();
-          // 3. if it contains " - YouTube" remove it
+          // 2. if it contains " - YouTube" remove it
           trackName = trackName?.replace(/ - YouTube$/, '').trim();
-          // 4. remove everything after first '/', '-', or '｜' (covers, artists, etc)
-          trackName = trackName?.split(/[/-｜]/)[0].trim();
           if (trackName && trackName !== 'YouTube Music') {
             // console.log(`Found track with selector: ${selector} -> ${trackName}`);
             break;
