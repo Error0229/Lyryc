@@ -1,5 +1,5 @@
-import path from "node:path";
-import fs from "node:fs";
+import * as path from "node:path";
+import * as fs from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { Innertube, UniversalCache } from "youtubei.js";
@@ -11,23 +11,6 @@ export interface YouTubeInfo {
   title: string;
   author?: string;
   durationSec: number;
-}
-
-export async function getYouTubeInfo(url: string): Promise<YouTubeInfo> {
-  try {
-    const youtube = await Innertube.create();
-    const video_id = extractVideoId(url);
-    const info = await youtube.getInfo(video_id);
-    const duration = info.basic_info.duration?.seconds_total || 0;
-    return {
-      title: info.basic_info.title || 'Unknown',
-      author: info.basic_info.channel?.name,
-      durationSec: duration
-    };
-  } catch (e) {
-    console.warn('Failed to get YouTube info:', e);
-    throw e;
-  }
 }
 
 export async function downloadAudioIfMissing(url: string, name = "test-audio"): Promise<string | null> {
@@ -49,15 +32,15 @@ export async function downloadAudioIfMissing(url: string, name = "test-audio"): 
       }
     }
 
-    const outPath = path.join(TEMP_DIR, `${name}.webm`);
+    const basePath = path.join(TEMP_DIR, name);
 
     // Try YouTube.js first (primary method)
     try {
-      const ok = await downloadWithYouTubeJS(url, outPath);
-      if (ok) {
-        const isValid = await validateAudioFile(outPath);
-        if (isValid) return outPath;
-        try { fs.unlinkSync(outPath); } catch { }
+      const downloadedPath = await downloadWithYouTubeJS(url, basePath);
+      if (downloadedPath) {
+        const isValid = await validateAudioFile(downloadedPath);
+        if (isValid) return downloadedPath;
+        try { fs.unlinkSync(downloadedPath); } catch { }
       }
     } catch (e) {
       console.warn('YouTube.js download failed:', e);
@@ -67,11 +50,11 @@ export async function downloadAudioIfMissing(url: string, name = "test-audio"): 
     try {
       const hasYtDlp = await isCommandAvailable("yt-dlp");
       if (hasYtDlp) {
-        const ok = await downloadWithYtDlp(url, outPath);
-        if (ok) {
-          const isValid = await validateAudioFile(outPath);
-          if (isValid) return outPath;
-          try { fs.unlinkSync(outPath); } catch { }
+        const downloadedPath = await downloadWithYtDlp(url, basePath);
+        if (downloadedPath) {
+          const isValid = await validateAudioFile(downloadedPath);
+          if (isValid) return downloadedPath;
+          try { fs.unlinkSync(downloadedPath); } catch { }
         }
       }
     } catch (e) {
@@ -94,14 +77,11 @@ async function isCommandAvailable(cmd: string): Promise<boolean> {
   });
 }
 
-async function downloadWithYtDlp(url: string, outPath: string): Promise<boolean> {
+async function downloadWithYtDlp(url: string, basePath: string): Promise<string | null> {
   return new Promise((resolve) => {
-    // yt-dlp with -x (extract audio) will change the extension, so we need to handle that
-    const basePattern = outPath.replace(/\.[^.]+$/, ''); // Remove extension
-
     const p = spawn("yt-dlp", [
       "-f", "ba", // best audio
-      "-o", basePattern + ".%(ext)s", // Let yt-dlp choose extension
+      "-o", basePath + ".%(ext)s", // Let yt-dlp choose extension
       "--no-playlist",
       "--no-warnings",
       "-x", // extract audio
@@ -109,23 +89,23 @@ async function downloadWithYtDlp(url: string, outPath: string): Promise<boolean>
       url,
     ], { stdio: "inherit" });
 
-    p.on("error", () => resolve(false));
+    p.on("error", () => resolve(null));
     p.on("exit", (code) => {
       if (code !== 0) {
-        resolve(false);
+        resolve(null);
         return;
       }
 
       // Check for output files with common audio extensions
       const extensions = ['.opus', '.m4a', '.webm', '.mp3', '.ogg'];
       for (const ext of extensions) {
-        const possiblePath = basePattern + ext;
+        const possiblePath = basePath + ext;
         if (fs.existsSync(possiblePath)) {
-          resolve(true);
+          resolve(possiblePath);
           return;
         }
       }
-      resolve(false);
+      resolve(null);
     });
   });
 }
@@ -143,7 +123,7 @@ function extractVideoId(url: string): string | null {
   return null;
 }
 
-async function downloadWithYouTubeJS(url: string, outPath: string): Promise<boolean> {
+async function downloadWithYouTubeJS(url: string, basePath: string): Promise<string | null> {
   try {
     const youtube = await Innertube.create(
       {
@@ -154,75 +134,183 @@ async function downloadWithYouTubeJS(url: string, outPath: string): Promise<bool
     const videoId = extractVideoId(url);
     if (!videoId) {
       console.warn('Invalid YouTube URL:', url);
-      return false;
+      return null;
     }
     const info = await youtube.getInfo(videoId);
     // Log basic video info
     console.log(`Downloading: ${info.basic_info.title} by ${info.basic_info.channel?.name || 'Unknown'}`);
-    // Try to download using the built-in download method
-    // const stream = await info.download({
-    //   type: 'audio',
-    //   quality: 'best'
-    // });
 
-    const stream = await youtube.download(videoId, {
-      type: "audio",
-      quality: "best",
-      client: "YTMUSIC",
-    });
+    // Debug: Check available formats
+    console.log('Available audio formats:', info.streaming_data?.adaptive_formats?.filter(f => f.has_audio && !f.has_video).map(f => ({
+      itag: f.itag,
+      mime_type: f.mime_type,
+      bitrate: f.bitrate,
+      url: !!f.url,
+      cipher: !!f.cipher
+    })));
 
-    if (!stream) {
-      console.warn('Failed to get download stream from YouTube.js');
-      return false;
+    // Try alternative download approaches
+    try {
+      // Method 1: Try using info.download directly
+      console.log('Trying info.download method...');
+      const stream = await info.download({
+        type: 'audio',
+        quality: 'best'
+      });
+
+      if (stream) {
+        console.log('Successfully got stream from info.download');
+        return await writeStreamToFile(stream, basePath + '.webm');
+      }
+    } catch (e) {
+      console.warn('info.download failed:', e.message);
     }
 
-    const dir = path.dirname(outPath);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    try {
+      // Method 2: Try using youtube.download
+      console.log('Trying youtube.download method...');
+      const stream = await youtube.download(videoId, {
+        type: "audio",
+        quality: "best",
+      });
 
-    const writeStream = fs.createWriteStream(outPath);
-    let bytes = 0;
+      if (stream) {
+        console.log('Successfully got stream from youtube.download');
+        return await writeStreamToFile(stream, basePath + '.webm');
+      }
+    } catch (e) {
+      console.warn('youtube.download failed:', e.message);
+    }
 
-    return new Promise<boolean>((resolve, reject) => {
-      const reader = stream.getReader();
+    try {
+      // Method 3: Try manual format selection and download
+      console.log('Trying manual format selection...');
+      const audioFormats = info.streaming_data?.adaptive_formats?.filter(f => f.has_audio && !f.has_video) || [];
 
-      const pump = async () => {
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            bytes += value.length;
-            writeStream.write(value);
+      // Try formats in order of preference: opus, m4a, webm
+      const preferredFormats = ['opus', 'm4a', 'webm'];
+      for (const formatType of preferredFormats) {
+        const format = audioFormats.find(f => f.mime_type?.includes(formatType));
+        if (format && format.url) {
+          console.log(`Found ${formatType} format with direct URL, attempting download...`);
+          try {
+            const response = await fetch(format.url);
+            if (response.ok && response.body) {
+              console.log(`Successfully fetched ${formatType} stream`);
+              const extension = formatType === 'opus' ? '.opus' : formatType === 'm4a' ? '.m4a' : '.webm';
+              return await writeResponseToFile(response, basePath + extension);
+            }
+          } catch (e) {
+            console.warn(`Failed to fetch ${formatType} format:`, e.message);
           }
-
-          writeStream.end();
-
-          // Validate minimum size for real audio
-          if (bytes < 500 * 1024) {
-            reject(new Error(`Downloaded file too small: ${bytes} bytes`));
-            return;
-          }
-
-          resolve(true);
-        } catch (e) {
-          writeStream.destroy();
-          reject(e);
         }
-      };
+      }
+    } catch (e) {
+      console.warn('Manual format selection failed:', e.message);
+    }
 
-      writeStream.on('error', reject);
-      pump();
-    });
+    console.warn('All YouTube.js download methods failed');
+    return null;
   } catch (e) {
     console.warn('YouTube.js download error:', e);
-    return false;
+    return null;
   }
+}
+
+async function writeStreamToFile(stream: ReadableStream, outPath: string): Promise<string | null> {
+  const dir = path.dirname(outPath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+  const writeStream = fs.createWriteStream(outPath);
+  let bytes = 0;
+
+  return new Promise<string | null>((resolve, reject) => {
+    const reader = stream.getReader();
+
+    const pump = async () => {
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          bytes += value.length;
+          writeStream.write(value);
+        }
+
+        writeStream.end();
+
+        // Validate minimum size for real audio
+        if (bytes < 500 * 1024) {
+          reject(new Error(`Downloaded file too small: ${bytes} bytes`));
+          return;
+        }
+
+        console.log(`Successfully wrote ${bytes} bytes to ${outPath}`);
+        resolve(outPath);
+      } catch (e) {
+        writeStream.destroy();
+        reject(e);
+      }
+    };
+
+    writeStream.on('error', reject);
+    pump();
+  });
+}
+
+async function writeResponseToFile(response: Response, outPath: string): Promise<string | null> {
+  const dir = path.dirname(outPath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+  const writeStream = fs.createWriteStream(outPath);
+  let bytes = 0;
+
+  return new Promise<string | null>((resolve, reject) => {
+    if (!response.body) {
+      reject(new Error('No response body'));
+      return;
+    }
+
+    const reader = response.body.getReader();
+
+    const pump = async () => {
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          bytes += value.length;
+          writeStream.write(value);
+        }
+
+        writeStream.end();
+
+        // Validate minimum size for real audio
+        if (bytes < 500 * 1024) {
+          reject(new Error(`Downloaded file too small: ${bytes} bytes`));
+          return;
+        }
+
+        console.log(`Successfully wrote ${bytes} bytes to ${outPath}`);
+        resolve(outPath);
+      } catch (e) {
+        writeStream.destroy();
+        reject(e);
+      }
+    };
+
+    writeStream.on('error', reject);
+    pump();
+  });
 }
 
 async function validateAudioFile(filePath: string): Promise<boolean> {
   try {
     // Check file header to ensure it's actually audio content
-    const buffer = await fs.promises.readFile(filePath, { start: 0, end: 1024 });
+    const fd = await fs.promises.open(filePath, 'r');
+    const buffer = Buffer.alloc(1024);
+    await fd.read(buffer, 0, 1024, 0);
+    await fd.close();
     const header = buffer.toString('binary', 0, 20);
 
     // Check for common audio file signatures
