@@ -248,6 +248,70 @@ async fn try_fetch_lyrics_wildcard(query: &str) -> Result<Vec<LyricLine>, String
     Ok(parse_lrc_format(synced_lyrics))
 }
 
+#[tauri::command]
+async fn fetch_lrclib_raw(
+    track_name: String,
+    artist_name: String,
+) -> Result<serde_json::Value, String> {
+    info!("Fetching raw LRCLib for: {} by {}", track_name, artist_name);
+
+    // Try both exact and wildcard strategies and pick the first with any lyrics
+    let mut candidates: Vec<serde_json::Value> = Vec::new();
+
+    // Exact search
+    let mut url = format!(
+        "https://lrclib.net/api/search?track_name={}",
+        urlencoding::encode(&track_name)
+    );
+    if !artist_name.trim().is_empty() {
+        url.push_str(&format!("&artist_name={}", urlencoding::encode(&artist_name)));
+    }
+    let client = reqwest::Client::new();
+    if let Ok(resp) = client.get(&url).header("User-Agent", "Lyryc/0.1.0").send().await {
+        if resp.status().is_success() {
+            if let Ok(json) = resp.json::<Vec<serde_json::Value>>().await {
+                candidates.extend(json);
+            }
+        }
+    }
+
+    // Wildcard search as fallback
+    if candidates.is_empty() {
+        let url = format!("https://lrclib.net/api/search?q={}", urlencoding::encode(&format!("{} {}", track_name, artist_name)));
+        if let Ok(resp) = client.get(&url).header("User-Agent", "Lyryc/0.1.0").send().await {
+            if resp.status().is_success() {
+                if let Ok(json) = resp.json::<Vec<serde_json::Value>>().await {
+                    candidates.extend(json);
+                }
+            }
+        }
+    }
+
+    if candidates.is_empty() {
+        return Err("No LRCLib results".into());
+    }
+
+    // Prefer entries with syncedLyrics but return whatever available
+    let chosen = candidates
+        .iter()
+        .find(|item| item.get("syncedLyrics").and_then(|v| v.as_str()).map(|s| !s.trim().is_empty()).unwrap_or(false))
+        .cloned()
+        .or_else(|| candidates.get(0).cloned())
+        .ok_or_else(|| "No valid result".to_string())?;
+
+    // Shape a compact JSON with relevant fields
+    let track = serde_json::json!({
+        "trackName": chosen.get("trackName").and_then(|v| v.as_str()).unwrap_or(""),
+        "artistName": chosen.get("artistName").and_then(|v| v.as_str()).unwrap_or(""),
+        "albumName": chosen.get("albumName").and_then(|v| v.as_str()).unwrap_or(""),
+        "duration": chosen.get("duration").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        "plainLyrics": chosen.get("plainLyrics").and_then(|v| v.as_str()).unwrap_or("") ,
+        "syncedLyrics": chosen.get("syncedLyrics").and_then(|v| v.as_str()).unwrap_or("") ,
+    });
+
+    Ok(track)
+}
+
 fn clean_track_name(track_name: &str) -> String {
     use regex::Regex;
 
@@ -662,6 +726,7 @@ pub fn run() {
             get_current_track,
             set_current_track,
             fetch_lyrics,
+            fetch_lrclib_raw,
             init_extension_connection,
             get_websocket_status,
             get_websocket_clients_count,

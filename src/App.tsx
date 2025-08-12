@@ -9,6 +9,7 @@ import { useThemeStore } from "./stores/themeStore";
 import { LyricsProcessor } from "./services/lyricsProcessor";
 import { useCurrentTime } from "./hooks/useCurrentTime";
 import { useIndependentTimer } from "./hooks/useSmoothTime";
+import AlignmentTester from "./components/AlignmentTester";
 
 function App() {
   const { currentTrack, lyrics, setCurrentTrack, setLyrics, isPlaying, setIsPlaying } = useLyricsStore();
@@ -326,7 +327,7 @@ function App() {
               artist={currentTrack?.artist || ''}
               title={currentTrack?.title || ''}
             />
-            
+
             {/* Offset Controls */}
             {currentTrack && (
               <div className="flex justify-center">
@@ -336,6 +337,9 @@ function App() {
                 />
               </div>
             )}
+
+            {/* Alignment Tester (YouTube Music) */}
+            <AlignmentTester totalDurationSec={duration} />
           </div>
         )}
 
