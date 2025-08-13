@@ -90,63 +90,86 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
     return () => clearTimeout(t);
   }, [currentLineIndex, autoScroll]);
 
-  // Calculate word-level progress for current line
-  const getWordProgress = (line: LyricLine, lineIndex: number) => {
-    if (lineIndex !== currentLineIndex) return 1;
-
-    // line.duration is in seconds; default to 3s if missing
-    const lineProgress = Math.min(
-      (adjustedTime - line.time) / (line.duration ?? 3),
-      1
-    );
-
-    return Math.max(0, lineProgress);
+  // Calculate line progress based on line duration
+  const calculateLineProgress = (line: LyricLine, currentTime: number): number => {
+    if (currentTime < line.time) return 0;
+    
+    const lineDuration = line.duration ?? 3; // Default 3 seconds
+    const elapsed = currentTime - line.time;
+    
+    return Math.min(elapsed / lineDuration, 1);
   };
 
-  // Calculate progress for a specific word
-  const getIndividualWordProgress = (word: WordTiming) => {
-    if (adjustedTime < word.start) return 0;
-    if (adjustedTime >= word.end) return 1;
+  // Calculate progress for a specific word within its own timing
+  const calculateWordProgress = (word: WordTiming, currentTime: number): number => {
+    if (currentTime < word.start) return 0;
+    if (currentTime >= word.end) return 1;
     
     const wordDuration = word.end - word.start;
     if (wordDuration <= 0) return 1; // Handle zero duration words
     
-    return Math.max(0, Math.min(1, (adjustedTime - word.start) / wordDuration));
+    return (currentTime - word.start) / wordDuration;
   };
 
-  // Calculate overall progress through a line with word timings
-  const getOverallWordLineProgress = (line: LyricLine): number => {
-    if (!line.words || line.words.length === 0) return 0;
+  // Calculate overall line progress when using word timings
+  // This ensures word timing progress aligns with the line's duration
+  const calculateWordBasedLineProgress = (line: LyricLine, currentTime: number): number => {
+    if (!line.words || line.words.length === 0) {
+      return calculateLineProgress(line, currentTime);
+    }
     
-    let completedWords = 0;
-    let currentWordProgress = 0;
+    const lineDuration = line.duration ?? 3;
+    const lineStart = line.time;
+    const lineEnd = lineStart + lineDuration;
     
-    for (let i = 0; i < line.words.length; i++) {
-      const word = line.words[i];
-      if (adjustedTime >= word.end) {
-        // Word is completely finished
-        completedWords++;
-      } else if (adjustedTime >= word.start) {
-        // Currently singing this word
-        currentWordProgress = getIndividualWordProgress(word);
-        break;
-      } else {
+    // Ensure all words fit within the line duration by normalizing their timings
+    const normalizedWords = line.words.map(word => {
+      // Calculate each word's relative position in the line (0-1)
+      const originalStart = Math.max(word.start - lineStart, 0);
+      const originalEnd = Math.min(word.end - lineStart, lineDuration);
+      
+      return {
+        ...word,
+        normalizedStart: originalStart / lineDuration,
+        normalizedEnd: originalEnd / lineDuration,
+        actualStart: lineStart + originalStart,
+        actualEnd: lineStart + originalEnd
+      };
+    });
+    
+    // Calculate progress based on normalized word positions
+    let completedProgress = 0;
+    
+    for (const word of normalizedWords) {
+      if (currentTime < word.actualStart) {
         // Haven't reached this word yet
+        break;
+      } else if (currentTime >= word.actualEnd) {
+        // Word is completely finished - add its full contribution
+        completedProgress = word.normalizedEnd;
+      } else {
+        // Currently in this word - calculate partial progress
+        const wordProgress = calculateWordProgress(
+          { start: word.actualStart, end: word.actualEnd, word: word.word },
+          currentTime
+        );
+        const wordContribution = word.normalizedStart + 
+          (word.normalizedEnd - word.normalizedStart) * wordProgress;
+        completedProgress = wordContribution;
         break;
       }
     }
     
-    // Total progress = (completed words + current word progress) / total words
-    return (completedWords + currentWordProgress) / line.words.length;
+    return Math.min(completedProgress, 1);
   };
 
   // Get current word index for word-level highlighting
-  const getCurrentWordIndex = (line: LyricLine) => {
+  const getCurrentWordIndex = (line: LyricLine, currentTime: number) => {
     if (!line.words || !line.words.length) return -1;
 
     for (let i = 0; i < line.words.length; i++) {
       const word = line.words[i];
-      if (adjustedTime >= word.start && adjustedTime < word.end) {
+      if (currentTime >= word.start && currentTime < word.end) {
         return i;
       }
     }
@@ -154,12 +177,12 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
   };
 
   // Render word-by-word highlighting
-  const renderLineWithWordTiming = (line: LyricLine, isActive: boolean) => {
+  const renderLineWithWordTiming = (line: LyricLine, isActive: boolean, currentTime: number) => {
     if (!line.words || !line.words.length || !isActive) {
       return line.text;
     }
 
-    const currentWordIndex = getCurrentWordIndex(line);
+    const currentWordIndex = getCurrentWordIndex(line, currentTime);
 
     return (
       <span className="inline-flex flex-wrap justify-center gap-1">
@@ -170,7 +193,7 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
           // Calculate progress within current word
           let wordProgress = 0;
           if (isCurrentWord) {
-            wordProgress = getIndividualWordProgress(wordTiming);
+            wordProgress = calculateWordProgress(wordTiming, currentTime);
           } else if (isPastWord) {
             wordProgress = 1;
           }
@@ -313,13 +336,13 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
             const isActive = index === currentLineIndex;
             const isPast = index < currentLineIndex;
             const isFuture = index > currentLineIndex;
-            const lineProgress = getWordProgress(line, index); // This is actually line progress
-            
-            // For lines with word timing, calculate overall progress based on completed words
+            // Calculate appropriate progress based on whether word timing is enabled
             const hasWordTiming = !!(line.words && line.words.length > 0 && wordHighlightEnabled);
-            const overallLineProgress = isActive && hasWordTiming
-              ? getOverallWordLineProgress(line)
-              : lineProgress;
+            const lineProgress = isActive
+              ? (hasWordTiming 
+                  ? calculateWordBasedLineProgress(line, adjustedTime)
+                  : calculateLineProgress(line, adjustedTime))
+              : (index < currentLineIndex ? 1 : 0);
 
             return (
               <motion.div
@@ -369,7 +392,7 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
 
                 {/* Enhanced word-level or line-level highlighting */}
                 {line.words && line.words.length > 0 && wordHighlightEnabled ? (
-                  renderLineWithWordTiming(line, isActive)
+                  renderLineWithWordTiming(line, isActive, adjustedTime)
                 ) : isActive ? (
                   <div className="relative">
                     {/* Background text */}
@@ -396,7 +419,7 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
                         className="h-full bg-gradient-to-r from-blue-400 to-purple-400"
                         initial={{ width: 0 }}
                         animate={{
-                          width: `${overallLineProgress * 100}%`,
+                          width: `${lineProgress * 100}%`,
                         }}
                         transition={{ duration: 0.1 }}
                       />
