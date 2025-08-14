@@ -96,7 +96,10 @@ async fn fetch_lyrics(track_name: String, artist_name: String) -> Result<Vec<Lyr
         }
     }
 
-    warn!("No lyrics found after trying all strategies for '{}' by '{}'", track_name, artist_name);
+    warn!(
+        "No lyrics found after trying all strategies for '{}' by '{}'",
+        track_name, artist_name
+    );
     Err("No lyrics found after all strategies".to_string())
 }
 
@@ -264,10 +267,18 @@ async fn fetch_lrclib_raw(
         urlencoding::encode(&track_name)
     );
     if !artist_name.trim().is_empty() {
-        url.push_str(&format!("&artist_name={}", urlencoding::encode(&artist_name)));
+        url.push_str(&format!(
+            "&artist_name={}",
+            urlencoding::encode(&artist_name)
+        ));
     }
     let client = reqwest::Client::new();
-    if let Ok(resp) = client.get(&url).header("User-Agent", "Lyryc/0.1.0").send().await {
+    if let Ok(resp) = client
+        .get(&url)
+        .header("User-Agent", "Lyryc/0.1.0")
+        .send()
+        .await
+    {
         if resp.status().is_success() {
             if let Ok(json) = resp.json::<Vec<serde_json::Value>>().await {
                 candidates.extend(json);
@@ -277,8 +288,16 @@ async fn fetch_lrclib_raw(
 
     // Wildcard search as fallback
     if candidates.is_empty() {
-        let url = format!("https://lrclib.net/api/search?q={}", urlencoding::encode(&format!("{} {}", track_name, artist_name)));
-        if let Ok(resp) = client.get(&url).header("User-Agent", "Lyryc/0.1.0").send().await {
+        let url = format!(
+            "https://lrclib.net/api/search?q={}",
+            urlencoding::encode(&format!("{} {}", track_name, artist_name))
+        );
+        if let Ok(resp) = client
+            .get(&url)
+            .header("User-Agent", "Lyryc/0.1.0")
+            .send()
+            .await
+        {
             if resp.status().is_success() {
                 if let Ok(json) = resp.json::<Vec<serde_json::Value>>().await {
                     candidates.extend(json);
@@ -294,7 +313,12 @@ async fn fetch_lrclib_raw(
     // Prefer entries with syncedLyrics but return whatever available
     let chosen = candidates
         .iter()
-        .find(|item| item.get("syncedLyrics").and_then(|v| v.as_str()).map(|s| !s.trim().is_empty()).unwrap_or(false))
+        .find(|item| {
+            item.get("syncedLyrics")
+                .and_then(|v| v.as_str())
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false)
+        })
         .cloned()
         .or_else(|| candidates.get(0).cloned())
         .ok_or_else(|| "No valid result".to_string())?;
@@ -339,9 +363,13 @@ fn clean_track_name(track_name: &str) -> String {
             if let Some(middle_content) = captures.get(1) {
                 let mut extracted = middle_content.as_str().trim().to_string();
                 if !extracted.is_empty() && extracted.len() > 1 {
-                    // Apply "/" cleaning rule to the extracted content
-                    if let Ok(separator_re) = Regex::new(r"[/-｜].*$") {
-                        let cleaned_extracted = separator_re.replace_all(&extracted, "").to_string().trim().to_string();
+                    // Apply separator cleaning to the extracted content (handle many dash/pipe variants)
+                    if let Ok(separator_re) = Regex::new(r"[\-/｜／|:：‐‑‒–—―]+.*$") {
+                        let cleaned_extracted = separator_re
+                            .replace_all(&extracted, "")
+                            .to_string()
+                            .trim()
+                            .to_string();
                         if !cleaned_extracted.is_empty() && cleaned_extracted.len() > 1 {
                             extracted = cleaned_extracted;
                         }
@@ -352,9 +380,9 @@ fn clean_track_name(track_name: &str) -> String {
             }
         }
     }
-    
-    // Try Western brackets []
-    if let Ok(bracket_re) = Regex::new(r"\[([^\]]+)\]") {
+
+    // Try Western brackets 【】
+    if let Ok(bracket_re) = Regex::new(r"【([^】]+)】") {
         if let Some(captures) = bracket_re.captures(&cleaned) {
             if let Some(bracketed_title) = captures.get(1) {
                 let mut extracted = bracketed_title.as_str().trim().to_string();
@@ -362,37 +390,19 @@ fn clean_track_name(track_name: &str) -> String {
                     && extracted.len() > 2
                     && !extracted.to_lowercase().contains("cover")
                 {
-                    // Apply "/" cleaning rule to the extracted content
-                    if let Ok(separator_re) = Regex::new(r"[/-｜].*$") {
-                        let cleaned_extracted = separator_re.replace_all(&extracted, "").to_string().trim().to_string();
+                    // Apply separator cleaning to the extracted content (handle many dash/pipe variants)
+                    if let Ok(separator_re) = Regex::new(r"[\-/｜／|:：‐‑‒–—―]+.*$") {
+                        let cleaned_extracted = separator_re
+                            .replace_all(&extracted, "")
+                            .to_string()
+                            .trim()
+                            .to_string();
                         if !cleaned_extracted.is_empty() && cleaned_extracted.len() > 1 {
                             extracted = cleaned_extracted;
                         }
                     }
-                    debug!("Extracted from []brackets: '{}'", extracted);
+                    debug!("Extracted from 【】brackets: '{}'", extracted);
                     return extracted;
-                }
-            }
-        }
-    }
-
-    // Try to extract the first part before / if it looks like a song title
-    if let Ok(slash_re) = Regex::new(r"^([^/]+)") {
-        if let Some(captures) = slash_re.captures(&cleaned) {
-            if let Some(first_part) = captures.get(1) {
-                let extracted = first_part.as_str().trim();
-                // Only use if it's not just the start of a longer title
-                if !extracted.is_empty() && extracted.len() > 3 && !extracted.ends_with("の") {
-                    // Remove common prefixes/suffixes that indicate it's not the main title
-                    let cleaned_part = extracted
-                        .replace("【", "")
-                        .replace("】", "")
-                        .trim()
-                        .to_string();
-                    if !cleaned_part.is_empty() {
-                        debug!("Extracted first part before /: '{}'", cleaned_part);
-                        return cleaned_part;
-                    }
                 }
             }
         }
@@ -408,38 +418,39 @@ fn clean_track_name(track_name: &str) -> String {
         r" - YouTube$",
         // Remove common video indicators
         r"\s*\(.*?MV.*?\)",
-        r"\s*\[.*?MV.*?\]",
+        r"\s*【.*?MV.*?】",
         r"\s*\(.*?Official.*?Video.*?\)",
-        r"\s*\[.*?Official.*?Video.*?\]",
+        r"\s*【.*?Official.*?Video.*?】",
         r"\s*\(.*?Official.*?Music.*?Video.*?\)",
-        r"\s*\[.*?Official.*?Music.*?Video.*?\]",
+        r"\s*【.*?Official.*?Music.*?Video.*?】",
+        r"\s*【.*?Official.*?Music.*?Video.*?】",
         r"\s*\(.*?Audio.*?\)",
-        r"\s*\[.*?Audio.*?\]",
+        r"\s*【.*?Audio.*?】",
         r"\s*\(.*?Lyric.*?Video.*?\)",
-        r"\s*\[.*?Lyric.*?Video.*?\]",
+        r"\s*【.*?Lyric.*?Video.*?】",
         // Remove translations and language indicators
         r"\s*\(.*?中文.*?\)",
-        r"\s*\[.*?中文.*?\]",
+        r"\s*【.*?中文.*?】",
         r"\s*\(.*?日本語.*?\)",
-        r"\s*\[.*?日本語.*?\]",
+        r"\s*【.*?日本語.*?】",
         r"\s*\(.*?한국어.*?\)",
-        r"\s*\[.*?한국어.*?\]",
+        r"\s*【.*?한국어.*?】",
         // Remove featuring
         r"\s*\(.*?feat\..*?\)",
-        r"\s*\[.*?feat\..*?\]",
+        r"\s*【.*?feat\..*?】",
         r"\s*\(.*?ft\..*?\)",
-        r"\s*\[.*?ft\..*?\]",
+        r"\s*【.*?ft\..*?】",
         r"\s*\(.*?featuring.*?\)",
-        r"\s*\[.*?featuring.*?\]",
+        r"\s*【.*?featuring.*?】",
         // Remove remix/version
         r"\s*\(.*?remix.*?\)",
-        r"\s*\[.*?remix.*?\]",
+        r"\s*【.*?remix.*?】",
         r"\s*\(.*?version.*?\)",
-        r"\s*\[.*?version.*?\]",
+        r"\s*【.*?version.*?】",
         r"\s*-\s*remaster.*$",
         // Remove live
         r"\s*\(.*?Live.*?\)",
-        r"\s*\[.*?Live.*?\]",
+        r"\s*【.*?Live.*?】",
         // Remove cover mentions
         r"\s*\([Cc]over\)\s*$",
         r".*\s*[/-]\s*.*\s*[/-]\s*.*\([Cc]over\)\s*$",
@@ -458,8 +469,9 @@ fn clean_track_name(track_name: &str) -> String {
 
     // Finally, remove everything after first separator (/, -, ｜) - this should be last
     // But only if the result wouldn't be empty
-    if let Ok(re) = Regex::new(r"[/-｜].*$") {
+    if let Ok(re) = Regex::new(r"[\-/｜／|:：‐‑‒–—―]+.*$") {
         let potential_result = re.replace_all(&cleaned, "").to_string().trim().to_string();
+        debug!("Separator cleaning: '{}' -> '{}'", cleaned, potential_result);
         if !potential_result.is_empty() && potential_result.len() > 2 {
             cleaned = potential_result;
         }
@@ -481,20 +493,26 @@ fn remove_artist_from_track(track_name: &str, artist_name: &str) -> String {
 
     use regex::Regex;
 
-    // Create pattern to match artist name at the beginning with separators
     let escaped_artist = regex::escape(artist_name);
+    let mut result = track_name.to_string();
+
+    // Pattern 1: Artist at the beginning with dash separators
     let patterns = vec![
         format!(r"^{}\s*[-–—]\s*", escaped_artist),
         format!(r"\s*[-–—]\s*{}$", escaped_artist),
+        // Pattern 2: Artist at the end with dash separators
+        format!(r"\s*[-–—]\s*{}\s*$", escaped_artist),
     ];
-
-    let mut result = track_name.to_string();
 
     for pattern in patterns {
         if let Ok(re) = Regex::new(&format!("(?i){}", pattern)) {
             let new_result = re.replace_all(&result, "").trim().to_string();
             if new_result.len() < result.len() && !new_result.is_empty() {
                 result = new_result;
+                debug!(
+                    "Removed artist '{}' from track, result: '{}'",
+                    artist_name, result
+                );
             }
         }
     }
@@ -563,6 +581,26 @@ fn convert_plain_lyrics_to_lines(plain_lyrics: &str) -> Vec<LyricLine> {
     }
 
     lyrics
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cleans_japanese_title_with_romaji_suffix_after_hyphen() {
+        let input = "私じゃなかったんだね。 - Watashijyanakattandane.";
+        let cleaned = clean_track_name(input);
+        assert_eq!(cleaned, "私じゃなかったんだね。");
+    }
+
+    #[test]
+    fn cleans_youtube_suffixes_and_brackets() {
+        let input = "【MV】私じゃなかったんだね。(Official Video) - YouTube Music";
+        let cleaned = clean_track_name(input);
+        assert!(cleaned.contains("私じゃなかったんだね"));
+        assert!(!cleaned.contains("YouTube"));
+    }
 }
 
 #[tauri::command]
@@ -647,12 +685,12 @@ async fn get_websocket_clients_count(ws_state: State<'_, WebSocketState>) -> Res
         let clients = server.clients.lock().await;
         let count = clients.len();
         info!("Current WebSocket clients count: {}", count);
-        
+
         // Debug: print client IDs
         for (client_id, _) in clients.iter() {
             info!("Connected client: {}", client_id);
         }
-        
+
         Ok(count)
     } else {
         warn!("WebSocket server not available");
@@ -669,11 +707,11 @@ async fn debug_websocket_server(ws_state: State<'_, WebSocketState>) -> Result<S
         debug_info.push_str(&format!("- Server exists: Yes\n"));
         debug_info.push_str(&format!("- Port: 8765\n"));
         debug_info.push_str(&format!("- Connected clients: {}\n", clients.len()));
-        
+
         for (client_id, _) in clients.iter() {
             debug_info.push_str(&format!("  - Client ID: {}\n", client_id));
         }
-        
+
         info!("Debug info requested: {}", debug_info);
         Ok(debug_info)
     } else {
@@ -713,11 +751,11 @@ async fn send_playback_command(
 pub fn run() {
     // Initialize logger
     env_logger::Builder::from_default_env()
-        .filter_level(log::LevelFilter::Info)
+        .filter_level(log::LevelFilter::Debug)
         .init();
-    
+
     info!("Starting Lyryc application...");
-    
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(TrackState::new(Mutex::new(None)))

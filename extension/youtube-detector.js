@@ -134,12 +134,13 @@ class YouTubeMusicDetector {
 
 
       // Alternative method: use media session API
-      if ((!trackName || !artistName) && 'mediaSession' in navigator && navigator.mediaSession.metadata) {
-        const metadata = navigator.mediaSession.metadata;
-        trackName = trackName || metadata.title;
-        artistName = artistName || metadata.artist;
-        // console.log(`Found track from mediaSession: ${trackName} by ${artistName}`);
-      }
+      // if ((!trackName || !artistName) && 'mediaSession' in navigator && navigator.mediaSession.metadata) {
+      //   const metadata = navigator.mediaSession.metadata;
+      //   trackName = trackName || metadata.title;
+      //   artistName = artistName || metadata.artist;
+      //   console.log(`Found track from mediaSession: ${trackName} by ${artistName}`);
+      // }
+
 
       // Play state detection - YouTube Music play/pause button
       const playButtonSelectors = [
@@ -150,7 +151,7 @@ class YouTubeMusicDetector {
       ];
 
       let isCurrentlyPlaying = false;
-      
+
       // Method 1: Check play/pause button state
       for (const selector of playButtonSelectors) {
         const playButton = document.querySelector(selector);
@@ -173,7 +174,7 @@ class YouTubeMusicDetector {
           }
         }
       }
-      
+
       // Method 2: Fallback - Check for media session playback state
       if (!isCurrentlyPlaying && navigator.mediaSession && navigator.mediaSession.playbackState) {
         isCurrentlyPlaying = navigator.mediaSession.playbackState === 'playing';
@@ -181,7 +182,7 @@ class YouTubeMusicDetector {
           console.log('Music playing state detected via MediaSession API');
         }
       }
-      
+
       // Method 3: Fallback - Check for visual indicators of playback
       if (!isCurrentlyPlaying) {
         const playingIndicators = [
@@ -190,7 +191,7 @@ class YouTubeMusicDetector {
           '.ytmusic-player .playing',
           '.progress-bar.playing'
         ];
-        
+
         for (const indicator of playingIndicators) {
           if (document.querySelector(indicator)) {
             isCurrentlyPlaying = true;
@@ -199,15 +200,15 @@ class YouTubeMusicDetector {
           }
         }
       }
-      
+
       // Method 4: Fallback - Check if progress bar is updating (for audio-only content)
       if (!isCurrentlyPlaying) {
         const progressBar = document.querySelector('.progress-bar, #progress-bar, [role="progressbar"]');
         if (progressBar && this.lastProgressValue !== undefined) {
-          const currentProgress = progressBar.getAttribute('aria-valuenow') || 
-                                progressBar.style.width || 
-                                (progressBar.value !== undefined ? progressBar.value : null);
-          
+          const currentProgress = progressBar.getAttribute('aria-valuenow') ||
+            progressBar.style.width ||
+            (progressBar.value !== undefined ? progressBar.value : null);
+
           if (currentProgress !== null && currentProgress !== this.lastProgressValue) {
             const timeDiff = Date.now() - (this.lastProgressCheck || 0);
             if (timeDiff > 500 && timeDiff < 2000) { // Check if progress changed in reasonable time
@@ -594,7 +595,7 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
         try {
           document.dispatchEvent(new KeyboardEvent('keydown', { key: 'N', shiftKey: true, bubbles: true }));
           sendResponse({ success: true }); return true;
-        } catch (e) {}
+        } catch (e) { }
         break;
       }
 
@@ -611,7 +612,7 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
         try {
           document.dispatchEvent(new KeyboardEvent('keydown', { key: 'P', shiftKey: true, bubbles: true }));
           sendResponse({ success: true }); return true;
-        } catch (e) {}
+        } catch (e) { }
         break;
       }
 
