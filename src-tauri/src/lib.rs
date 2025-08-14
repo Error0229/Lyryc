@@ -606,6 +606,7 @@ mod tests {
 #[tauri::command]
 async fn init_extension_connection(
     ws_state: State<'_, WebSocketState>,
+    track_state: State<'_, TrackState>,
     app_handle: tauri::AppHandle,
 ) -> Result<String, String> {
     // Ensure idempotent initialization under a single lock
@@ -619,6 +620,7 @@ async fn init_extension_connection(
         // Create server and register callbacks
         let mut ws_server = create_websocket_server();
         let app_handle_clone = app_handle.clone();
+        let track_state_clone = track_state.inner().clone();
         ws_server.set_track_callback(move |track_update: TrackUpdate| {
             let track_info = TrackInfo {
                 title: track_update.title.clone(),
@@ -628,12 +630,35 @@ async fn init_extension_connection(
                 thumbnail: track_update.thumbnail.clone(),
             };
 
-            if track_update.current_time.is_none() || track_update.current_time == Some(0.0) {
-                if let Err(e) = app_handle_clone.emit("track-updated", &track_info) {
-                    error!("Failed to emit track-updated event: {}", e);
-                }
-            }
+            // Check for track changes and emit track-updated only when track actually changes
+            let track_state_for_callback = track_state_clone.clone();
+            let app_handle_for_track = app_handle_clone.clone();
+            let track_info_for_check = track_info.clone();
+            tokio::spawn(async move {
+                if track_update.current_time.is_none() || track_update.current_time == Some(0.0) {
+                    let mut current_track_guard = track_state_for_callback.lock().await;
+                    let should_emit = match &*current_track_guard {
+                        Some(existing_track) => {
+                            // Only emit if track title or artist changed
+                            existing_track.title != track_info_for_check.title || 
+                            existing_track.artist != track_info_for_check.artist
+                        }
+                        None => true, // First track
+                    };
 
+                    if should_emit {
+                        info!("Track changed: '{}' by '{}'", track_info_for_check.title, track_info_for_check.artist);
+                        *current_track_guard = Some(track_info_for_check.clone());
+                        if let Err(e) = app_handle_for_track.emit("track-updated", &track_info_for_check) {
+                            error!("Failed to emit track-updated event: {}", e);
+                        }
+                    } else {
+                        debug!("Track duplicate detected, skipping emit");
+                    }
+                }
+            });
+
+            // Always emit playback state and time updates (they change frequently)
             if let Err(e) = app_handle_clone.emit("playback-state", &track_update.is_playing) {
                 error!("Failed to emit playback-state event: {}", e);
             }
