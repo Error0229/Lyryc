@@ -163,17 +163,49 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
     return Math.min(completedProgress, 1);
   };
 
-  // Get current word index for word-level highlighting
+  // Get current word index based on audio progress through the line
   const getCurrentWordIndex = (line: LyricLine, currentTime: number) => {
     if (!line.words || !line.words.length) return -1;
 
+    // If before the line starts, return -1
+    if (currentTime < line.time) return -1;
+    
+    const lineDuration = line.duration ?? 3;
+    const lineProgress = Math.min((currentTime - line.time) / lineDuration, 1);
+    
+    // If past the line end, show last word as completed
+    if (lineProgress >= 1) return line.words.length - 1;
+    
+    // Use audio-based progress to determine word index
+    // This ensures highlighting keeps pace with the actual audio
+    const wordCount = line.words.length;
+    const currentWordFloat = lineProgress * wordCount;
+    // Adjust the calculation to be more responsive
+    const audioBasedIndex = Math.min(Math.floor(currentWordFloat + 0.01), wordCount - 1);
+    
+    // Also check the original word timing as a fallback for very precise timing
+    let timingBasedIndex = -1;
     for (let i = 0; i < line.words.length; i++) {
       const word = line.words[i];
       if (currentTime >= word.start && currentTime < word.end) {
-        return i;
+        timingBasedIndex = i;
+        break;
       }
     }
-    return -1;
+    
+    // Use the more advanced index (favor audio-based for better sync)
+    // But don't let it get too far ahead of timing-based
+    if (timingBasedIndex >= 0 && audioBasedIndex > timingBasedIndex + 2) {
+      // If audio-based is way ahead, moderate it slightly
+      return Math.min(audioBasedIndex, timingBasedIndex + 2);
+    }
+    
+    // Favor audio-based index, but use timing-based if it's valid and higher
+    if (timingBasedIndex >= 0) {
+      return Math.max(audioBasedIndex, timingBasedIndex);
+    } else {
+      return audioBasedIndex;
+    }
   };
 
   // Render word-by-word highlighting
@@ -189,47 +221,99 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
         {line.words.map((wordTiming, wordIndex) => {
           const isPastWord = wordIndex < currentWordIndex;
           const isCurrentWord = wordIndex === currentWordIndex;
+          const isFutureWord = wordIndex > currentWordIndex;
 
-          // Calculate progress within current word
+          // Calculate progress within current word using audio-based timing
           let wordProgress = 0;
-          if (isCurrentWord) {
-            wordProgress = calculateWordProgress(wordTiming, currentTime);
-          } else if (isPastWord) {
+          if (isPastWord) {
             wordProgress = 1;
+          } else if (isCurrentWord) {
+            // Use audio-based progress for more responsive highlighting
+            const lineDuration = line.duration ?? 3;
+            const lineProgress = Math.min((currentTime - line.time) / lineDuration, 1);
+            const wordCount = line.words!.length;
+            
+            // Calculate what portion of the line this word should represent
+            const wordStartPercent = wordIndex / wordCount;
+            const wordEndPercent = (wordIndex + 1) / wordCount;
+            
+            if (lineProgress <= wordStartPercent) {
+              wordProgress = 0;
+            } else if (lineProgress >= wordEndPercent) {
+              wordProgress = 1;
+            } else {
+              // Interpolate progress within this word based on line progress
+              wordProgress = (lineProgress - wordStartPercent) / (wordEndPercent - wordStartPercent);
+            }
+            
+            // Ensure minimum visible progress for very quick transitions
+            wordProgress = Math.max(wordProgress, 0.05);
+          } else {
+            // Future word - check if we're very close to starting based on line progress
+            const lineDuration = line.duration ?? 3;
+            const lineProgress = Math.min((currentTime - line.time) / lineDuration, 1);
+            const wordCount = line.words!.length;
+            const wordStartPercent = wordIndex / wordCount;
+            const timeUntilWordPercent = wordStartPercent - lineProgress;
+            
+            if (timeUntilWordPercent < 0.05) { // Within 5% of line time to this word
+              wordProgress = Math.max(0, 0.1 + (0.05 - timeUntilWordPercent) / 0.05 * 0.2);
+            }
           }
+
+          // Calculate if word is upcoming based on line progress
+          const lineDuration = line.duration ?? 3;
+          const lineProgress = Math.min((currentTime - line.time) / lineDuration, 1);
+          const wordCount = line.words!.length;
+          const wordStartPercent = wordIndex / wordCount;
+          const timeUntilWordPercent = wordStartPercent - lineProgress;
+          const isUpcoming = isFutureWord && timeUntilWordPercent < 0.05; // Within 5% of line time
 
           return (
             <motion.span
               key={wordIndex}
               className={`
-                relative transition-all duration-200 
+                relative transition-all duration-150
                 ${
                   isPastWord
                     ? "text-blue-300"
                     : isCurrentWord
                     ? "text-white font-semibold"
+                    : isUpcoming
+                    ? "text-white/80" // Highlight upcoming words
                     : "text-white/60"
                 }
               `}
               animate={{
-                scale: isCurrentWord ? 1.05 : 1,
+                scale: isCurrentWord ? 1.05 : isUpcoming ? 1.02 : 1,
                 y: isCurrentWord ? -2 : 0,
               }}
-              transition={{ duration: 0.2 }}
+              transition={{ duration: 0.15, ease: "easeOut" }}
             >
               {isCurrentWord ? (
                 <span className="relative">
                   {/* Background word */}
                   <span className="text-white/40">{wordTiming.word}</span>
-                  {/* Progressive highlight */}
+                  {/* Progressive highlight with smoother animation */}
                   <span
-                    className="absolute inset-0 text-white overflow-hidden transition-all duration-100"
+                    className="absolute inset-0 text-white overflow-hidden"
                     style={{
-                      clipPath: `inset(0 ${(1 - wordProgress) * 100}% 0 0)`,
+                      clipPath: `inset(0 ${Math.max(0, (1 - wordProgress) * 100)}% 0 0)`,
+                      transition: wordProgress > 0.05 ? 'clip-path 0.05s ease-out' : 'none'
                     }}
                   >
                     {wordTiming.word}
                   </span>
+                </span>
+              ) : isPastWord ? (
+                <span className="relative">
+                  {/* Completed word with subtle glow effect */}
+                  <span className="text-blue-300 drop-shadow-sm">{wordTiming.word}</span>
+                </span>
+              ) : isUpcoming ? (
+                <span className="relative">
+                  {/* Upcoming word with subtle preparation effect */}
+                  <span className="text-white/80">{wordTiming.word}</span>
                 </span>
               ) : (
                 wordTiming.word
