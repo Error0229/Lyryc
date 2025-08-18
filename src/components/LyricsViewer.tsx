@@ -117,11 +117,11 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
     if (!line.words || line.words.length === 0) {
       return calculateLineProgress(line, currentTime);
     }
-    
+
     const lineDuration = line.duration ?? 3;
     const lineStart = line.time;
     const lineEnd = lineStart + lineDuration;
-    
+
     // Ensure all words fit within the line duration by normalizing their timings
     const normalizedWords = line.words.map(word => {
       // Calculate each word's relative position in the line (0-1)
@@ -136,10 +136,10 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
         actualEnd: lineStart + originalEnd
       };
     });
-    
+
     // Calculate progress based on normalized word positions
     let completedProgress = 0;
-    
+
     for (const word of normalizedWords) {
       if (currentTime < word.actualStart) {
         // Haven't reached this word yet
@@ -153,13 +153,20 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
           { start: word.actualStart, end: word.actualEnd, word: word.word },
           currentTime
         );
-        const wordContribution = word.normalizedStart + 
+        const wordContribution = word.normalizedStart +
           (word.normalizedEnd - word.normalizedStart) * wordProgress;
         completedProgress = wordContribution;
         break;
       }
     }
-    
+
+    const lastWordEnd = normalizedWords[normalizedWords.length - 1]?.actualEnd ?? lineEnd;
+
+    if (currentTime >= lastWordEnd) {
+      const timeBasedProgress = (currentTime - lineStart) / lineDuration;
+      return Math.min(timeBasedProgress, 1);
+    }
+
     return Math.min(completedProgress, 1);
   };
 
