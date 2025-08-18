@@ -4,6 +4,7 @@ import { motion } from "framer-motion";
 import { LyricLine, WordTiming } from "../stores/lyricsStore";
 import { useThemeStore } from "../stores/themeStore";
 import { useOffsetStore } from "../stores/offsetStore";
+import { getLineDuration } from "../services/lyricsTiming";
 
 interface LyricsViewerProps {
   lyrics: LyricLine[];
@@ -93,10 +94,10 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
   // Calculate line progress based on line duration
   const calculateLineProgress = (line: LyricLine, currentTime: number): number => {
     if (currentTime < line.time) return 0;
-    
-    const lineDuration = line.duration ?? 3; // Default 3 seconds
+
+    const lineDuration = getLineDuration(line);
     const elapsed = currentTime - line.time;
-    
+
     return Math.min(elapsed / lineDuration, 1);
   };
 
@@ -118,7 +119,7 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
       return calculateLineProgress(line, currentTime);
     }
     
-    const lineDuration = line.duration ?? 3;
+    const lineDuration = getLineDuration(line);
     const lineStart = line.time;
     const lineEnd = lineStart + lineDuration;
     
@@ -170,7 +171,7 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
     // If before the line starts, return -1
     if (currentTime < line.time) return -1;
     
-    const lineDuration = line.duration ?? 3;
+    const lineDuration = getLineDuration(line);
     const lineProgress = Math.min((currentTime - line.time) / lineDuration, 1);
     
     // If past the line end, show last word as completed
@@ -229,7 +230,7 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
             wordProgress = 1;
           } else if (isCurrentWord) {
             // Use audio-based progress for more responsive highlighting
-            const lineDuration = line.duration ?? 3;
+            const lineDuration = getLineDuration(line);
             const lineProgress = Math.min((currentTime - line.time) / lineDuration, 1);
             const wordCount = line.words!.length;
             
@@ -250,7 +251,7 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
             wordProgress = Math.max(wordProgress, 0.05);
           } else {
             // Future word - check if we're very close to starting based on line progress
-            const lineDuration = line.duration ?? 3;
+            const lineDuration = getLineDuration(line);
             const lineProgress = Math.min((currentTime - line.time) / lineDuration, 1);
             const wordCount = line.words!.length;
             const wordStartPercent = wordIndex / wordCount;
@@ -262,7 +263,7 @@ const LyricsViewer: React.FC<LyricsViewerProps> = ({
           }
 
           // Calculate if word is upcoming based on line progress
-          const lineDuration = line.duration ?? 3;
+          const lineDuration = getLineDuration(line);
           const lineProgress = Math.min((currentTime - line.time) / lineDuration, 1);
           const wordCount = line.words!.length;
           const wordStartPercent = wordIndex / wordCount;
