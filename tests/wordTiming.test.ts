@@ -52,6 +52,23 @@ describe('Word Timing Tests', () => {
       
       expect(progress).toBeCloseTo(expectedProgress, 2);
     });
+
+    it('should extend duration to the next line start when provided duration is short', () => {
+      const lines: LyricLine[] = [
+        { time: 10000, duration: 2000, text: 'First line' },
+        { time: 14000, text: 'Second line' }
+      ];
+
+      const [first, next] = lines;
+      const duration = Math.max(first.duration!, next.time - first.time);
+
+      // Duration should expand to the gap between lines (4s)
+      expect(duration).toBe(4000);
+
+      const currentTime = 12000; // 2s after start
+      const progress = Math.max(0, Math.min(1, (currentTime - first.time) / duration));
+      expect(progress).toBeCloseTo(0.5, 2);
+    });
   });
 
   describe('Word Timing Consistency', () => {
