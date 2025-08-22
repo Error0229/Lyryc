@@ -12,15 +12,17 @@
   "app": {
     "windows": [
       {
-        "title": "Lyryc - Music Lyrics Sync",
-        "width": 1200,
-        "height": 800,
-        "minWidth": 800,
-        "minHeight": 600,
-        "decorations": true,
-        "transparent": false,
-        "alwaysOnTop": false,
-        "resizable": true
+        "title": "Lyryc - Clean Lyric Viewer",
+        "width": 900,
+        "height": 300,
+        "minWidth": 400,
+        "minHeight": 200,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "resizable": true,
+        "skipTaskbar": true,
+        "center": true
       }
     ],
     "security": {

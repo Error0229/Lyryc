@@ -6,10 +6,13 @@ import MediaControls from "./components/MediaControls";
 import OffsetControls from "./components/OffsetControls";
 import { useLyricsStore } from "./stores/lyricsStore";
 import { useThemeStore } from "./stores/themeStore";
+import { useOffsetStore } from "./stores/offsetStore";
 import { LyricsProcessor } from "./services/lyricsProcessor";
 import { useCurrentTime } from "./hooks/useCurrentTime";
 import { useIndependentTimer } from "./hooks/useSmoothTime";
 import AlignmentTester from "./components/AlignmentTester";
+import CleanLyricDisplay from "./components/CleanLyricDisplay";
+import { motion } from "framer-motion";
 
 function App() {
   const {
@@ -21,6 +24,7 @@ function App() {
     setIsPlaying,
   } = useLyricsStore();
   const { currentTheme, themes, setTheme } = useThemeStore();
+  const { getTotalOffset } = useOffsetStore();
   const [isConnected, setIsConnected] = useState(false);
   const [isLoadingLyrics, setIsLoadingLyrics] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
@@ -267,230 +271,181 @@ function App() {
     setupEventListeners();
   }, [setCurrentTrack, setIsPlaying]);
 
+  // Get current line for clean display
+  const getCurrentLine = () => {
+    if (!lyrics.length) return null;
+    
+    const adjustedTime = currentTime + getTotalOffset(currentTrack?.artist || "", currentTrack?.title || "");
+    
+    for (let i = 0; i < lyrics.length; i++) {
+      const currentLine = lyrics[i];
+      const nextLine = lyrics[i + 1];
+      
+      if (adjustedTime >= currentLine.time && 
+          (!nextLine || adjustedTime < nextLine.time)) {
+        return { line: currentLine, index: i };
+      }
+    }
+    return null;
+  };
+
+  const currentLineData = getCurrentLine();
+  const [showControls, setShowControls] = useState(false);
+
   return (
-    <div
-      className="min-h-screen transition-all duration-500"
-      style={{
-        background: currentTheme.colors.background,
-        fontFamily: currentTheme.typography.fontFamily,
-      }}
+    <div 
+      className="h-screen relative flex items-center justify-center p-4 select-none"
+      style={{ background: 'transparent' }}
+      onMouseEnter={() => setShowControls(true)}
+      onMouseLeave={() => setShowControls(false)}
     >
-      <div className="container mx-auto px-4 py-8">
-        {/* Header with Theme Selector */}
-        <header className="text-center mb-8">
-          <div className="flex justify-between items-start mb-4">
-            {/* Theme Selector */}
-            <div className="flex gap-2">
-              {themes.map((theme) => (
-                <button
-                  key={theme.id}
-                  onClick={() => setTheme(theme.id)}
-                  className={`
-                    px-3 py-1 rounded-full text-xs font-medium transition-all duration-300
-                    ${
-                      currentTheme.id === theme.id
-                        ? "ring-2 ring-white/50 shadow-lg transform scale-105"
-                        : "hover:scale-105 opacity-70 hover:opacity-100"
-                    }
-                  `}
-                  style={{
-                    background: theme.colors.primary,
-                    color: theme.colors.text,
-                  }}
-                  title={theme.description}
-                >
-                  {theme.name}
-                </button>
-              ))}
-            </div>
-
-            {/* Connection Status */}
-            <div>
-              <span
-                className="inline-flex items-center px-3 py-1 rounded-full text-sm transition-all duration-300"
-                style={{
-                  backgroundColor: isConnected
-                    ? `${currentTheme.colors.success}20`
-                    : `${currentTheme.colors.error}20`,
-                  color: isConnected
-                    ? currentTheme.colors.success
-                    : currentTheme.colors.error,
-                }}
-              >
-                {isConnected ? "🟢 Connected" : "🔴 Disconnected"}
-              </span>
-            </div>
+      {/* Clean Current Lyric Display */}
+      <div className="text-center max-w-4xl mx-auto">
+        {currentLineData ? (
+          <motion.div
+            key={currentLineData.index}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="text-2xl md:text-4xl font-light leading-relaxed tracking-wide drop-shadow-2xl"
+            style={{
+              textShadow: '0 4px 20px rgba(0,0,0,0.8), 0 0 40px rgba(255,255,255,0.1)'
+            }}
+          >
+            <CleanLyricDisplay
+              line={currentLineData.line}
+              currentTime={currentTime}
+              adjustedTime={currentTime + getTotalOffset(currentTrack?.artist || "", currentTrack?.title || "")}
+              fontFamily={currentTheme.typography.fontFamily}
+            />
+          </motion.div>
+        ) : isLoadingLyrics ? (
+          <div className="text-white/50 text-lg animate-pulse">
+            🔍 Searching for lyrics...
           </div>
-
-          <h1
-            className="text-4xl font-bold mb-2 transition-colors duration-300"
-            style={{
-              color: currentTheme.colors.text,
-              fontWeight: currentTheme.typography.fontWeight.bold,
-            }}
-          >
-            🎵 Lyryc
-          </h1>
-          <p
-            className="transition-colors duration-300"
-            style={{ color: currentTheme.colors.textSecondary }}
-          >
-            Real-time lyrics sync for your music
-          </p>
-        </header>
-
-        {/* Current Track Info */}
-        {currentTrack && (
-          <div
-            className="backdrop-blur-md rounded-xl p-6 mb-8 transition-all duration-300"
-            style={{
-              backgroundColor: `${currentTheme.colors.backgroundSecondary}80`,
-              border: `1px solid ${currentTheme.colors.border}40`,
-            }}
-          >
-            <div className="text-center">
-              <h2
-                className="text-2xl mb-2 transition-colors duration-300"
-                style={{
-                  color: currentTheme.colors.text,
-                  fontWeight: currentTheme.typography.fontWeight.semibold,
-                }}
-              >
-                {currentTrack.originalTitle || currentTrack.title}
-              </h2>
-              <p
-                className="text-lg transition-colors duration-300"
-                style={{ color: currentTheme.colors.textSecondary }}
-              >
-                by {currentTrack.artist}
-              </p>
-            </div>
+        ) : !currentTrack ? (
+          <div className="text-white/50 text-lg">
+            🎧 Play music to see lyrics
+          </div>
+        ) : lyrics.length === 0 ? (
+          <div className="text-white/50 text-lg">
+            📝 No lyrics found
+          </div>
+        ) : (
+          <div className="text-white/50 text-lg">
+            ⏸️ Waiting for lyrics...
           </div>
         )}
+      </div>
 
-        {/* Lyrics Display */}
-        {lyrics.length > 0 && (
-          <div className="space-y-6">
-            <LyricsViewer
-              lyrics={lyrics}
-              currentTime={currentTime}
-              isPlaying={isPlaying}
-              className="mb-4"
-              artist={currentTrack?.artist || ""}
-              title={currentTrack?.title || ""}
-            />
-
-            {/* Offset Controls */}
+      {/* Hidden Controls Menu */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ 
+          opacity: showControls ? 1 : 0,
+          y: showControls ? 0 : 20,
+          pointerEvents: showControls ? 'auto' : 'none'
+        }}
+        transition={{ duration: 0.3 }}
+        className="fixed bottom-4 left-1/2 transform -translate-x-1/2 z-50"
+      >
+        <div className="bg-black/90 backdrop-blur-lg rounded-2xl p-4 border border-white/20 shadow-2xl max-w-md">
+          <div className="flex flex-col items-center space-y-3">
+            {/* Current Track Info */}
             {currentTrack && (
-              <div className="flex justify-center">
+              <div className="text-center text-white/80 mb-2">
+                <div className="text-sm font-medium truncate max-w-xs">{currentTrack.originalTitle || currentTrack.title}</div>
+                <div className="text-xs text-white/60">by {currentTrack.artist}</div>
+              </div>
+            )}
+
+            {/* Controls Row */}
+            <div className="flex items-center space-x-4">
+              {/* Theme Selector */}
+              <div className="flex gap-2">
+                {themes.map((theme) => (
+                  <button
+                    key={theme.id}
+                    onClick={() => setTheme(theme.id)}
+                    className={`
+                      w-5 h-5 rounded-full transition-all duration-300 border-2
+                      ${currentTheme.id === theme.id 
+                        ? "border-white scale-110" 
+                        : "border-white/30 hover:border-white/60 hover:scale-105"
+                      }
+                    `}
+                    style={{ backgroundColor: theme.colors.primary }}
+                    title={theme.name}
+                  />
+                ))}
+              </div>
+
+              {/* Connection Status */}
+              <div className="flex items-center">
+                <div 
+                  className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-400' : 'bg-red-400'}`}
+                  title={isConnected ? 'Connected' : 'Disconnected'}
+                />
+              </div>
+
+              {/* Offset Controls */}
+              {currentTrack && (
                 <OffsetControls
                   artist={currentTrack.artist}
                   title={currentTrack.title}
                 />
+              )}
+            </div>
+
+            {/* Media Controls */}
+            {currentTrack && duration > 0 && (
+              <div className="w-full">
+                <MediaControls
+                  currentTime={currentTime}
+                  duration={duration}
+                  isPlaying={isPlaying}
+                  onPlayPause={() => {
+                    console.log("⚠️ Fallback play/pause called");
+                    setIsPlaying(!isPlaying);
+                  }}
+                  onSeek={(time) => {
+                    console.log("⚠️ Fallback seek called:", time);
+                    setBrowserTime(time);
+                  }}
+                />
               </div>
             )}
+
+            {/* Developer Tools Toggle */}
+            {currentTrack && duration > 0 && (
+              <details className="w-full">
+                <summary className="text-white/60 text-xs cursor-pointer hover:text-white/80 text-center">
+                  Dev Tools
+                </summary>
+                <div className="mt-2">
+                  <AlignmentTester totalDurationSec={duration} />
+                </div>
+              </details>
+            )}
           </div>
-        )}
+        </div>
+      </motion.div>
 
-        {/* Media Controls */}
-        {currentTrack && duration > 0 && (
-          <MediaControls
-            currentTime={currentTime}
-            duration={duration}
-            isPlaying={isPlaying}
-            onPlayPause={() => {
-              // This should rarely be called - only as fallback
-              console.log("⚠️ Fallback play/pause called");
-              setIsPlaying(!isPlaying);
-            }}
-            onSeek={(time) => {
-              // This should rarely be called - only as fallback
-              console.log("⚠️ Fallback seek called:", time);
-              setBrowserTime(time);
-            }}
-          />
-        )}
-
-        {/* Developer Tools - Alignment Tester */}
-        {currentTrack && duration > 0 && (
-          <div className="mt-8">
-            <AlignmentTester totalDurationSec={duration} />
-          </div>
-        )}
-
-        {/* Loading State */}
-        {isLoadingLyrics && (
-          <div className="text-center text-white/70 mt-8">
-            <div className="animate-pulse">
-              <p className="text-lg mb-4">🔍 Searching for lyrics...</p>
+      {/* Error Notifications (Brief, Auto-hide) */}
+      {(connectionError || lyricsError) && (
+        <motion.div
+          initial={{ opacity: 0, x: 100 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: 100 }}
+          className="fixed top-4 right-4 z-40"
+        >
+          <div className="bg-red-500/20 backdrop-blur-lg rounded-lg p-3 border border-red-500/30 max-w-xs">
+            <div className="text-red-200 text-xs">
+              {connectionError || lyricsError}
             </div>
           </div>
-        )}
-
-        {/* Error Messages */}
-        {connectionError && (
-          <div
-            className="backdrop-blur-md rounded-xl p-6 mb-8 border"
-            style={{
-              backgroundColor: `${currentTheme.colors.error}20`,
-              borderColor: `${currentTheme.colors.error}40`,
-            }}
-          >
-            <div className="text-center">
-              <p
-                className="text-lg font-medium mb-2"
-                style={{ color: currentTheme.colors.error }}
-              >
-                ⚠️ Connection Error
-              </p>
-              <p
-                className="text-sm"
-                style={{ color: currentTheme.colors.textSecondary }}
-              >
-                {connectionError}
-              </p>
-            </div>
-          </div>
-        )}
-
-        {lyricsError && (
-          <div
-            className="backdrop-blur-md rounded-xl p-6 mb-8 border"
-            style={{
-              backgroundColor: `${currentTheme.colors.error}20`,
-              borderColor: `${currentTheme.colors.error}40`,
-            }}
-          >
-            <div className="text-center">
-              <p
-                className="text-lg font-medium mb-2"
-                style={{ color: currentTheme.colors.error }}
-              >
-                📝 Lyrics Error
-              </p>
-              <p
-                className="text-sm"
-                style={{ color: currentTheme.colors.textSecondary }}
-              >
-                {lyricsError}
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* Instructions */}
-        {!currentTrack && !isLoadingLyrics && !connectionError && (
-          <div className="text-center text-white/70 mt-12">
-            <p className="text-lg mb-4">
-              🎧 Play music in your browser to see lyrics here
-            </p>
-            <p className="text-sm">
-              Supported: Spotify Web Player, YouTube Music, Apple Music,
-              SoundCloud
-            </p>
-          </div>
-        )}
-      </div>
+        </motion.div>
+      )}
     </div>
   );
 }
