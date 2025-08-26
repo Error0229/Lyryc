@@ -1,7 +1,7 @@
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tauri::{Emitter, State};
+use tauri::{Emitter, Manager, State};
 use tokio::sync::Mutex;
 
 mod websocket;
@@ -26,6 +26,7 @@ pub struct LyricLine {
 // Global state for current track and WebSocket server
 type TrackState = Arc<Mutex<Option<TrackInfo>>>;
 type WebSocketState = Arc<Mutex<Option<Arc<WebSocketServer>>>>;
+type ClickThroughState = Arc<Mutex<bool>>; // true = click-through enabled, false = disabled
 
 #[tauri::command]
 async fn get_current_track(state: State<'_, TrackState>) -> Result<Option<TrackInfo>, String> {
@@ -772,6 +773,33 @@ async fn send_playback_command(
     }
 }
 
+#[tauri::command]
+async fn enable_drag_mode(app_handle: tauri::AppHandle) -> Result<String, String> {
+    info!("Enabling drag mode - disabling click-through");
+    
+    if let Some(window) = app_handle.get_webview_window("main") {
+        window.set_ignore_cursor_events(false).map_err(|e| format!("Failed to disable click-through: {}", e))?;
+        
+        // Emit event to frontend
+        app_handle.emit("drag-mode-enabled", true).map_err(|e| format!("Failed to emit event: {}", e))?;
+        
+        // Auto-disable after 5 seconds
+        let app_handle_clone = app_handle.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+            if let Some(window) = app_handle_clone.get_webview_window("main") {
+                let _ = window.set_ignore_cursor_events(true);
+                let _ = app_handle_clone.emit("drag-mode-disabled", false);
+                info!("Auto-disabled drag mode after 5 seconds");
+            }
+        });
+        
+        Ok("Drag mode enabled for 5 seconds".to_string())
+    } else {
+        Err("Main window not found".to_string())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialize logger
@@ -783,8 +811,61 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            #[cfg(desktop)]
+            {
+                use tauri_plugin_global_shortcut::ShortcutState;
+                
+                // Get click-through state from app state
+                let click_through_state: ClickThroughState = app.state::<ClickThroughState>().inner().clone();
+                
+                app.handle().plugin(
+                    tauri_plugin_global_shortcut::Builder::new()
+                        .with_shortcuts(["ctrl+shift+d"])?
+                        .with_handler(move |app, _shortcut, event| {
+                            if event.state == ShortcutState::Pressed {
+                                info!("Global shortcut Ctrl+Shift+D triggered - toggling click-through");
+                                
+                                // Get window
+                                if let Some(window) = app.get_webview_window("main") {
+                                    // Toggle click-through state
+                                    let current_state = {
+                                        let mut state = click_through_state.blocking_lock();
+                                        *state = !*state; // Toggle the state
+                                        *state
+                                    };
+                                    
+                                    // Apply the new state to the window
+                                    if let Err(e) = window.set_ignore_cursor_events(current_state) {
+                                        error!("Failed to set click-through to {}: {}", current_state, e);
+                                        return;
+                                    }
+                                    
+                                    // Emit event to frontend with new state
+                                    let event_name = if current_state { "click-through-enabled" } else { "click-through-disabled" };
+                                    if let Err(e) = app.emit(event_name, current_state) {
+                                        error!("Failed to emit {} event: {}", event_name, e);
+                                        return;
+                                    }
+                                    
+                                    info!("Click-through toggled to: {} ({})", 
+                                          if current_state { "enabled" } else { "disabled" },
+                                          if current_state { "click-through active" } else { "draggable/interactive" });
+                                } else {
+                                    error!("Main window not found for global shortcut handler");
+                                }
+                            }
+                        })
+                        .build(),
+                )?;
+                
+                info!("Global shortcut Ctrl+Shift+D registered successfully (toggle mode)");
+            }
+            Ok(())
+        })
         .manage(TrackState::new(Mutex::new(None)))
         .manage(WebSocketState::new(Mutex::new(None)))
+        .manage(ClickThroughState::new(Mutex::new(true))) // Start with click-through enabled
         .invoke_handler(tauri::generate_handler![
             get_current_track,
             set_current_track,
@@ -795,7 +876,8 @@ pub fn run() {
             get_websocket_clients_count,
             debug_websocket_server,
             control_playback,
-            send_playback_command
+            send_playback_command,
+            enable_drag_mode
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

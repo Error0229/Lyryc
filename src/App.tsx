@@ -1,18 +1,19 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import LyricsViewer from "./components/LyricsViewer";
 import MediaControls from "./components/MediaControls";
-import OffsetControls from "./components/OffsetControls";
 import { useLyricsStore } from "./stores/lyricsStore";
 import { useThemeStore } from "./stores/themeStore";
 import { useOffsetStore } from "./stores/offsetStore";
+import { useViewModeStore } from "./stores/viewModeStore";
 import { LyricsProcessor } from "./services/lyricsProcessor";
 import { useCurrentTime } from "./hooks/useCurrentTime";
 import { useIndependentTimer } from "./hooks/useSmoothTime";
-import AlignmentTester from "./components/AlignmentTester";
 import CleanLyricDisplay from "./components/CleanLyricDisplay";
-import { motion } from "framer-motion";
+import StyleControls from "./components/StyleControls";
+import { motion, AnimatePresence } from "framer-motion";
 
 function App() {
   const {
@@ -25,6 +26,7 @@ function App() {
   } = useLyricsStore();
   const { currentTheme, themes, setTheme } = useThemeStore();
   const { getTotalOffset } = useOffsetStore();
+  const { viewMode, setViewMode } = useViewModeStore();
   const [isConnected, setIsConnected] = useState(false);
   const [isLoadingLyrics, setIsLoadingLyrics] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
@@ -291,145 +293,246 @@ function App() {
 
   const currentLineData = getCurrentLine();
   const [showControls, setShowControls] = useState(false);
+  const [showStyleControls, setShowStyleControls] = useState(false);
+  const [isClickThrough, setIsClickThrough] = useState(true); // Start with click-through enabled
+  const [dragModeEnabled, setDragModeEnabled] = useState(false);
+
+  // Simplified drag solution: Click and drag on background areas
+  const handleDragArea = async (e: React.MouseEvent) => {
+    // Only start dragging if clicking on background areas (not on controls/buttons)
+    const target = e.target as HTMLElement;
+    const isClickableElement = target.closest('button, input, select, textarea, a, [role="button"], .no-drag');
+    
+    if (!isClickableElement && e.button === 0) {
+      e.preventDefault();
+      try {
+        const appWindow = getCurrentWindow();
+        await appWindow.startDragging();
+      } catch (error) {
+        console.error('Failed to start window drag:', error);
+      }
+    }
+  };
+
+  const handleMouseEnter = async () => {
+    setShowControls(true);
+    // Only interact with controls when not in click-through mode
+    // Click-through state is now controlled by global shortcut toggle
+  };
+
+  const handleMouseLeave = async () => {
+    setShowControls(false);
+    // Controls visibility only - click-through state managed by global shortcut
+  };
+
+  // Note: Click-through state is now managed by global shortcut toggle only
+  // Style controls and hover states no longer affect click-through behavior
+
+  // Initialize click-through on mount
+  useEffect(() => {
+    const initializeClickThrough = async () => {
+      try {
+        const appWindow = getCurrentWindow();
+        await appWindow.setIgnoreCursorEvents(true);
+        setIsClickThrough(true);
+      } catch (error) {
+        console.error('Failed to initialize click-through:', error);
+      }
+    };
+    
+    initializeClickThrough();
+  }, []);
+
+  // Listen to click-through toggle events from backend (global shortcut handled in Rust)
+  useEffect(() => {
+    const setupEventListeners = async () => {
+      const unlisten1 = await listen('click-through-enabled', () => {
+        console.log('Click-through enabled by backend via global shortcut');
+        setIsClickThrough(true);
+        setDragModeEnabled(false);
+      });
+
+      const unlisten2 = await listen('click-through-disabled', () => {
+        console.log('Click-through disabled by backend via global shortcut');
+        setIsClickThrough(false);
+        setDragModeEnabled(true); // In interactive mode, dragging is available
+      });
+
+      return () => {
+        unlisten1();
+        unlisten2();
+      };
+    };
+
+    const eventListenersCleanup = setupEventListeners();
+
+    return () => {
+      eventListenersCleanup.then(cleanup => cleanup());
+    };
+  }, []);
 
   return (
     <div 
-      className="h-screen relative flex items-center justify-center p-4 select-none"
-      style={{ background: 'transparent' }}
-      onMouseEnter={() => setShowControls(true)}
-      onMouseLeave={() => setShowControls(false)}
+      className="h-screen relative flex items-center justify-center p-1 select-none"
+      style={{ 
+        background: 'transparent',
+        cursor: isClickThrough ? 'default' : 'move'
+      }}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      onMouseDown={isClickThrough ? undefined : handleDragArea}
     >
       {/* Clean Current Lyric Display */}
-      <div className="text-center max-w-4xl mx-auto">
+      <div className="text-center max-w-full mx-auto px-2">
         {currentLineData ? (
           <motion.div
             key={currentLineData.index}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
-            className="text-2xl md:text-4xl font-light leading-relaxed tracking-wide drop-shadow-2xl"
+            className="text-xl md:text-3xl font-light leading-tight tracking-wide drop-shadow-2xl"
             style={{
               textShadow: '0 4px 20px rgba(0,0,0,0.8), 0 0 40px rgba(255,255,255,0.1)'
             }}
+            data-tauri-drag-region
           >
             <CleanLyricDisplay
               line={currentLineData.line}
               currentTime={currentTime}
               adjustedTime={currentTime + getTotalOffset(currentTrack?.artist || "", currentTrack?.title || "")}
               fontFamily={currentTheme.typography.fontFamily}
+              viewMode={viewMode}
             />
           </motion.div>
         ) : isLoadingLyrics ? (
-          <div className="text-white/50 text-lg animate-pulse">
+          <div className="text-white/50 text-base animate-pulse" data-tauri-drag-region>
             🔍 Searching for lyrics...
           </div>
         ) : !currentTrack ? (
-          <div className="text-white/50 text-lg">
-            🎧 Play music to see lyrics
+          <div className="text-center">
+            <div className="text-white/50 text-base">
+              🎧 Play music to see lyrics
+            </div>
+            <div className="text-white/30 text-xs mt-2">
+              Press Ctrl+Shift+D to toggle {isClickThrough ? "drag mode" : "click-through"}
+            </div>
           </div>
         ) : lyrics.length === 0 ? (
-          <div className="text-white/50 text-lg">
+          <div className="text-white/50 text-base" data-tauri-drag-region>
             📝 No lyrics found
           </div>
         ) : (
-          <div className="text-white/50 text-lg">
+          <div className="text-white/50 text-base" data-tauri-drag-region>
             ⏸️ Waiting for lyrics...
           </div>
         )}
       </div>
 
-      {/* Hidden Controls Menu */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ 
-          opacity: showControls ? 1 : 0,
-          y: showControls ? 0 : 20,
-          pointerEvents: showControls ? 'auto' : 'none'
-        }}
-        transition={{ duration: 0.3 }}
-        className="fixed bottom-4 left-1/2 transform -translate-x-1/2 z-50"
-      >
-        <div className="bg-black/90 backdrop-blur-lg rounded-2xl p-4 border border-white/20 shadow-2xl max-w-md">
-          <div className="flex flex-col items-center space-y-3">
-            {/* Current Track Info */}
-            {currentTrack && (
-              <div className="text-center text-white/80 mb-2">
-                <div className="text-sm font-medium truncate max-w-xs">{currentTrack.originalTitle || currentTrack.title}</div>
-                <div className="text-xs text-white/60">by {currentTrack.artist}</div>
-              </div>
-            )}
+      {/* Compact Liquid Glass Media Controls */}
+      <AnimatePresence>
+        {currentTrack && duration > 0 && showControls && !isClickThrough && (
+          <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 z-50">
+            <div className="no-drag">
+              <MediaControls
+                currentTime={currentTime}
+                duration={duration}
+                isPlaying={isPlaying}
+                onPlayPause={() => {
+                  console.log("⚠️ Fallback play/pause called");
+                  setIsPlaying(!isPlaying);
+                }}
+                onSeek={(time) => {
+                  console.log("⚠️ Fallback seek called:", time);
+                  setBrowserTime(time);
+                }}
+                onOpenStyleControls={() => setShowStyleControls(true)}
+              />
+            </div>
+          </div>
+        )}
+      </AnimatePresence>
 
-            {/* Controls Row */}
-            <div className="flex items-center space-x-4">
-              {/* Theme Selector */}
-              <div className="flex gap-2">
-                {themes.map((theme) => (
-                  <button
-                    key={theme.id}
-                    onClick={() => setTheme(theme.id)}
-                    className={`
-                      w-5 h-5 rounded-full transition-all duration-300 border-2
-                      ${currentTheme.id === theme.id 
-                        ? "border-white scale-110" 
-                        : "border-white/30 hover:border-white/60 hover:scale-105"
-                      }
-                    `}
-                    style={{ backgroundColor: theme.colors.primary }}
-                    title={theme.name}
-                  />
-                ))}
-              </div>
-
-              {/* Connection Status */}
-              <div className="flex items-center">
-                <div 
-                  className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-400' : 'bg-red-400'}`}
-                  title={isConnected ? 'Connected' : 'Disconnected'}
-                />
-              </div>
-
-              {/* Offset Controls */}
-              {currentTrack && (
-                <OffsetControls
-                  artist={currentTrack.artist}
-                  title={currentTrack.title}
-                />
-              )}
+      {/* Minimal Connection & Theme Status */}
+      <AnimatePresence>
+        {!isClickThrough && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed top-4 right-4 z-40 flex items-center space-x-2"
+          >
+            {/* Connection Status */}
+            <div className="
+              bg-black/20 backdrop-blur-xl border border-white/10 
+              rounded-full px-2 py-1 shadow-lg flex items-center space-x-1
+            " style={{
+              background: 'linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.05) 100%)',
+              backdropFilter: 'blur(20px) saturate(180%)',
+              boxShadow: '0 4px 16px rgba(0,0,0,0.2)'
+            }}>
+              <div 
+                className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-green-400' : 'bg-red-400'}`}
+                title={isConnected ? 'Connected to browser' : 'Disconnected from browser'}
+              />
+              <span className="text-xs text-white/60">
+                {isConnected ? 'Connected' : 'Offline'}
+              </span>
             </div>
 
-            {/* Media Controls */}
-            {currentTrack && duration > 0 && (
-              <div className="w-full">
-                <MediaControls
-                  currentTime={currentTime}
-                  duration={duration}
-                  isPlaying={isPlaying}
-                  onPlayPause={() => {
-                    console.log("⚠️ Fallback play/pause called");
-                    setIsPlaying(!isPlaying);
-                  }}
-                  onSeek={(time) => {
-                    console.log("⚠️ Fallback seek called:", time);
-                    setBrowserTime(time);
-                  }}
+            {/* Theme Selector */}
+            <div className="
+              bg-black/20 backdrop-blur-xl border border-white/10 
+              rounded-full px-2 py-1 shadow-lg flex items-center space-x-1
+            " style={{
+              background: 'linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.05) 100%)',
+              backdropFilter: 'blur(20px) saturate(180%)',
+              boxShadow: '0 4px 16px rgba(0,0,0,0.2)'
+            }}>
+              {themes.map((theme) => (
+                <button
+                  key={theme.id}
+                  onClick={() => setTheme(theme.id)}
+                  className={`
+                    w-3 h-3 rounded-full transition-all border
+                    ${currentTheme.id === theme.id 
+                      ? "border-white scale-110" 
+                      : "border-white/30 hover:border-white/60 hover:scale-105"
+                    }
+                  `}
+                  style={{ backgroundColor: theme.colors.primary }}
+                  title={theme.name}
                 />
-              </div>
-            )}
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-            {/* Developer Tools Toggle */}
-            {currentTrack && duration > 0 && (
-              <details className="w-full">
-                <summary className="text-white/60 text-xs cursor-pointer hover:text-white/80 text-center">
-                  Dev Tools
-                </summary>
-                <div className="mt-2">
-                  <AlignmentTester totalDurationSec={duration} />
-                </div>
-              </details>
-            )}
-          </div>
-        </div>
-      </motion.div>
+      {/* Click-Through State Indicator */}
+      <AnimatePresence>
+        {!isClickThrough && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="fixed top-2 left-1/2 transform -translate-x-1/2 z-40"
+          >
+            <div className="bg-green-500/90 backdrop-blur-lg rounded-lg px-3 py-1 border border-green-400/50">
+              <div className="text-green-100 text-xs font-medium">
+                🖱️ Interactive Mode • Draggable
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Style Controls Modal */}
+      <AnimatePresence>
+        <StyleControls 
+          isOpen={showStyleControls} 
+          onClose={() => setShowStyleControls(false)} 
+        />
+      </AnimatePresence>
 
       {/* Error Notifications (Brief, Auto-hide) */}
       {(connectionError || lyricsError) && (

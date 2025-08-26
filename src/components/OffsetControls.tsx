@@ -47,114 +47,74 @@ const OffsetControls: React.FC<OffsetControlsProps> = ({
   };
 
   return (
-    <div className="bg-black/30 backdrop-blur-sm rounded-xl p-4 space-y-4">
-      <div className="text-center">
-        <h3 className="text-white font-semibold text-lg mb-2">Lyrics Sync</h3>
-        <div className="text-white/70 text-sm">
-          Total offset: <span className="font-mono text-cyan-400">{formatOffset(totalOffset)}</span>
-        </div>
-      </div>
-
-      {/* Track-specific offset */}
-      <div className="space-y-2">
-        <div className="text-white/80 text-sm font-medium flex items-center justify-between">
-          <span>Track Offset</span>
-          <span className="font-mono text-cyan-300">{formatOffset(trackOffset)}</span>
+    <div className="relative group">
+      {/* Compact Trigger Button */}
+      <button 
+        className="p-1 text-white/40 hover:text-white/60 text-xs rounded hover:bg-white/5 transition-colors"
+        title={`Sync: ${formatOffset(totalOffset)}`}
+      >
+        ⏱️
+      </button>
+      
+      {/* Floating Panel */}
+      <div className="absolute right-0 bottom-full mb-2 bg-black/95 backdrop-blur-lg rounded-lg border border-white/20 p-3 min-w-max opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none group-hover:pointer-events-auto">
+        <div className="text-white/80 text-xs mb-2 text-center">
+          Total: <span className="font-mono text-cyan-300">{formatOffset(totalOffset)}</span>
         </div>
         
-        <div className="flex items-center justify-center space-x-2">
-          <motion.button
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            onClick={() => adjustOffset(-1)}
-            className="px-3 py-2 bg-red-500/20 hover:bg-red-500/30 text-white rounded-lg transition-colors text-sm font-medium"
+        {/* Track Offset - Single Row */}
+        <div className="flex items-center space-x-1 mb-2">
+          <button
+            onClick={() => adjustOffset(-0.5)}
+            className="px-1.5 py-0.5 bg-red-500/20 hover:bg-red-500/30 text-white rounded text-xs transition-colors"
           >
-            -1.0s
-          </motion.button>
-          
-          <motion.button
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
+            -0.5
+          </button>
+          <button
             onClick={() => adjustOffset(-0.1)}
-            className="px-2 py-2 bg-red-500/15 hover:bg-red-500/25 text-white rounded-lg transition-colors text-xs"
+            className="px-1 py-0.5 bg-red-500/15 hover:bg-red-500/25 text-white rounded text-xs transition-colors"
           >
-            -0.1s
-          </motion.button>
-
-          <motion.button
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
+            -0.1
+          </button>
+          <button
             onClick={() => resetOffset(false)}
-            className="px-3 py-2 bg-gray-500/20 hover:bg-gray-500/30 text-white rounded-lg transition-colors text-xs"
-            title="Reset track offset"
+            className="px-1 py-0.5 bg-gray-500/20 hover:bg-gray-500/30 text-white rounded text-xs transition-colors"
+            title="Reset"
           >
-            Reset
-          </motion.button>
-
-          <motion.button
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
+            0
+          </button>
+          <button
             onClick={() => adjustOffset(0.1)}
-            className="px-2 py-2 bg-green-500/15 hover:bg-green-500/25 text-white rounded-lg transition-colors text-xs"
+            className="px-1 py-0.5 bg-green-500/15 hover:bg-green-500/25 text-white rounded text-xs transition-colors"
           >
-            +0.1s
-          </motion.button>
-          
-          <motion.button
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            onClick={() => adjustOffset(1)}
-            className="px-3 py-2 bg-green-500/20 hover:bg-green-500/30 text-white rounded-lg transition-colors text-sm font-medium"
+            +0.1
+          </button>
+          <button
+            onClick={() => adjustOffset(0.5)}
+            className="px-1.5 py-0.5 bg-green-500/20 hover:bg-green-500/30 text-white rounded text-xs transition-colors"
           >
-            +1.0s
-          </motion.button>
-        </div>
-      </div>
-
-      {/* Global offset */}
-      <div className="space-y-2 pt-2 border-t border-white/10">
-        <div className="text-white/80 text-sm font-medium flex items-center justify-between">
-          <span>Global Offset</span>
-          <span className="font-mono text-orange-300">{formatOffset(globalOffset)}</span>
+            +0.5
+          </button>
         </div>
         
-        <div className="flex items-center justify-center space-x-2">
-          <motion.button
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            onClick={() => adjustOffset(-0.5, true)}
-            className="px-2 py-1 bg-orange-500/20 hover:bg-orange-500/30 text-white rounded text-xs"
-          >
-            -0.5s
-          </motion.button>
-
-          <motion.button
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            onClick={() => resetOffset(true)}
-            className="px-2 py-1 bg-gray-500/20 hover:bg-gray-500/30 text-white rounded text-xs"
-            title="Reset global offset"
-          >
-            Reset
-          </motion.button>
-
-          <motion.button
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            onClick={() => adjustOffset(0.5, true)}
-            className="px-2 py-1 bg-orange-500/20 hover:bg-orange-500/30 text-white rounded text-xs"
-          >
-            +0.5s
-          </motion.button>
-        </div>
-      </div>
-
-      {/* Help text */}
-      <div className="text-white/50 text-xs text-center leading-relaxed">
-        <div>Track offset applies to this song only</div>
-        <div>Global offset applies to all songs</div>
-        <div className="mt-1 text-white/40">
-          If lyrics are ahead of audio, use negative offset
+        {/* Global Offset Label + Controls */}
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-white/60">Global:</span>
+          <div className="flex items-center space-x-1">
+            <button
+              onClick={() => adjustOffset(-0.2, true)}
+              className="px-1 py-0.5 bg-orange-500/20 hover:bg-orange-500/30 text-orange-200 rounded text-xs transition-colors"
+            >
+              -0.2
+            </button>
+            <span className="font-mono text-orange-300 px-1">{formatOffset(globalOffset)}</span>
+            <button
+              onClick={() => adjustOffset(0.2, true)}
+              className="px-1 py-0.5 bg-orange-500/20 hover:bg-orange-500/30 text-orange-200 rounded text-xs transition-colors"
+            >
+              +0.2
+            </button>
+          </div>
         </div>
       </div>
     </div>

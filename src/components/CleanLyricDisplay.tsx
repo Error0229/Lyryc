@@ -1,20 +1,59 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import { LyricLine, WordTiming } from '../stores/lyricsStore';
+import { useLyricsStyleStore } from '../stores/lyricsStyleStore';
 
 interface CleanLyricDisplayProps {
   line: LyricLine;
   currentTime: number;
   adjustedTime: number;
   fontFamily: string;
+  viewMode?: 'highlighted' | 'plain';
 }
 
 const CleanLyricDisplay: React.FC<CleanLyricDisplayProps> = ({
   line,
   currentTime,
   adjustedTime,
-  fontFamily
+  fontFamily, // Keep for backward compatibility, but will be overridden by style store
+  viewMode = 'highlighted'
 }) => {
+  const { style } = useLyricsStyleStore();
+  
+  // Create dynamic styles based on user preferences
+  const baseTextStyle = {
+    fontFamily: style.fontFamily,
+    fontSize: `${style.fontSize}rem`,
+    fontWeight: style.fontWeight,
+    color: style.textColor,
+    lineHeight: style.lineHeight,
+    letterSpacing: `${style.letterSpacing}em`,
+    textAlign: style.textAlign as 'left' | 'center' | 'right',
+    textShadow: style.textShadow 
+      ? `0 0 ${style.textShadowBlur}px ${style.textShadowColor}` 
+      : 'none',
+    filter: style.textGlow 
+      ? `drop-shadow(0 0 10px ${style.textGlowColor})` 
+      : 'none',
+  };
+
+  const backgroundStyle = style.backgroundOpacity > 0 ? {
+    backgroundColor: `${style.backgroundColor}${Math.round(style.backgroundOpacity * 2.55).toString(16).padStart(2, '0')}`,
+    backdropFilter: style.backgroundBlur > 0 ? `blur(${style.backgroundBlur}px)` : 'none',
+    borderRadius: '12px',
+    padding: '16px 24px',
+  } : {};
+
+  // If plain mode, just render the text without any highlighting
+  if (viewMode === 'plain') {
+    return (
+      <div style={{ ...backgroundStyle }}>
+        <div style={baseTextStyle}>
+          {line.text}
+        </div>
+      </div>
+    );
+  }
   // Calculate word progress for clean word-by-word highlighting
   const calculateWordProgress = (word: WordTiming, currentTime: number): number => {
     if (currentTime < word.start) return 0;
@@ -48,49 +87,58 @@ const CleanLyricDisplay: React.FC<CleanLyricDisplayProps> = ({
     const currentWordIndex = getCurrentWordIndex(line.words, adjustedTime);
     
     return (
-      <div className="inline-flex flex-wrap justify-center gap-2">
-        {line.words.map((wordTiming, wordIndex) => {
-          const isPastWord = wordIndex < currentWordIndex;
-          const isCurrentWord = wordIndex === currentWordIndex;
-          const wordProgress = isCurrentWord ? calculateWordProgress(wordTiming, adjustedTime) : 0;
+      <div style={{ ...backgroundStyle }}>
+        <div 
+          className="inline-flex flex-wrap gap-2"
+          style={{ justifyContent: style.textAlign }}
+        >
+          {line.words.map((wordTiming, wordIndex) => {
+            const isPastWord = wordIndex < currentWordIndex;
+            const isCurrentWord = wordIndex === currentWordIndex;
+            const wordProgress = isCurrentWord ? calculateWordProgress(wordTiming, adjustedTime) : 0;
+            
+            const animationScale = isCurrentWord ? 1 + (style.animationIntensity / 1000) : 1;
+            const animationY = isCurrentWord ? -(style.animationIntensity / 25) : 0;
 
-          return (
-            <motion.span
-              key={wordIndex}
-              className={`
-                relative transition-all duration-200
-                ${isPastWord ? "text-blue-300" : isCurrentWord ? "text-white" : "text-white/60"}
-              `}
-              animate={{
-                scale: isCurrentWord ? 1.05 : 1,
-                y: isCurrentWord ? -4 : 0,
-              }}
-              transition={{ duration: 0.2, ease: "easeOut" }}
-              style={{ fontFamily }}
-            >
-              {isCurrentWord ? (
-                <span className="relative">
-                  {/* Background word */}
-                  <span className="text-white/30">{wordTiming.word}</span>
-                  {/* Progressive highlight */}
-                  <span
-                    className="absolute inset-0 text-white overflow-hidden"
-                    style={{
-                      clipPath: `inset(0 ${Math.max(0, (1 - wordProgress) * 100)}% 0 0)`,
-                      transition: wordProgress > 0.05 ? 'clip-path 0.1s ease-out' : 'none'
-                    }}
-                  >
-                    {wordTiming.word}
+            return (
+              <motion.span
+                key={wordIndex}
+                className="relative transition-all duration-200"
+                animate={{
+                  scale: animationScale,
+                  y: animationY,
+                }}
+                transition={{ duration: 0.2, ease: "easeOut" }}
+                style={baseTextStyle}
+              >
+                {isCurrentWord ? (
+                  <span className="relative">
+                    {/* Background word */}
+                    <span style={{ color: `${style.futureWordColor}60` }}>{wordTiming.word}</span>
+                    {/* Progressive highlight */}
+                    <span
+                      className="absolute inset-0 overflow-hidden"
+                      style={{
+                        color: style.highlightColor,
+                        clipPath: `inset(0 ${Math.max(0, (1 - wordProgress) * 100)}% 0 0)`,
+                        transition: wordProgress > 0.05 ? 'clip-path 0.1s ease-out' : 'none',
+                        filter: style.textGlow 
+                          ? `drop-shadow(0 0 10px ${style.textGlowColor})` 
+                          : 'none',
+                      }}
+                    >
+                      {wordTiming.word}
+                    </span>
                   </span>
-                </span>
-              ) : isPastWord ? (
-                <span className="text-blue-300 drop-shadow-sm">{wordTiming.word}</span>
-              ) : (
-                wordTiming.word
-              )}
-            </motion.span>
-          );
-        })}
+                ) : isPastWord ? (
+                  <span style={{ color: style.pastWordColor }}>{wordTiming.word}</span>
+                ) : (
+                  <span style={{ color: style.futureWordColor }}>{wordTiming.word}</span>
+                )}
+              </motion.span>
+            );
+          })}
+        </div>
       </div>
     );
   }
@@ -99,17 +147,23 @@ const CleanLyricDisplay: React.FC<CleanLyricDisplayProps> = ({
   const lineProgress = Math.min((adjustedTime - line.time) / 3, 1); // Assume 3s duration
 
   return (
-    <div className="relative" style={{ fontFamily }}>
-      {/* Background text */}
-      <div className="text-white/30">{line.text}</div>
-      {/* Progressive highlight */}
-      <div
-        className="absolute inset-0 text-white overflow-hidden transition-all duration-200"
-        style={{
-          clipPath: `inset(0 ${(1 - lineProgress) * 100}% 0 0)`,
-        }}
-      >
-        {line.text}
+    <div style={{ ...backgroundStyle }}>
+      <div className="relative" style={baseTextStyle}>
+        {/* Background text */}
+        <div style={{ color: `${style.futureWordColor}60` }}>{line.text}</div>
+        {/* Progressive highlight */}
+        <div
+          className="absolute inset-0 overflow-hidden transition-all duration-200"
+          style={{
+            color: style.highlightColor,
+            clipPath: `inset(0 ${(1 - lineProgress) * 100}% 0 0)`,
+            filter: style.textGlow 
+              ? `drop-shadow(0 0 10px ${style.textGlowColor})` 
+              : 'none',
+          }}
+        >
+          {line.text}
+        </div>
       </div>
     </div>
   );
