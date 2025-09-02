@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { TrayIcon } from "@tauri-apps/api/tray";
+import { Menu } from "@tauri-apps/api/menu";
 import LyricsViewer from "./components/LyricsViewer";
 import MediaControls from "./components/MediaControls";
 import { useLyricsStore } from "./stores/lyricsStore";
@@ -199,6 +201,98 @@ function App() {
   };
 
   useEffect(() => {
+    // Initialize window sizing to fit screen
+    const initializeWindowSizing = async () => {
+      try {
+        await invoke("initialize_window_sizing");
+        console.log("Window sizing initialized successfully");
+      } catch (error) {
+        console.error("Failed to initialize window sizing:", error);
+      }
+    };
+
+    // Initialize system tray
+    const initializeSystemTray = async () => {
+      try {
+        // Clean up existing tray icon if any
+        if (trayIcon) {
+          try {
+            await trayIcon.close();
+          } catch (error) {
+            console.warn("Failed to close existing tray icon:", error);
+          }
+        }
+
+        // Create tray menu
+        const menu = await Menu.new({
+          items: [
+            {
+              id: 'toggle',
+              text: 'Show/Hide',
+              action: async () => {
+                try {
+                  await invoke("toggle_window_visibility");
+                  console.log("Window visibility toggled from tray menu");
+                } catch (error) {
+                  console.error("Failed to toggle window from tray menu:", error);
+                }
+              }
+            },
+            {
+              id: 'settings',
+              text: 'Settings',
+              action: async () => {
+                try {
+                  await invoke("restore_from_tray");
+                  console.log("Window restored for settings");
+                } catch (error) {
+                  console.error("Failed to restore window for settings:", error);
+                }
+              }
+            },
+            {
+              text: '---',
+              enabled: false
+            },
+            {
+              id: 'quit',
+              text: 'Quit',
+              action: async () => {
+                console.log("Quitting application from tray");
+                try {
+                  await invoke('quit_app');
+                } catch (error) {
+                  console.error("Failed to quit application:", error);
+                }
+              }
+            }
+          ]
+        });
+
+        // Create single tray icon
+        const tray = await TrayIcon.new({
+          tooltip: 'Lyryc - Clean Lyric Viewer',
+          menu,
+          menuOnLeftClick: false,
+          action: async (event) => {
+            if (event.type === 'Click') {
+              try {
+                await invoke("toggle_window_visibility");
+                console.log("Window visibility toggled from tray click");
+              } catch (error) {
+                console.error("Failed to toggle window from tray click:", error);
+              }
+            }
+          }
+        });
+
+        setTrayIcon(tray);
+        console.log("System tray initialized successfully");
+      } catch (error) {
+        console.error("Failed to initialize system tray:", error);
+      }
+    };
+
     // Initialize connection with browser extension
     const initializeConnection = async () => {
       try {
@@ -269,15 +363,32 @@ function App() {
 
     // Removed demo track - will use real track data from extension
 
+    initializeWindowSizing();
+    initializeSystemTray();
     initializeConnection();
     setupEventListeners();
+
+    // Cleanup on unmount
+    return () => {
+      if (trayIcon) {
+        trayIcon.close().catch((error: any) => {
+          console.warn("Failed to cleanup tray icon:", error);
+        });
+      }
+    };
   }, [setCurrentTrack, setIsPlaying]);
 
   // Get current line for clean display
   const getCurrentLine = () => {
     if (!lyrics.length) return null;
     
-    const adjustedTime = currentTime + getTotalOffset(currentTrack?.artist || "", currentTrack?.title || "");
+    const totalOffset = getTotalOffset(currentTrack?.artist || "", currentTrack?.title || "");
+    const adjustedTime = currentTime + totalOffset;
+    
+    // Debug offset calculation
+    if (Math.abs(totalOffset) > 0.05) {
+      console.log(`[App.getCurrentLine] Offset ${totalOffset.toFixed(2)}s applied: ${currentTime.toFixed(2)}s → ${adjustedTime.toFixed(2)}s for "${currentTrack?.title}" by "${currentTrack?.artist}"`);
+    }
     
     for (let i = 0; i < lyrics.length; i++) {
       const currentLine = lyrics[i];
@@ -296,6 +407,7 @@ function App() {
   const [showStyleControls, setShowStyleControls] = useState(false);
   const [isClickThrough, setIsClickThrough] = useState(true); // Start with click-through enabled
   const [dragModeEnabled, setDragModeEnabled] = useState(false);
+  const [trayIcon, setTrayIcon] = useState<any>(null);
 
   // Simplified drag solution: Click and drag on background areas
   const handleDragArea = async (e: React.MouseEvent) => {
@@ -416,6 +528,9 @@ function App() {
             <div className="text-white/30 text-xs mt-2">
               Press Ctrl+Shift+D to toggle {isClickThrough ? "drag mode" : "click-through"}
             </div>
+            <div className="text-white/30 text-xs mt-1">
+              Press Ctrl+Shift+M to minimize to system tray
+            </div>
           </div>
         ) : lyrics.length === 0 ? (
           <div className="text-white/50 text-base" data-tauri-drag-region>
@@ -461,6 +576,31 @@ function App() {
             exit={{ opacity: 0 }}
             className="fixed top-4 right-4 z-40 flex items-center space-x-2"
           >
+            {/* Minimize Button */}
+            <button 
+              onClick={async () => {
+                try {
+                  await invoke("minimize_to_tray");
+                  console.log("Window minimized to system tray");
+                } catch (error) {
+                  console.error("Failed to minimize to system tray:", error);
+                }
+              }}
+              className="
+                bg-black/20 backdrop-blur-xl border border-white/10 
+                rounded-full p-1 shadow-lg hover:bg-white/10 transition-all
+              "
+              style={{
+                background: 'linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.05) 100%)',
+                backdropFilter: 'blur(20px) saturate(180%)',
+                boxShadow: '0 4px 16px rgba(0,0,0,0.2)'
+              }}
+              title="Minimize to System Tray"
+            >
+              <svg className="w-3 h-3 text-white/70 hover:text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
+              </svg>
+            </button>
             {/* Connection Status */}
             <div className="
               bg-black/20 backdrop-blur-xl border border-white/10 

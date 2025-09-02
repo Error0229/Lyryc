@@ -142,7 +142,7 @@ const StyleControls: React.FC<StyleControlsProps> = ({ isOpen, onClose }) => {
                     <label className="block text-white/80 text-sm mb-2">Size: {style.fontSize}rem</label>
                     <input
                       type="range"
-                      min="1"
+                      min="0.5"
                       max="5"
                       step="0.1"
                       value={style.fontSize}

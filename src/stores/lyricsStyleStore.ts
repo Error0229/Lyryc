@@ -155,6 +155,24 @@ const stylePresets = [
       backgroundOpacity: 20,
       backgroundBlur: 10,
     }
+  },
+  {
+    name: 'Ultra Compact',
+    style: {
+      ...defaultStyle,
+      fontSize: 0.8,
+      fontWeight: 'normal' as const,
+      textColor: '#ffffff',
+      highlightColor: '#ffffff',
+      pastWordColor: '#93c5fd',
+      futureWordColor: '#ffffff60',
+      textShadow: true,
+      textShadowColor: '#000000',
+      textShadowBlur: 10,
+      animationIntensity: 20,
+      lineHeight: 1.2,
+      letterSpacing: 0.02,
+    }
   }
 ];
 

@@ -141,11 +141,18 @@ const MediaControls: React.FC<MediaControlsProps> = ({
   const totalOffset = currentTrack ? getTotalOffset(currentTrack.artist, currentTrack.title) : 0;
 
   const adjustOffset = (delta: number, isGlobal = false) => {
-    if (!currentTrack) return;
+    if (!currentTrack) {
+      console.log('[MediaControls] No current track, offset adjustment skipped');
+      return;
+    }
     if (isGlobal) {
-      setGlobalOffset(globalOffset + delta);
+      const newGlobalOffset = globalOffset + delta;
+      setGlobalOffset(newGlobalOffset);
+      console.log(`[MediaControls] Global offset adjusted by ${delta}s: ${globalOffset.toFixed(2)}s → ${newGlobalOffset.toFixed(2)}s`);
     } else {
-      setTrackOffset(currentTrack.artist, currentTrack.title, trackOffset + delta);
+      const newTrackOffset = trackOffset + delta;
+      setTrackOffset(currentTrack.artist, currentTrack.title, newTrackOffset);
+      console.log(`[MediaControls] Track offset adjusted by ${delta}s: ${trackOffset.toFixed(2)}s → ${newTrackOffset.toFixed(2)}s for "${currentTrack.title}" by "${currentTrack.artist}"`);
     }
   };
 

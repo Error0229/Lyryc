@@ -86,6 +86,11 @@ const CleanLyricDisplay: React.FC<CleanLyricDisplayProps> = ({
   if (line.words && line.words.length > 0) {
     const currentWordIndex = getCurrentWordIndex(line.words, adjustedTime);
     
+    // Debug offset application
+    if (Math.abs(currentTime - adjustedTime) > 0.1) {
+      console.log(`[CleanLyricDisplay] Offset active: currentTime=${currentTime.toFixed(2)}s, adjustedTime=${adjustedTime.toFixed(2)}s, offset=${(adjustedTime - currentTime).toFixed(2)}s`);
+    }
+    
     return (
       <div style={{ ...backgroundStyle }}>
         <div 

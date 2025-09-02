@@ -13,16 +13,18 @@
     "windows": [
       {
         "title": "Lyryc - Clean Lyric Viewer",
-        "width": 800,
-        "height": 180,
+        "width": 1920,
+        "height": 120,
         "minWidth": 300,
-        "minHeight": 80,
+        "minHeight": 40,
         "decorations": false,
         "transparent": true,
         "alwaysOnTop": true,
         "resizable": true,
         "skipTaskbar": true,
-        "center": true
+        "center": false,
+        "x": 0,
+        "y": 0
       }
     ],
     "security": {
@@ -35,6 +37,16 @@
             "core:default",
             "core:window:allow-start-dragging",
             "core:window:allow-set-ignore-cursor-events",
+            "core:window:allow-available-monitors",
+            "core:window:allow-primary-monitor",
+            "core:window:allow-current-monitor",
+            "core:window:allow-set-size",
+            "core:window:allow-set-position",
+            "core:window:allow-minimize",
+            "core:window:allow-unminimize",
+            "core:window:allow-show",
+            "core:window:allow-hide",
+            "core:window:allow-set-skip-taskbar",
             "opener:default",
             "global-shortcut:default"
           ]

@@ -27,9 +27,13 @@ const OffsetControls: React.FC<OffsetControlsProps> = ({
 
   const adjustOffset = (delta: number, isGlobal = false) => {
     if (isGlobal) {
-      setGlobalOffset(globalOffset + delta);
+      const newGlobalOffset = globalOffset + delta;
+      setGlobalOffset(newGlobalOffset);
+      console.log(`[OffsetControls] Global offset adjusted by ${delta}s: ${globalOffset.toFixed(2)}s → ${newGlobalOffset.toFixed(2)}s`);
     } else {
-      setTrackOffset(artist, title, trackOffset + delta);
+      const newTrackOffset = trackOffset + delta;
+      setTrackOffset(artist, title, newTrackOffset);
+      console.log(`[OffsetControls] Track offset adjusted by ${delta}s: ${trackOffset.toFixed(2)}s → ${newTrackOffset.toFixed(2)}s for "${title}" by "${artist}"`);
     }
   };
 
