@@ -57,6 +57,9 @@ function App() {
   // Request cancellation and sequencing to prevent race conditions
   const abortControllerRef = useRef<AbortController | null>(null);
   const requestSequenceRef = useRef(0);
+  
+  // Track system tray initialization to prevent duplicates in React.StrictMode
+  const trayInitializedRef = useRef(false);
 
   // Use real playback state instead of mock timer
   const { seekTo } = useCurrentTime({
@@ -213,11 +216,20 @@ function App() {
 
     // Initialize system tray
     const initializeSystemTray = async () => {
+      // Prevent multiple initializations due to React.StrictMode
+      if (trayInitializedRef.current) {
+        console.log("System tray already initialized, skipping");
+        return;
+      }
+      
       try {
+        trayInitializedRef.current = true;
+        
         // Clean up existing tray icon if any
         if (trayIcon) {
           try {
             await trayIcon.close();
+            console.log("Closed existing tray icon");
           } catch (error) {
             console.warn("Failed to close existing tray icon:", error);
           }
@@ -269,9 +281,11 @@ function App() {
           ]
         });
 
-        // Create single tray icon
+        // Create single tray icon with icon
         const tray = await TrayIcon.new({
+          id: 'lyryc-tray',
           tooltip: 'Lyryc - Clean Lyric Viewer',
+          icon: 'icons/32x32.png', // Add icon path
           menu,
           menuOnLeftClick: false,
           action: async (event) => {
@@ -287,9 +301,11 @@ function App() {
         });
 
         setTrayIcon(tray);
-        console.log("System tray initialized successfully");
+        console.log("System tray initialized successfully with icon");
       } catch (error) {
         console.error("Failed to initialize system tray:", error);
+        // Reset flag on error to allow retry
+        trayInitializedRef.current = false;
       }
     };
 
@@ -375,6 +391,8 @@ function App() {
           console.warn("Failed to cleanup tray icon:", error);
         });
       }
+      // Reset tray initialization flag for proper cleanup
+      trayInitializedRef.current = false;
     };
   }, [setCurrentTrack, setIsPlaying]);
 
