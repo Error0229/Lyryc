@@ -58,11 +58,11 @@ impl WebSocketServer {
 
     pub async fn start(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let addr = format!("127.0.0.1:{}", self.port);
-        
+
         match TcpListener::bind(&addr).await {
             Ok(listener) => {
                 info!("WebSocket server listening on: {}", addr);
-                
+
                 let clients = Arc::clone(&self.clients);
                 let track_callback = self.track_callback.clone();
 
@@ -95,7 +95,11 @@ impl WebSocketServer {
         let message_text = serde_json::to_string(&message).map_err(|e| e.to_string())?;
         let ws_message = Message::Text(message_text.clone());
 
-        info!("Broadcasting to {} clients: {}", clients.len(), message_text);
+        info!(
+            "Broadcasting to {} clients: {}",
+            clients.len(),
+            message_text
+        );
 
         if clients.is_empty() {
             warn!("No WebSocket clients connected - message not sent");
@@ -125,7 +129,11 @@ impl WebSocketServer {
             warn!("Removed disconnected client: {}", client_id);
         }
 
-        info!("Message broadcast complete: {} successful, {} failed", successful_sends, clients.len() - successful_sends);
+        info!(
+            "Message broadcast complete: {} successful, {} failed",
+            successful_sends,
+            clients.len() - successful_sends
+        );
         Ok(())
     }
 
@@ -181,12 +189,16 @@ async fn handle_connection(
 
     // Create mpsc channel for this client
     let (tx, mut rx) = mpsc::unbounded_channel();
-    
+
     // Add client to connections after welcome message
     {
         let mut clients_guard = clients.lock().await;
         clients_guard.insert(client_id.clone(), tx);
-        info!("✅ Client {} added to connections with mpsc channel. Total clients: {}", client_id, clients_guard.len());
+        info!(
+            "✅ Client {} added to connections with mpsc channel. Total clients: {}",
+            client_id,
+            clients_guard.len()
+        );
     }
 
     // Spawn a task to forward messages from the channel to the WebSocket
@@ -194,11 +206,17 @@ async fn handle_connection(
     tokio::spawn(async move {
         while let Some(message) = rx.recv().await {
             if let Err(e) = ws_sender.send(message).await {
-                error!("❌ Failed to send message to client {}: {}", client_id_for_sender, e);
+                error!(
+                    "❌ Failed to send message to client {}: {}",
+                    client_id_for_sender, e
+                );
                 break;
             }
         }
-        debug!("Message forwarding task ended for client {}", client_id_for_sender);
+        debug!(
+            "Message forwarding task ended for client {}",
+            client_id_for_sender
+        );
     });
 
     // Handle incoming messages
@@ -219,10 +237,7 @@ async fn handle_connection(
                                     callback(track_update);
                                 }
                             } else {
-                                error!(
-                                    "Failed to parse TrackUpdate from: {}",
-                                    extension_msg.data
-                                );
+                                error!("Failed to parse TrackUpdate from: {}", extension_msg.data);
                             }
                         }
                         "ping" => {
@@ -265,7 +280,11 @@ async fn handle_connection(
     {
         let mut clients_guard = clients.lock().await;
         clients_guard.remove(&client_id);
-        info!("❌ Client {} disconnected and removed. Total clients: {}", client_id, clients_guard.len());
+        info!(
+            "❌ Client {} disconnected and removed. Total clients: {}",
+            client_id,
+            clients_guard.len()
+        );
     }
 
     Ok(())

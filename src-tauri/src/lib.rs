@@ -341,11 +341,11 @@ fn clean_track_name(track_name: &str) -> String {
     use regex::Regex;
 
     let mut cleaned = track_name.to_string();
-    let original_cleaned = track_name.to_string();  // Store original for reference
+    let original_cleaned = track_name.to_string(); // Store original for reference
     debug!("Cleaning track name: '{}'", track_name);
 
     // First try to extract song title from quotes or brackets - these are high priority
-    
+
     // Try Japanese quotes 「」
     if let Ok(quote_re) = Regex::new(r"「([^」]+)」") {
         if let Some(captures) = quote_re.captures(&cleaned) {
@@ -366,8 +366,9 @@ fn clean_track_name(track_name: &str) -> String {
             if let Some(middle_content) = captures.get(1) {
                 let mut extracted = middle_content.as_str().trim().to_string();
                 if !extracted.is_empty() && extracted.len() > 1 {
-                    // Clean the extracted content of separators 
-                    if let Ok(separator_re) = Regex::new(r"[\-/｜／|:：‐‑‒–—―]+.*$") {
+                    // Clean the extracted content of separators
+                    if let Ok(separator_re) = Regex::new(r"[\-/｜／|:：‐‑‒–—―]+.*$")
+                    {
                         let cleaned_extracted = separator_re
                             .replace_all(&extracted, "")
                             .to_string()
@@ -396,8 +397,9 @@ fn clean_track_name(track_name: &str) -> String {
                     && !extracted.to_lowercase().contains("video")
                     && !extracted.to_lowercase().contains("official")
                 {
-                    // Clean the extracted content of separators 
-                    if let Ok(separator_re) = Regex::new(r"[\-/｜／|:：‐‑‒–—―]+.*$") {
+                    // Clean the extracted content of separators
+                    if let Ok(separator_re) = Regex::new(r"[\-/｜／|:：‐‑‒–—―]+.*$")
+                    {
                         let cleaned_extracted = separator_re
                             .replace_all(&extracted, "")
                             .to_string()
@@ -413,7 +415,7 @@ fn clean_track_name(track_name: &str) -> String {
             }
         }
     }
-    
+
     // Try Japanese corner brackets 『』
     if let Ok(bracket_re) = Regex::new(r"『([^』]+)』") {
         if let Some(captures) = bracket_re.captures(&cleaned) {
@@ -444,7 +446,7 @@ fn clean_track_name(track_name: &str) -> String {
         r"\.(?i:flv|mp4|avi|mov|wmv|mkv)$",
         // Remove playlist indicators
         r"\s*\[.*?(?i:playlist).*?\]",
-        // Remove language/subtitle indicators  
+        // Remove language/subtitle indicators
         r"\s*\(.*?(?i:中文|日本語|한국어|english\s+sub|lyrics?).*?\)",
         r"\s*【.*?(?i:中文|日本語|한국어|english\s+sub|lyrics?).*?】",
         // Remove quality indicators when they are clearly not part of the title
@@ -464,7 +466,7 @@ fn clean_track_name(track_name: &str) -> String {
         // Remove translation indicators more aggressively
         r"\s*\([^)]*(?i:中文|chinese|中字版|华纳官方|華納官方)[^)]*\)",
         r"\s*\([^)]*(?i:english\s+sub|eng\s+sub|subtitle)[^)]*\)",
-        // Remove version/remix indicators  
+        // Remove version/remix indicators
         r"\s*\((?i:twin\s+ver\.?|version)\)",
         r"\s*\((?i:magic\s+shop\s+demo|demo)\)",
         r"\s*\((?i:ryan\s+exley\s+remix|remix)\)",
@@ -472,7 +474,7 @@ fn clean_track_name(track_name: &str) -> String {
         r"\s*\((?i:piano\s*&\s*cello|piano\s+version)\)",
         // Remove session/live indicators
         r"\s*\((?i:acoustic\s+session|session)\)",
-        // Remove translation info in parentheses - comprehensive  
+        // Remove translation info in parentheses - comprehensive
         r"\s*\([^)]*(?i:where\s+memory|go\s+to\s+heyyo|don't\s+rain\s+on\s+me|anglerfish's\s+love|the\s+city\s+is\s+eating|devil\s+doesn't\s+bargain)[^)]*\)",
         // Remove stripped
         r"\s*\((?i:stripped)\)",
@@ -482,8 +484,8 @@ fn clean_track_name(track_name: &str) -> String {
         r"\s*\((?i:original)\)",
         // Remove location/date info like "(Live At The Hub...)"
         r"\s*\(Live\s+At\s+[^)]+\)",
-        // Remove dates and locations in general  
-        r"\s*/\s*\d{4}\s*$"
+        // Remove dates and locations in general
+        r"\s*/\s*\d{4}\s*$",
     ];
 
     // Apply cleanup patterns
@@ -495,10 +497,11 @@ fn clean_track_name(track_name: &str) -> String {
             }
         }
     }
-    
+
     // Specifically handle "Artist feat. X - Track" patterns BEFORE main separator logic
     if let Ok(re) = Regex::new(r"^[^-]*\s+feat\.?\s+[^-]*\s*-\s*(.+)$") {
-        if let Some(captures) = re.captures(&original_cleaned) {  // Use original_cleaned here
+        if let Some(captures) = re.captures(&original_cleaned) {
+            // Use original_cleaned here
             if let Some(track_part) = captures.get(1) {
                 let track_candidate = track_part.as_str().trim();
                 if !track_candidate.is_empty() && track_candidate.len() >= 1 {
@@ -511,14 +514,17 @@ fn clean_track_name(track_name: &str) -> String {
 
     // Handle Artist - Track Name or Track Name / Artist patterns
     // Need to be smarter about which side of the separator contains the track name
-    
+
     // For "/" separators, the track name is usually BEFORE the separator (except for "feat./ft.")
-    if cleaned.contains(" / ") && !cleaned.to_lowercase().contains("feat") && !cleaned.to_lowercase().contains("ft.") {
+    if cleaned.contains(" / ")
+        && !cleaned.to_lowercase().contains("feat")
+        && !cleaned.to_lowercase().contains("ft.")
+    {
         let parts: Vec<&str> = cleaned.split(" / ").collect();
         if parts.len() == 2 {
             let first_part = parts[0].trim();
             let second_part = parts[1].trim();
-            
+
             // Usually for Japanese titles, the first part is the track name
             // For Western titles, it depends on the context
             if !first_part.is_empty() && first_part.len() > 2 {
@@ -527,12 +533,12 @@ fn clean_track_name(track_name: &str) -> String {
             }
         }
     }
-    
+
     // For "-", "·", "×" separators, the track name is usually AFTER the separator
     // But we need to be more careful about when to apply this
     let separator_patterns = vec![
-        r"^([^-]+)\s*[-–—]\s*(.+)$",  // Artist - Track
-        r"^([^·]+)\s*[·]\s*(.+)$",   // Artist · Track  
+        r"^([^-]+)\s*[-–—]\s*(.+)$", // Artist - Track
+        r"^([^·]+)\s*[·]\s*(.+)$",   // Artist · Track
         r"^([^×]+)\s*[×]\s*(.+)$",   // Artist × Track
     ];
 
@@ -543,10 +549,11 @@ fn clean_track_name(track_name: &str) -> String {
                     if let Some(track_part) = captures.get(2) {
                         let artist_candidate = artist_part.as_str().trim();
                         let track_name_candidate = track_part.as_str().trim();
-                        
+
                         // Special handling: if artist has "feat." or "ft.", the track name is definitely after the dash
-                        let has_featuring = artist_candidate.to_lowercase().contains("feat") || artist_candidate.to_lowercase().contains("ft.");
-                        
+                        let has_featuring = artist_candidate.to_lowercase().contains("feat")
+                            || artist_candidate.to_lowercase().contains("ft.");
+
                         // Only extract if this looks like an Artist - Track pattern
                         if !track_name_candidate.is_empty() 
                             && track_name_candidate.len() >= 1  // Allow single character/number track names 
@@ -554,9 +561,13 @@ fn clean_track_name(track_name: &str) -> String {
                             && (has_featuring || (artist_candidate.len() as f64) < (track_name_candidate.len() as f64) * 3.0) // More lenient if featuring
                             && !track_name_candidate.to_lowercase().contains("youtube")
                             && !track_name_candidate.to_lowercase().contains("music video")
-                            && !track_name_candidate.eq(artist_candidate) // Track name should be different from artist
+                            && !track_name_candidate.eq(artist_candidate)
+                        // Track name should be different from artist
                         {
-                            debug!("Extracted track name after separator: '{}'", track_name_candidate);
+                            debug!(
+                                "Extracted track name after separator: '{}'",
+                                track_name_candidate
+                            );
                             cleaned = track_name_candidate.to_string();
                             break;
                         }
@@ -567,20 +578,23 @@ fn clean_track_name(track_name: &str) -> String {
     }
 
     // Handle special cases for complex patterns
-    
+
     // Handle "Artist-Track【...】" pattern - extract track before the bracket
     if let Ok(re) = Regex::new(r"^([^-]+)-([^【]+)【.*?】") {
         if let Some(captures) = re.captures(&original_cleaned) {
             if let Some(track_part) = captures.get(2) {
                 let track_candidate = track_part.as_str().trim();
                 if !track_candidate.is_empty() && track_candidate.len() > 2 {
-                    debug!("Extracted track from Artist-Track【...】 pattern: '{}'", track_candidate);
+                    debug!(
+                        "Extracted track from Artist-Track【...】 pattern: '{}'",
+                        track_candidate
+                    );
                     cleaned = track_candidate.to_string();
                 }
             }
         }
     }
-    
+
     // Handle brackets around track numbers or single words that shouldn't be extracted
     if let Ok(re) = Regex::new(r"（.*?(VIDEO|video|MV|mv).*?）") {
         let potential_result = re.replace_all(&cleaned, "").trim().to_string();
@@ -588,7 +602,7 @@ fn clean_track_name(track_name: &str) -> String {
             cleaned = potential_result;
         }
     }
-    
+
     // Remove remaining Japanese brackets that we might have missed
     if let Ok(re) = Regex::new(r"【.*?】") {
         let potential_result = re.replace_all(&cleaned, "").trim().to_string();
@@ -611,16 +625,16 @@ fn clean_track_name(track_name: &str) -> String {
 
     // Remove quotes around the entire string
     if cleaned.starts_with('"') && cleaned.ends_with('"') && cleaned.len() > 2 {
-        cleaned = cleaned[1..cleaned.len()-1].to_string();
+        cleaned = cleaned[1..cleaned.len() - 1].to_string();
     }
     if cleaned.starts_with('\'') && cleaned.ends_with('\'') && cleaned.len() > 2 {
-        cleaned = cleaned[1..cleaned.len()-1].to_string();
+        cleaned = cleaned[1..cleaned.len() - 1].to_string();
     }
     if cleaned.starts_with('「') && cleaned.ends_with('」') && cleaned.len() > 2 {
-        cleaned = cleaned[1..cleaned.len()-1].to_string();
+        cleaned = cleaned[1..cleaned.len() - 1].to_string();
     }
-    
-    // Handle special patterns like "Anne-Marie" being split incorrectly  
+
+    // Handle special patterns like "Anne-Marie" being split incorrectly
     if cleaned.contains("-") && cleaned.len() < 15 {
         // If it's a short string with a dash, it might be a hyphenated name or short title
         // Don't split it further
@@ -632,7 +646,7 @@ fn clean_track_name(track_name: &str) -> String {
     }
 
     // Apply some final transformations and fallbacks
-    
+
     // Handle complex Japanese patterns with forward slashes and feat
     if cleaned.contains("／") || (cleaned.contains("feat.") && cleaned.contains("×")) {
         // Split on ／ and take the first meaningful part, OR extract before feat.
@@ -659,7 +673,7 @@ fn clean_track_name(track_name: &str) -> String {
             }
         }
     }
-    
+
     // Remove Chinese subtitle indicators more aggressively
     if let Ok(re) = Regex::new(r"\\s*\\(.*?官方.*?中.*?字.*?版.*?\\)") {
         let potential_result = re.replace_all(&cleaned, "").trim().to_string();
@@ -667,15 +681,15 @@ fn clean_track_name(track_name: &str) -> String {
             cleaned = potential_result;
         }
     }
-    
-    // Handle specific Japanese brackets patterns better  
+
+    // Handle specific Japanese brackets patterns better
     if let Ok(re) = Regex::new(r"（公式\)") {
         let potential_result = re.replace_all(&cleaned, "").trim().to_string();
         if !potential_result.is_empty() && potential_result.len() > 1 {
             cleaned = potential_result;
         }
     }
-    
+
     // Handle artist names in square brackets at the end
     if let Ok(re) = Regex::new(r"\s*\[[^\]]*\]\s*$") {
         let potential_result = re.replace_all(&cleaned, "").trim().to_string();
@@ -683,25 +697,27 @@ fn clean_track_name(track_name: &str) -> String {
             cleaned = potential_result;
         }
     }
-    
+
     // Handle double quotes around titles
     if cleaned.starts_with('"') && cleaned.ends_with('"') && cleaned.len() > 2 {
-        cleaned = cleaned[1..cleaned.len()-1].to_string();
+        cleaned = cleaned[1..cleaned.len() - 1].to_string();
     }
-    
-    // MUCH more aggressive Artist - Track extraction  
+
+    // MUCH more aggressive Artist - Track extraction
     // Handle "Artist · Multiple · Artists - Track" patterns
     if cleaned.contains(" - ") {
         let parts: Vec<&str> = cleaned.split(" - ").collect();
         if parts.len() >= 2 {
             let artist_part = parts[0].trim();
             let track_part = parts[1].trim();
-            
+
             // Check if this looks like multiple artists collaborating
-            let artist_has_multiple = artist_part.contains(" · ") || artist_part.contains(" & ") || artist_part.contains(" x ");
-            
+            let artist_has_multiple = artist_part.contains(" · ")
+                || artist_part.contains(" & ")
+                || artist_part.contains(" x ");
+
             // Be very liberal: accept almost any track part that isn't clearly wrong
-            if !track_part.is_empty() 
+            if !track_part.is_empty()
                 && track_part.len() >= 1
                 && !track_part.to_lowercase().starts_with("youtube")
                 && !track_part.to_lowercase().starts_with("official")
@@ -711,7 +727,7 @@ fn clean_track_name(track_name: &str) -> String {
             }
         }
     }
-    
+
     // Handle remaining dot separators (Artist · Track)
     if cleaned.contains(" · ") && !cleaned.contains(" - ") {
         let parts: Vec<&str> = cleaned.split(" · ").collect();
@@ -723,7 +739,7 @@ fn clean_track_name(track_name: &str) -> String {
             }
         }
     }
-    
+
     // Handle ft. patterns more aggressively (both with and without parentheses)
     if let Ok(re) = Regex::new(r"\s+ft\.?\s+[^(),-]*$") {
         let potential_result = re.replace_all(&cleaned, "").trim().to_string();
@@ -731,7 +747,7 @@ fn clean_track_name(track_name: &str) -> String {
             cleaned = potential_result;
         }
     }
-    
+
     // Remove ft./feat. specifically for patterns like "Without You ft. SKYLR"
     if let Ok(re) = Regex::new(r"\s+ft\.?\s+[A-Z][A-Z]+\s*$") {
         let potential_result = re.replace_all(&cleaned, "").trim().to_string();
@@ -739,7 +755,7 @@ fn clean_track_name(track_name: &str) -> String {
             cleaned = potential_result;
         }
     }
-    
+
     // Remove standalone (Acoustic) at the end when expected result doesn't have it
     if cleaned.ends_with(" (Acoustic)") {
         let without_acoustic = cleaned.replace(" (Acoustic)", "");
@@ -747,7 +763,7 @@ fn clean_track_name(track_name: &str) -> String {
             cleaned = without_acoustic.trim().to_string();
         }
     }
-    
+
     // Handle "Official Video" at the end
     if let Ok(re) = Regex::new(r"\s+Official\s+Video\s*$") {
         let potential_result = re.replace_all(&cleaned, "").trim().to_string();
@@ -755,7 +771,7 @@ fn clean_track_name(track_name: &str) -> String {
             cleaned = potential_result;
         }
     }
-    
+
     // Handle specific multi-dash case: "If I Die Young - The Band Perry - Cover by..."
     if cleaned.contains("If I Die Young - The Band Perry") {
         cleaned = "If I Die Young".to_string();
@@ -766,23 +782,20 @@ fn clean_track_name(track_name: &str) -> String {
         if parts.len() >= 3 {
             let first_part = parts[0].trim();
             // If first part looks like a track name, use it
-            if !first_part.is_empty() 
-                && first_part.len() > 2 
-                && first_part.len() < 50 
-            {
+            if !first_part.is_empty() && first_part.len() > 2 && first_part.len() < 50 {
                 cleaned = first_part.to_string();
             }
         }
     }
-    
-    // Handle Japanese ft. patterns  
+
+    // Handle Japanese ft. patterns
     if let Ok(re) = Regex::new(r"\s+ft\.([^\s]+)$") {
         let potential_result = re.replace_all(&cleaned, "").trim().to_string();
         if !potential_result.is_empty() && potential_result.len() > 1 {
             cleaned = potential_result;
         }
     }
-    
+
     // Handle single quotes around titles
     if let Ok(re) = Regex::new(r"^'([^']+)'(.*)$") {
         if let Some(captures) = re.captures(&cleaned) {
@@ -798,7 +811,7 @@ fn clean_track_name(track_name: &str) -> String {
             }
         }
     }
-    
+
     // More aggressive bracket/parenthesis removal for remaining cases
     if let Ok(re) = Regex::new(r"\\s*\\(.*?Chinese.*?Cover.*?\\)") {
         let potential_result = re.replace_all(&cleaned, "").trim().to_string();
@@ -806,7 +819,7 @@ fn clean_track_name(track_name: &str) -> String {
             cleaned = potential_result;
         }
     }
-    
+
     // Handle remaining Japanese full-width parentheses
     if let Ok(re) = Regex::new(r"（.*?）") {
         let potential_result = re.replace_all(&cleaned, "").trim().to_string();
@@ -814,7 +827,7 @@ fn clean_track_name(track_name: &str) -> String {
             cleaned = potential_result;
         }
     }
-    
+
     // Final cleanup: remove "cover" at the end if it's isolated
     if let Ok(re) = Regex::new(r"\\s+cover\\s*$") {
         let potential_result = re.replace_all(&cleaned, "").trim().to_string();
@@ -822,9 +835,9 @@ fn clean_track_name(track_name: &str) -> String {
             cleaned = potential_result;
         }
     }
-    
+
     // Handle some specific edge cases that are still failing
-    
+
     // Handle Japanese bracket patterns - extract content before ／ or other separators
     if cleaned.contains("／") && cleaned.contains("×") {
         if let Ok(re) = Regex::new(r"^([^／]+)／.*×.*【.*?】") {
@@ -838,12 +851,12 @@ fn clean_track_name(track_name: &str) -> String {
             }
         }
     }
-    
+
     // Special case for Japanese covers that should preserve "Japanese Cover"
     if cleaned.contains("/ Japanese Cover") {
         cleaned = cleaned.replace("/ Japanese Cover", " (Japanese Cover)");
     }
-    
+
     // One last attempt: if nothing worked and we still have Artist - Track pattern, be super aggressive
     if cleaned == original_cleaned && cleaned.contains(" - ") {
         let parts: Vec<&str> = cleaned.split(" - ").collect();
@@ -854,15 +867,15 @@ fn clean_track_name(track_name: &str) -> String {
             }
         }
     }
-    
+
     // Some final targeted fixes for specific cases
-    
+
     // Fix the "Cigarettes After Sex (Full Album) - Cigarettes After Sex" case
     if cleaned.contains("Cigarettes After Sex (Full Album) - Cigarettes After Sex") {
         cleaned = "Cigarettes After Sex (Full Album)".to_string();
     }
-    
-    // Fix cases where (Full Album) should be preserved 
+
+    // Fix cases where (Full Album) should be preserved
     if original_cleaned.contains("(Full Album) -") {
         if let Ok(re) = Regex::new(r"^([^-]+)\(Full Album\)\s*-.*$") {
             if let Some(captures) = re.captures(&original_cleaned) {
@@ -1004,19 +1017,19 @@ mod tests {
     fn load_test_data() -> Result<Vec<TestCase>, Box<dyn std::error::Error>> {
         let csv_content = fs::read_to_string("../tests/LyricCleanData.csv")?;
         let mut test_cases = Vec::new();
-        
+
         // Skip the header line
         for (line_num, line) in csv_content.lines().enumerate().skip(1) {
             if line.trim().is_empty() {
                 continue;
             }
-            
+
             // Parse CSV line, handling quotes
             let mut parts = Vec::new();
             let mut current_part = String::new();
             let mut in_quotes = false;
             let mut chars = line.chars().peekable();
-            
+
             while let Some(ch) = chars.next() {
                 match ch {
                     '"' => {
@@ -1027,30 +1040,34 @@ mod tests {
                         } else {
                             in_quotes = !in_quotes;
                         }
-                    },
+                    }
                     ',' if !in_quotes => {
                         parts.push(current_part.trim().to_string());
                         current_part.clear();
-                    },
+                    }
                     _ => {
                         current_part.push(ch);
                     }
                 }
             }
             parts.push(current_part.trim().to_string());
-            
+
             if parts.len() >= 2 {
                 let original = parts[0].clone();
                 let expected = parts[1].clone();
-                
+
                 if !original.is_empty() && !expected.is_empty() {
                     test_cases.push(TestCase { original, expected });
                 }
             } else {
-                eprintln!("Warning: Line {} has insufficient columns: {}", line_num + 1, line);
+                eprintln!(
+                    "Warning: Line {} has insufficient columns: {}",
+                    line_num + 1,
+                    line
+                );
             }
         }
-        
+
         Ok(test_cases)
     }
 
@@ -1073,13 +1090,18 @@ mod tests {
         for (i, case) in test_cases.iter().enumerate() {
             let cleaned = clean_track_name(&case.original);
             let is_correct = cleaned == case.expected;
-            
+
             if is_correct {
                 correct += 1;
             } else {
                 failed_cases.push((i + 1, case.clone(), cleaned.clone()));
-                println!("FAIL #{}: '{}' -> got '{}', expected '{}'", 
-                        i + 1, case.original, cleaned, case.expected);
+                println!(
+                    "FAIL #{}: '{}' -> got '{}', expected '{}'",
+                    i + 1,
+                    case.original,
+                    cleaned,
+                    case.expected
+                );
             }
         }
 
@@ -1092,14 +1114,21 @@ mod tests {
         if !failed_cases.is_empty() {
             println!("\n=== FIRST 20 FAILED CASES ===");
             for (idx, case, got) in failed_cases.iter().take(20) {
-                println!("#{}: '{}' -> got '{}', expected '{}'", idx, case.original, got, case.expected);
+                println!(
+                    "#{}: '{}' -> got '{}', expected '{}'",
+                    idx, case.original, got, case.expected
+                );
             }
         }
 
         // Assert that accuracy is at least 95%
-        assert!(accuracy >= 95.0, 
-               "Cleaning accuracy {:.2}% is below required 95%. Failed {} out of {} cases.", 
-               accuracy, failed_cases.len(), total);
+        assert!(
+            accuracy >= 95.0,
+            "Cleaning accuracy {:.2}% is below required 95%. Failed {} out of {} cases.",
+            accuracy,
+            failed_cases.len(),
+            total
+        );
     }
 
     #[test]
@@ -1119,7 +1148,10 @@ mod tests {
             // Multiple separators
             ("Artist - Song Title / Album", "Artist"),
             // Complex Japanese title
-            ("ロクデナシ「About You」/ Rokudenashi - About You【Official Music Video】", "About You"),
+            (
+                "ロクデナシ「About You」/ Rokudenashi - About You【Official Music Video】",
+                "About You",
+            ),
         ];
 
         for (input, _expected) in test_cases {
@@ -1167,16 +1199,21 @@ async fn init_extension_connection(
                     let should_emit = match &*current_track_guard {
                         Some(existing_track) => {
                             // Only emit if track title or artist changed
-                            existing_track.title != track_info_for_check.title || 
-                            existing_track.artist != track_info_for_check.artist
+                            existing_track.title != track_info_for_check.title
+                                || existing_track.artist != track_info_for_check.artist
                         }
                         None => true, // First track
                     };
 
                     if should_emit {
-                        info!("Track changed: '{}' by '{}'", track_info_for_check.title, track_info_for_check.artist);
+                        info!(
+                            "Track changed: '{}' by '{}'",
+                            track_info_for_check.title, track_info_for_check.artist
+                        );
                         *current_track_guard = Some(track_info_for_check.clone());
-                        if let Err(e) = app_handle_for_track.emit("track-updated", &track_info_for_check) {
+                        if let Err(e) =
+                            app_handle_for_track.emit("track-updated", &track_info_for_check)
+                        {
                             error!("Failed to emit track-updated event: {}", e);
                         }
                     } else {
@@ -1302,32 +1339,46 @@ async fn send_playback_command(
 #[tauri::command]
 async fn initialize_window_sizing(app_handle: tauri::AppHandle) -> Result<String, String> {
     info!("Initializing window sizing to fit screen");
-    
+
     if let Some(window) = app_handle.get_webview_window("main") {
         // Get primary monitor
-        let monitor = window.primary_monitor().map_err(|e| format!("Failed to get primary monitor: {}", e))?;
-        
+        let monitor = window
+            .primary_monitor()
+            .map_err(|e| format!("Failed to get primary monitor: {}", e))?;
+
         if let Some(monitor) = monitor {
             let size = monitor.size();
             let screen_width = size.width as f64;
             let _screen_height = size.height as f64;
-            
+
             // Set window to full screen width and minimal height (40px)
             let window_width = screen_width;
             let window_height = 40.0; // Ultra compact height
-            
+
             // Position at top-left corner
-            window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: 0, y: 0 }))
+            window
+                .set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+                    x: 0,
+                    y: 0,
+                }))
                 .map_err(|e| format!("Failed to set position: {}", e))?;
-            
+
             // Set size to full width and minimal height
-            window.set_size(tauri::Size::Physical(tauri::PhysicalSize { 
-                width: window_width as u32, 
-                height: window_height as u32 
-            })).map_err(|e| format!("Failed to set size: {}", e))?;
-            
-            info!("Window resized to {}x{} at position (0,0)", window_width, window_height);
-            Ok(format!("Window sized to {}x{} at top of screen", window_width, window_height))
+            window
+                .set_size(tauri::Size::Physical(tauri::PhysicalSize {
+                    width: window_width as u32,
+                    height: window_height as u32,
+                }))
+                .map_err(|e| format!("Failed to set size: {}", e))?;
+
+            info!(
+                "Window resized to {}x{} at position (0,0)",
+                window_width, window_height
+            );
+            Ok(format!(
+                "Window sized to {}x{} at top of screen",
+                window_width, window_height
+            ))
         } else {
             Err("No primary monitor found".to_string())
         }
@@ -1339,11 +1390,13 @@ async fn initialize_window_sizing(app_handle: tauri::AppHandle) -> Result<String
 #[tauri::command]
 async fn minimize_to_tray(app_handle: tauri::AppHandle) -> Result<String, String> {
     info!("Minimizing window to system tray");
-    
+
     if let Some(window) = app_handle.get_webview_window("main") {
         // Hide the window (already not in taskbar by config)
-        window.hide().map_err(|e| format!("Failed to hide window: {}", e))?;
-        
+        window
+            .hide()
+            .map_err(|e| format!("Failed to hide window: {}", e))?;
+
         info!("Window hidden and minimized to tray");
         Ok("Window minimized to system tray".to_string())
     } else {
@@ -1354,12 +1407,16 @@ async fn minimize_to_tray(app_handle: tauri::AppHandle) -> Result<String, String
 #[tauri::command]
 async fn restore_from_tray(app_handle: tauri::AppHandle) -> Result<String, String> {
     info!("Restoring window from system tray");
-    
+
     if let Some(window) = app_handle.get_webview_window("main") {
         // Show the window (stays hidden from taskbar by config)
-        window.show().map_err(|e| format!("Failed to show window: {}", e))?;
-        window.set_focus().map_err(|e| format!("Failed to focus window: {}", e))?;
-        
+        window
+            .show()
+            .map_err(|e| format!("Failed to show window: {}", e))?;
+        window
+            .set_focus()
+            .map_err(|e| format!("Failed to focus window: {}", e))?;
+
         info!("Window restored from tray");
         Ok("Window restored from system tray".to_string())
     } else {
@@ -1370,18 +1427,26 @@ async fn restore_from_tray(app_handle: tauri::AppHandle) -> Result<String, Strin
 #[tauri::command]
 async fn toggle_window_visibility(app_handle: tauri::AppHandle) -> Result<String, String> {
     info!("Toggling window visibility");
-    
+
     if let Some(window) = app_handle.get_webview_window("main") {
-        let is_visible = window.is_visible().map_err(|e| format!("Failed to check visibility: {}", e))?;
-        
+        let is_visible = window
+            .is_visible()
+            .map_err(|e| format!("Failed to check visibility: {}", e))?;
+
         if is_visible {
             // Hide window (stays hidden from taskbar by config)
-            window.hide().map_err(|e| format!("Failed to hide window: {}", e))?;
+            window
+                .hide()
+                .map_err(|e| format!("Failed to hide window: {}", e))?;
             Ok("Window hidden".to_string())
         } else {
             // Show window (stays hidden from taskbar by config)
-            window.show().map_err(|e| format!("Failed to show window: {}", e))?;
-            window.set_focus().map_err(|e| format!("Failed to focus window: {}", e))?;
+            window
+                .show()
+                .map_err(|e| format!("Failed to show window: {}", e))?;
+            window
+                .set_focus()
+                .map_err(|e| format!("Failed to focus window: {}", e))?;
             Ok("Window shown".to_string())
         }
     } else {
@@ -1399,13 +1464,17 @@ async fn quit_app(app_handle: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 async fn enable_drag_mode(app_handle: tauri::AppHandle) -> Result<String, String> {
     info!("Enabling drag mode - disabling click-through");
-    
+
     if let Some(window) = app_handle.get_webview_window("main") {
-        window.set_ignore_cursor_events(false).map_err(|e| format!("Failed to disable click-through: {}", e))?;
-        
+        window
+            .set_ignore_cursor_events(false)
+            .map_err(|e| format!("Failed to disable click-through: {}", e))?;
+
         // Emit event to frontend
-        app_handle.emit("drag-mode-enabled", true).map_err(|e| format!("Failed to emit event: {}", e))?;
-        
+        app_handle
+            .emit("drag-mode-enabled", true)
+            .map_err(|e| format!("Failed to emit event: {}", e))?;
+
         // Auto-disable after 5 seconds
         let app_handle_clone = app_handle.clone();
         tokio::spawn(async move {
@@ -1416,7 +1485,7 @@ async fn enable_drag_mode(app_handle: tauri::AppHandle) -> Result<String, String
                 info!("Auto-disabled drag mode after 5 seconds");
             }
         });
-        
+
         Ok("Drag mode enabled for 5 seconds".to_string())
     } else {
         Err("Main window not found".to_string())
@@ -1433,6 +1502,7 @@ pub fn run() {
     info!("Starting Lyryc application...");
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             #[cfg(desktop)]
@@ -1450,6 +1520,7 @@ pub fn run() {
                         .with_handler(move |app, shortcut, event| {
                             if event.state == ShortcutState::Pressed {
                                 let shortcut_str = shortcut.to_string();
+                                info!("Global shortcut {} triggered", shortcut_str);
                                 match shortcut_str.as_str() {
                                     "ctrl+shift+d" => {
                                         info!("Global shortcut Ctrl+Shift+D triggered - toggling click-through");
