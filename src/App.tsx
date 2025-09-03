@@ -2,8 +2,6 @@ import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { TrayIcon } from "@tauri-apps/api/tray";
-import { Menu } from "@tauri-apps/api/menu";
 import LyricsViewer from "./components/LyricsViewer";
 import MediaControls from "./components/MediaControls";
 import { useLyricsStore } from "./stores/lyricsStore";
@@ -58,8 +56,6 @@ function App() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const requestSequenceRef = useRef(0);
   
-  // Track system tray initialization to prevent duplicates in React.StrictMode
-  const trayInitializedRef = useRef(false);
 
   // Use real playback state instead of mock timer
   const { seekTo } = useCurrentTime({
@@ -214,100 +210,6 @@ function App() {
       }
     };
 
-    // Initialize system tray
-    const initializeSystemTray = async () => {
-      // Prevent multiple initializations due to React.StrictMode
-      if (trayInitializedRef.current) {
-        console.log("System tray already initialized, skipping");
-        return;
-      }
-      
-      try {
-        trayInitializedRef.current = true;
-        
-        // Clean up existing tray icon if any
-        if (trayIcon) {
-          try {
-            await trayIcon.close();
-            console.log("Closed existing tray icon");
-          } catch (error) {
-            console.warn("Failed to close existing tray icon:", error);
-          }
-        }
-
-        // Create tray menu
-        const menu = await Menu.new({
-          items: [
-            {
-              id: 'toggle',
-              text: 'Show/Hide',
-              action: async () => {
-                try {
-                  await invoke("toggle_window_visibility");
-                  console.log("Window visibility toggled from tray menu");
-                } catch (error) {
-                  console.error("Failed to toggle window from tray menu:", error);
-                }
-              }
-            },
-            {
-              id: 'settings',
-              text: 'Settings',
-              action: async () => {
-                try {
-                  await invoke("restore_from_tray");
-                  console.log("Window restored for settings");
-                } catch (error) {
-                  console.error("Failed to restore window for settings:", error);
-                }
-              }
-            },
-            {
-              text: '---',
-              enabled: false
-            },
-            {
-              id: 'quit',
-              text: 'Quit',
-              action: async () => {
-                console.log("Quitting application from tray");
-                try {
-                  await invoke('quit_app');
-                } catch (error) {
-                  console.error("Failed to quit application:", error);
-                }
-              }
-            }
-          ]
-        });
-
-        // Create single tray icon with icon
-        const tray = await TrayIcon.new({
-          id: 'lyryc-tray',
-          tooltip: 'Lyryc - Clean Lyric Viewer',
-          icon: 'icons/32x32.png', // Add icon path
-          menu,
-          menuOnLeftClick: false,
-          action: async (event) => {
-            if (event.type === 'Click') {
-              try {
-                await invoke("toggle_window_visibility");
-                console.log("Window visibility toggled from tray click");
-              } catch (error) {
-                console.error("Failed to toggle window from tray click:", error);
-              }
-            }
-          }
-        });
-
-        setTrayIcon(tray);
-        console.log("System tray initialized successfully with icon");
-      } catch (error) {
-        console.error("Failed to initialize system tray:", error);
-        // Reset flag on error to allow retry
-        trayInitializedRef.current = false;
-      }
-    };
 
     // Initialize connection with browser extension
     const initializeConnection = async () => {
@@ -380,19 +282,12 @@ function App() {
     // Removed demo track - will use real track data from extension
 
     initializeWindowSizing();
-    initializeSystemTray();
     initializeConnection();
     setupEventListeners();
 
     // Cleanup on unmount
     return () => {
-      if (trayIcon) {
-        trayIcon.close().catch((error: any) => {
-          console.warn("Failed to cleanup tray icon:", error);
-        });
-      }
-      // Reset tray initialization flag for proper cleanup
-      trayInitializedRef.current = false;
+      // No frontend tray cleanup needed - handled by backend
     };
   }, [setCurrentTrack, setIsPlaying]);
 
@@ -425,7 +320,6 @@ function App() {
   const [showStyleControls, setShowStyleControls] = useState(false);
   const [isClickThrough, setIsClickThrough] = useState(true); // Start with click-through enabled
   const [dragModeEnabled, setDragModeEnabled] = useState(false);
-  const [trayIcon, setTrayIcon] = useState<any>(null);
 
   // Simplified drag solution: Click and drag on background areas
   const handleDragArea = async (e: React.MouseEvent) => {
