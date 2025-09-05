@@ -55,9 +55,15 @@ pub struct PricingData {
 pub struct PerformanceData {
     pub response_time_seconds: f64,
     pub tokens_used: u32,
+    pub input_tokens: u32,
+    pub output_tokens: u32,
     pub cost_estimate_usd: f64,
+    pub tokens_per_second: f64,
+    pub cost_per_valid_output: f64,
     pub performance_score: f64,
     pub response_quality: String,
+    pub correct_cleanings: u32,
+    pub accuracy_rate: f64,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -74,10 +80,14 @@ pub struct TestSummary {
     pub failed_tests: usize,
     pub average_response_time: f64,
     pub average_cost: f64,
+    pub average_tokens_per_second: f64,
+    pub average_accuracy_rate: f64,
     pub best_performance: f64,
     pub fastest_model: Option<String>,
     pub cheapest_model: Option<String>,
     pub highest_quality: Option<String>,
+    pub best_accuracy_model: Option<String>,
+    pub most_efficient_model: Option<String>, // best tokens per second
 }
 
 #[derive(Debug, Serialize)]
@@ -173,7 +183,7 @@ impl ModelPerformanceTester {
         // Match models with pricing data and create test list
         println!("Matching models with pricing data...");
         for model in &self.available_models {
-            // Try to find pricing data using various model ID formats
+            // Try to find pricing data using various model ID formats with fuzzy matching
             let mut pricing_info = None;
             let potential_keys = vec![
                 model.id.clone(),
@@ -187,11 +197,49 @@ impl ModelPerformanceTester {
                 ),
             ];
 
-            for key in potential_keys {
+            // First try exact matches
+            for key in &potential_keys {
                 if !key.is_empty() {
-                    if let Some(pricing) = self.pricing_data.get(&key) {
+                    if let Some(pricing) = self.pricing_data.get(key) {
                         pricing_info = Some(pricing.clone());
                         break;
+                    }
+                }
+            }
+
+            // If no exact match found, try fuzzy matching with space-dash replacement
+            if pricing_info.is_none() {
+                for key in &potential_keys {
+                    if !key.is_empty() {
+                        // Try with spaces replaced by dashes
+                        let key_with_dashes = key.replace(" ", "-");
+                        if let Some(pricing) = self.pricing_data.get(&key_with_dashes) {
+                            pricing_info = Some(pricing.clone());
+                            break;
+                        }
+                        
+                        // Try with dashes replaced by spaces
+                        let key_with_spaces = key.replace("-", " ");
+                        if let Some(pricing) = self.pricing_data.get(&key_with_spaces) {
+                            pricing_info = Some(pricing.clone());
+                            break;
+                        }
+
+                        // Try case-insensitive fuzzy matching for partial matches
+                        let key_lower = key.to_lowercase();
+                        for (pricing_key, pricing_value) in &self.pricing_data {
+                            let pricing_key_lower = pricing_key.to_lowercase();
+                            // Check if model name appears in pricing key or vice versa
+                            if (key_lower.len() > 3 && pricing_key_lower.contains(&key_lower)) ||
+                               (pricing_key_lower.len() > 3 && key_lower.contains(&pricing_key_lower)) {
+                                pricing_info = Some(pricing_value.clone());
+                                break;
+                            }
+                        }
+                        
+                        if pricing_info.is_some() {
+                            break;
+                        }
                     }
                 }
             }
@@ -224,14 +272,14 @@ impl ModelPerformanceTester {
             }
         }
 
-        // Randomly sample up to 65 test cases
+        // Randomly sample up to 60 test cases
         let mut rng = thread_rng();
         all_test_data.shuffle(&mut rng);
-        self.test_data = all_test_data.into_iter().take(65).collect();
+        self.test_data = all_test_data.into_iter().take(60).collect();
 
         println!("Loaded {} test cases (randomly sampled)", self.test_data.len());
 
-        // Load prompt template
+        // Load prompt template from the original file
         let prompt_content = fs::read_to_string("../TrackNameCleaner.prompt.yml")?;
         let prompt_yaml: Value = serde_yaml::from_str(&prompt_content)?;
 
@@ -284,7 +332,16 @@ preserve_parenthetical_if_ambiguous: true
 {}
 ```
 
-**Output**: For each line, return one JSON object on its own line, with the schema specified in the System Prompt (`cleaned_title`, `kept_markers`, `removed_context`, `confidence`, `notes`). Do not include explanations beyond `notes`. Do not translate titles."#,
+**Output Format - CRITICAL**:
+- Return EXACTLY one JSON object per input line
+- Each JSON object must be on its own line
+- NO markdown formatting (no ```json blocks)  
+- NO wrapping in code blocks or backticks
+- NO extra text, explanations, or commentary
+- ONLY raw JSON objects, one per line
+- Schema: `cleaned_title`, `kept_markers`, `removed_context`, `confidence`, `notes`
+
+IMPORTANT: Output must be parseable as raw JSON. Do not use markdown, code blocks, or any formatting."#,
             tracks_text
         )
     }
@@ -334,9 +391,15 @@ preserve_parenthetical_if_ambiguous: true
                 performance: PerformanceData {
                     response_time_seconds: 0.0,
                     tokens_used: 0,
+                    input_tokens: 0,
+                    output_tokens: 0,
                     cost_estimate_usd: 0.0,
+                    tokens_per_second: 0.0,
+                    cost_per_valid_output: 0.0,
                     performance_score: 0.0,
                     response_quality: "error".to_string(),
+                    correct_cleanings: 0,
+                    accuracy_rate: 0.0,
                 },
                 error: Some(format!(
                     "Input too long: ~{} tokens (max: {})",
@@ -357,7 +420,7 @@ preserve_parenthetical_if_ambiguous: true
                 {"role": "user", "content": user_content}
             ],
             "temperature": 0.1,
-            "max_tokens": std::cmp::min(1000, max_tokens / 4),
+            "max_tokens": std::cmp::min(3000, max_tokens / 2),
             "model": model_id
         });
 
@@ -403,17 +466,43 @@ preserve_parenthetical_if_ambiguous: true
                             .as_str()
                             .unwrap_or("");
 
+                        // Check if response appears truncated
+                        let appears_truncated = !response_text.trim().ends_with('}') && 
+                                               response_text.lines().count() < self.test_data.len();
+                        
                         // Log response to file
-                        self.log_response_to_file(model_id, response_text, test_index).await.ok();
+                        self.log_response_to_file(model_id, response_text, test_index, appears_truncated).await.ok();
 
                         // Evaluate response quality
-                        let performance_score = self.evaluate_response_quality(response_text);
-                        let quality = if performance_score > 0.7 {
-                            "good"
-                        } else if performance_score > 0.4 {
+                        let (performance_score, correct_cleanings) = self.evaluate_response_quality_detailed(response_text);
+                        let accuracy_rate = correct_cleanings as f64 / self.test_data.len() as f64;
+                        let quality = if performance_score >= 0.95 {
+                            "excellent"
+                        } else if performance_score >= 0.8 {
+                            "good"  
+                        } else if performance_score >= 0.6 {
                             "fair"
-                        } else {
+                        } else if performance_score >= 0.3 {
                             "poor"
+                        } else {
+                            "very_poor"
+                        };
+
+                        // Calculate tokens per second
+                        let tokens_per_second = if response_time > 0.0 {
+                            total_tokens as f64 / response_time
+                        } else {
+                            0.0
+                        };
+
+                        // Calculate cost per correct output (only count actually correct cleanings)
+                        let cost_per_valid_output = if correct_cleanings == self.test_data.len() as u32 {
+                            cost / correct_cleanings as f64
+                        } else if correct_cleanings > 0 {
+                            // Heavy penalty for incorrect/incomplete responses
+                            (cost / correct_cleanings as f64) * 3.0
+                        } else {
+                            f64::INFINITY
                         };
 
                         ModelTestResult {
@@ -427,9 +516,15 @@ preserve_parenthetical_if_ambiguous: true
                             performance: PerformanceData {
                                 response_time_seconds: response_time,
                                 tokens_used: total_tokens,
+                                input_tokens,
+                                output_tokens: completion_tokens,
                                 cost_estimate_usd: cost,
+                                tokens_per_second,
+                                cost_per_valid_output,
                                 performance_score,
                                 response_quality: quality.to_string(),
+                                correct_cleanings: correct_cleanings,
+                                accuracy_rate,
                             },
                             error: None,
                             test_metadata: TestMetadata {
@@ -495,9 +590,15 @@ preserve_parenthetical_if_ambiguous: true
             performance: PerformanceData {
                 response_time_seconds: 0.0,
                 tokens_used: 0,
+                input_tokens: 0,
+                output_tokens: 0,
                 cost_estimate_usd: 0.0,
+                tokens_per_second: 0.0,
+                cost_per_valid_output: 0.0,
                 performance_score: 0.0,
                 response_quality: "error".to_string(),
+                correct_cleanings: 0,
+                accuracy_rate: 0.0,
             },
             error: Some(error),
             test_metadata: TestMetadata {
@@ -508,7 +609,7 @@ preserve_parenthetical_if_ambiguous: true
         }
     }
 
-    async fn log_response_to_file(&self, model_id: &str, response_text: &str, test_index: usize) -> Result<(), Box<dyn std::error::Error>> {
+    async fn log_response_to_file(&self, model_id: &str, response_text: &str, test_index: usize, appears_truncated: bool) -> Result<(), Box<dyn std::error::Error>> {
         // Create logs directory if it doesn't exist
         let logs_dir = "../test_logs";
         if !Path::new(logs_dir).exists() {
@@ -521,13 +622,20 @@ preserve_parenthetical_if_ambiguous: true
         let filename = format!("{}/{}_{}_test_{}.log", logs_dir, safe_model_id, timestamp, test_index);
 
         // Log both request details and response
+        let truncation_warning = if appears_truncated {
+            "\n⚠️  WARNING: Response appears to be truncated!\n"
+        } else {
+            ""
+        };
+        
         let log_content = format!(
-            "Model: {}\nTest Index: {}\nTimestamp: {}\nTest Data Size: {}\n{}
-\nResponse:\n{}\n{}",
+            "Model: {}\nTest Index: {}\nTimestamp: {}\nTest Data Size: {}\nResponse Length: {} chars{}\n{}\n\nResponse:\n{}\n{}",
             model_id,
             test_index,
             chrono::Utc::now().to_rfc3339(),
             self.test_data.len(),
+            response_text.len(),
+            truncation_warning,
             "=".repeat(80),
             response_text,
             "=".repeat(80)
@@ -538,27 +646,149 @@ preserve_parenthetical_if_ambiguous: true
         Ok(())
     }
 
-    fn evaluate_response_quality(&self, response_text: &str) -> f64 {
-        let lines: Vec<&str> = response_text.trim().split('\n').collect();
-        let mut valid_json_count = 0;
+
+    fn evaluate_response_quality_detailed(&self, response_text: &str) -> (f64, u32) {
+        // Clean up markdown formatting that models might add despite instructions
+        let cleaned_response = self.clean_markdown_formatting(response_text);
+        let lines: Vec<&str> = cleaned_response.trim().split('\n').collect();
+        let mut valid_json_count = 0u32;
+        let mut correct_cleanings = 0u32;
         let total_expected = self.test_data.len();
 
-        for line in lines {
+        for (line_idx, line) in lines.iter().enumerate() {
             let trimmed = line.trim();
+            // Must be a complete JSON object
             if trimmed.starts_with('{') && trimmed.ends_with('}') {
                 if let Ok(parsed) = serde_json::from_str::<Value>(trimmed) {
-                    if parsed.get("cleaned_title").is_some() && parsed.get("confidence").is_some() {
-                        valid_json_count += 1;
+                    // Strict validation for required fields
+                    if let Some(cleaned_title) = parsed.get("cleaned_title") {
+                        if let Some(title_str) = cleaned_title.as_str() {
+                            let title_trimmed = title_str.trim();
+                            // Strict criteria:
+                            // 1. Must not be empty
+                            // 2. Must be at least 1 character after trimming
+                            // 3. Must not be obviously broken/invalid
+                            // 4. Must have confidence field with valid value
+                            if !title_trimmed.is_empty() && 
+                               title_trimmed.len() >= 1 &&
+                               !title_trimmed.contains("�") && // No replacement characters
+                               !title_trimmed.starts_with("ERROR") &&
+                               !title_trimmed.starts_with("FAIL") {
+                                
+                                // Check that all required fields exist for the full schema
+                                if let Some(confidence) = parsed.get("confidence") {
+                                    if let Some(conf_val) = confidence.as_f64() {
+                                        // Confidence must be between 0.0 and 1.0
+                                        if conf_val >= 0.0 && conf_val <= 1.0 {
+                                            // Check for other required fields in original schema
+                                            let has_kept_markers = parsed.get("kept_markers").is_some();
+                                            let has_removed_context = parsed.get("removed_context").is_some();
+                                            
+                                            if has_kept_markers && has_removed_context {
+                                                valid_json_count += 1;
+                                                
+                                                // CRITICAL: Verify against expected cleaned title from test data
+                                                if line_idx < self.test_data.len() {
+                                                    let expected_cleaned = &self.test_data[line_idx].1;
+                                                    if self.titles_match(title_trimmed, expected_cleaned) {
+                                                        correct_cleanings += 1;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
 
-        if total_expected == 0 {
-            return 0.0;
-        }
+        // Much stricter scoring based on actual correctness
+        let accuracy_ratio = correct_cleanings as f64 / total_expected as f64;
+        let completion_ratio = valid_json_count as f64 / total_expected as f64;
+        
+        let score = if total_expected == 0 {
+            0.0
+        } else if correct_cleanings == 0 {
+            // Zero credit if no correct cleanings
+            0.0
+        } else if valid_json_count as usize == total_expected && correct_cleanings >= (total_expected as u32 * 9 / 10) {
+            // Full credit only if complete AND 90%+ correct
+            accuracy_ratio
+        } else {
+            // Heavy penalties for incomplete or incorrect responses
+            (accuracy_ratio * completion_ratio * 0.6).min(1.0)
+        };
 
-        (valid_json_count as f64 / total_expected as f64).min(1.0)
+        (score, correct_cleanings) // Return correct cleanings, not just valid JSON
+    }
+
+    fn titles_match(&self, cleaned: &str, expected: &str) -> bool {
+        let cleaned_norm = self.normalize_title(cleaned);
+        let expected_norm = self.normalize_title(expected);
+        
+        // Exact match after normalization
+        if cleaned_norm == expected_norm {
+            return true;
+        }
+        
+        // Allow minor variations (case, punctuation, spacing)
+        let cleaned_simple = cleaned_norm.to_lowercase().chars()
+            .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+            .collect::<String>()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+            
+        let expected_simple = expected_norm.to_lowercase().chars()
+            .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+            .collect::<String>()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        
+        cleaned_simple == expected_simple
+    }
+    
+    fn normalize_title(&self, title: &str) -> String {
+        title.trim()
+            .replace("\"", "")
+            .replace("'", "'")
+            .replace("…", "...")
+            .replace("–", "-")
+            .replace("—", "-")
+    }
+
+    fn clean_markdown_formatting(&self, text: &str) -> String {
+        let mut result = text.to_string();
+        
+        // Remove markdown code blocks
+        result = result.replace("```json", "");
+        result = result.replace("```JSON", "");
+        result = result.replace("```", "");
+        
+        // Remove single backticks around JSON objects
+        result = result.replace("`{", "{");
+        result = result.replace("}`", "}");
+        
+        // Remove common markdown artifacts
+        result = result.replace("**Output:**", "");
+        result = result.replace("**Response:**", "");
+        result = result.replace("Here is the output:", "");
+        result = result.replace("Here are the results:", "");
+        result = result.replace("Output:", "");
+        result = result.replace("Response:", "");
+        
+        // Clean up extra whitespace and empty lines
+        result = result.lines()
+            .map(|line| line.trim())
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        
+        result
     }
 
     pub async fn run_tests(&self) -> Vec<ModelTestResult> {
@@ -608,36 +838,60 @@ preserve_parenthetical_if_ambiguous: true
         &self,
         results: Vec<ModelTestResult>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        // Calculate summary statistics
-        let successful_results: Vec<_> = results.iter().filter(|r| r.error.is_none()).collect();
+        // Calculate summary statistics - be strict about what counts as "successful"
+        let successful_results: Vec<_> = results.iter().filter(|r| 
+            r.error.is_none() && 
+            r.performance.performance_score >= 0.8 && 
+            r.performance.correct_cleanings >= (self.test_data.len() as u32 * 8 / 10) // At least 80% correct cleanings
+        ).collect();
+        
+        let all_completed_results: Vec<_> = results.iter().filter(|r| r.error.is_none()).collect();
 
         let summary = TestSummary {
             total_models_tested: results.len(),
             successful_tests: successful_results.len(),
             failed_tests: results.len() - successful_results.len(),
-            average_response_time: if successful_results.is_empty() {
+            average_response_time: if all_completed_results.is_empty() {
                 0.0
             } else {
-                successful_results
+                all_completed_results
                     .iter()
                     .map(|r| r.performance.response_time_seconds)
                     .sum::<f64>()
-                    / successful_results.len() as f64
+                    / all_completed_results.len() as f64
             },
-            average_cost: if successful_results.is_empty() {
+            average_cost: if all_completed_results.is_empty() {
                 0.0
             } else {
-                successful_results
+                all_completed_results
                     .iter()
                     .map(|r| r.performance.cost_estimate_usd)
                     .sum::<f64>()
-                    / successful_results.len() as f64
+                    / all_completed_results.len() as f64
+            },
+            average_tokens_per_second: if all_completed_results.is_empty() {
+                0.0
+            } else {
+                all_completed_results
+                    .iter()
+                    .map(|r| r.performance.tokens_per_second)
+                    .sum::<f64>()
+                    / all_completed_results.len() as f64
+            },
+            average_accuracy_rate: if all_completed_results.is_empty() {
+                0.0
+            } else {
+                all_completed_results
+                    .iter()
+                    .map(|r| r.performance.accuracy_rate)
+                    .sum::<f64>()
+                    / all_completed_results.len() as f64
             },
             best_performance: successful_results
                 .iter()
                 .map(|r| r.performance.performance_score)
                 .fold(0.0, f64::max),
-            fastest_model: successful_results
+            fastest_model: all_completed_results
                 .iter()
                 .min_by(|a, b| {
                     a.performance
@@ -646,7 +900,7 @@ preserve_parenthetical_if_ambiguous: true
                         .unwrap()
                 })
                 .map(|r| r.model_id.clone()),
-            cheapest_model: successful_results
+            cheapest_model: all_completed_results
                 .iter()
                 .min_by(|a, b| {
                     a.performance
@@ -661,6 +915,24 @@ preserve_parenthetical_if_ambiguous: true
                     a.performance
                         .performance_score
                         .partial_cmp(&b.performance.performance_score)
+                        .unwrap()
+                })
+                .map(|r| r.model_id.clone()),
+            best_accuracy_model: successful_results
+                .iter()
+                .max_by(|a, b| {
+                    a.performance
+                        .accuracy_rate
+                        .partial_cmp(&b.performance.accuracy_rate)
+                        .unwrap()
+                })
+                .map(|r| r.model_id.clone()),
+            most_efficient_model: all_completed_results
+                .iter()
+                .max_by(|a, b| {
+                    a.performance
+                        .tokens_per_second
+                        .partial_cmp(&b.performance.tokens_per_second)
                         .unwrap()
                 })
                 .map(|r| r.model_id.clone()),

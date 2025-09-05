@@ -1,0 +1,1593 @@
+{
+  "summary": {
+    "total_models_tested": 54,
+    "successful_tests": 14,
+    "failed_tests": 40,
+    "average_response_time": 31.19800424285714,
+    "average_cost": 0.007163385357142857,
+    "average_tokens_per_second": 170.85347165327303,
+    "average_accuracy_rate": 0.5446428571428571,
+    "best_performance": 0.9833333333333333,
+    "fastest_model": "meta/Meta-Llama-3.1-8B-Instruct",
+    "cheapest_model": "microsoft/MAI-DS-R1",
+    "highest_quality": "meta/Llama-4-Maverick-17B-128E-Instruct-FP8",
+    "best_accuracy_model": "meta/Llama-4-Maverick-17B-128E-Instruct-FP8",
+    "most_efficient_model": "mistral ai/Ministral-3B"
+  },
+  "test_configuration": {
+    "models_tested": [
+      "openai/gpt-4.1",
+      "openai/gpt-4.1-mini",
+      "openai/gpt-4.1-nano",
+      "openai/gpt-4o",
+      "openai/gpt-4o-mini",
+      "openai/gpt-5",
+      "openai/gpt-5-chat",
+      "openai/gpt-5-mini",
+      "openai/gpt-5-nano",
+      "openai/o1",
+      "openai/o1-mini",
+      "openai/o1-preview",
+      "openai/o3",
+      "openai/o3-mini",
+      "openai/o4-mini",
+      "microsoft/MAI-DS-R1",
+      "microsoft/Phi-3.5-MoE-instruct",
+      "microsoft/Phi-3.5-mini-instruct",
+      "microsoft/Phi-3.5-vision-instruct",
+      "microsoft/Phi-3-medium-128k-instruct",
+      "microsoft/Phi-3-medium-4k-instruct",
+      "microsoft/Phi-3-mini-128k-instruct",
+      "microsoft/Phi-3-mini-4k-instruct",
+      "microsoft/Phi-3-small-128k-instruct",
+      "microsoft/Phi-3-small-8k-instruct",
+      "microsoft/Phi-4",
+      "microsoft/Phi-4-mini-instruct",
+      "microsoft/Phi-4-mini-reasoning",
+      "microsoft/Phi-4-multimodal-instruct",
+      "microsoft/Phi-4-reasoning",
+      "ai21 labs/AI21-Jamba-1.5-Large",
+      "ai21 labs/AI21-Jamba-1.5-Mini",
+      "mistral ai/Codestral-2501",
+      "cohere/Cohere-command-r-08-2024",
+      "cohere/Cohere-command-r-plus-08-2024",
+      "deepseek/DeepSeek-R1",
+      "deepseek/DeepSeek-R1-0528",
+      "deepseek/DeepSeek-V3-0324",
+      "meta/Llama-3.2-11B-Vision-Instruct",
+      "meta/Llama-3.2-90B-Vision-Instruct",
+      "meta/Llama-3.3-70B-Instruct",
+      "meta/Llama-4-Maverick-17B-128E-Instruct-FP8",
+      "meta/Llama-4-Scout-17B-16E-Instruct",
+      "meta/Meta-Llama-3.1-405B-Instruct",
+      "meta/Meta-Llama-3.1-8B-Instruct",
+      "mistral ai/Ministral-3B",
+      "mistral ai/Mistral-Large-2411",
+      "mistral ai/Mistral-Nemo",
+      "cohere/cohere-command-a",
+      "xai/grok-3",
+      "xai/grok-3-mini",
+      "core42/jais-30b-chat",
+      "mistral ai/mistral-medium-2505",
+      "mistral ai/mistral-small-2503"
+    ],
+    "test_data_source": "LyricCleanData.csv",
+    "prompt_template": "TrackNameCleaner.prompt.yml",
+    "pricing_data_source": "model_prices_and_context_window.json",
+    "model_data_source": "available-models.json"
+  },
+  "individual_results": [
+    {
+      "model_id": "openai/gpt-4.1",
+      "friendly_name": "OpenAI GPT-4.1",
+      "pricing": {
+        "input_cost_per_token": 2e-6,
+        "output_cost_per_token": 8e-6,
+        "max_tokens": 32768
+      },
+      "performance": {
+        "response_time_seconds": 0.0,
+        "tokens_used": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_estimate_usd": 0.0,
+        "tokens_per_second": 0.0,
+        "cost_per_valid_output": 0.0,
+        "performance_score": 0.0,
+        "response_quality": "error",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": "Request error: error sending request for url (https://models.github.ai/inference/chat/completions)",
+      "test_metadata": {
+        "test_date": "2025-09-05T07:23:50.329579+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "openai/gpt-4.1-mini",
+      "friendly_name": "OpenAI GPT-4.1-mini",
+      "pricing": {
+        "input_cost_per_token": 4e-7,
+        "output_cost_per_token": 1.6e-6,
+        "max_tokens": 32768
+      },
+      "performance": {
+        "response_time_seconds": 34.4090653,
+        "tokens_used": 4494,
+        "input_tokens": 2125,
+        "output_tokens": 2369,
+        "cost_estimate_usd": 0.004640399999999999,
+        "tokens_per_second": 130.60511701839224,
+        "cost_per_valid_output": 0.0002485928571428571,
+        "performance_score": 0.9333333333333333,
+        "response_quality": "good",
+        "correct_cleanings": 56,
+        "accuracy_rate": 0.9333333333333333
+      },
+      "error": null,
+      "test_metadata": {
+        "test_date": "2025-09-05T07:24:34.754807100+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "openai/gpt-4.1-nano",
+      "friendly_name": "OpenAI GPT-4.1-nano",
+      "pricing": {
+        "input_cost_per_token": 1e-7,
+        "output_cost_per_token": 4e-7,
+        "max_tokens": 32768
+      },
+      "performance": {
+        "response_time_seconds": 29.3555532,
+        "tokens_used": 4743,
+        "input_tokens": 2125,
+        "output_tokens": 2618,
+        "cost_estimate_usd": 0.0012596999999999999,
+        "tokens_per_second": 161.57079267714158,
+        "cost_per_valid_output": 0.00006405254237288135,
+        "performance_score": 0.9833333333333333,
+        "response_quality": "excellent",
+        "correct_cleanings": 59,
+        "accuracy_rate": 0.9833333333333333
+      },
+      "error": null,
+      "test_metadata": {
+        "test_date": "2025-09-05T07:25:14.128017600+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "openai/gpt-4o",
+      "friendly_name": "OpenAI GPT-4o",
+      "pricing": {
+        "input_cost_per_token": 2.5e-6,
+        "output_cost_per_token": 0.00001,
+        "max_tokens": 16384
+      },
+      "performance": {
+        "response_time_seconds": 41.1077363,
+        "tokens_used": 4219,
+        "input_tokens": 2125,
+        "output_tokens": 2094,
+        "cost_estimate_usd": 0.0262525,
+        "tokens_per_second": 102.63274944672641,
+        "cost_per_valid_output": 0.0014063839285714287,
+        "performance_score": 0.9333333333333333,
+        "response_quality": "good",
+        "correct_cleanings": 56,
+        "accuracy_rate": 0.9333333333333333
+      },
+      "error": null,
+      "test_metadata": {
+        "test_date": "2025-09-05T07:26:05.251652300+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "openai/gpt-4o-mini",
+      "friendly_name": "OpenAI GPT-4o mini",
+      "pricing": {
+        "input_cost_per_token": 1.5e-7,
+        "output_cost_per_token": 6e-7,
+        "max_tokens": 16384
+      },
+      "performance": {
+        "response_time_seconds": 28.4726088,
+        "tokens_used": 4169,
+        "input_tokens": 2125,
+        "output_tokens": 2044,
+        "cost_estimate_usd": 0.00154515,
+        "tokens_per_second": 146.42142661686836,
+        "cost_per_valid_output": 0.00007992155172413792,
+        "performance_score": 0.9666666666666667,
+        "response_quality": "excellent",
+        "correct_cleanings": 58,
+        "accuracy_rate": 0.9666666666666667
+      },
+      "error": null,
+      "test_metadata": {
+        "test_date": "2025-09-05T07:26:43.741935100+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "openai/gpt-5",
+      "friendly_name": "OpenAI gpt-5",
+      "pricing": {
+        "input_cost_per_token": 1.25e-6,
+        "output_cost_per_token": 0.00001,
+        "max_tokens": 128000
+      },
+      "performance": {
+        "response_time_seconds": 0.0,
+        "tokens_used": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_estimate_usd": 0.0,
+        "tokens_per_second": 0.0,
+        "cost_per_valid_output": 0.0,
+        "performance_score": 0.0,
+        "response_quality": "error",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": "HTTP 429 Too Many Requests: {\"error\":{\"code\":\"RateLimitReached\",\"message\":\"Rate limit of 8 per 86400s exceeded for UserByModelByDay. Please wait 79943 seconds before retrying.\",\"details\":\"Rate limit of 8 per 86400s exceeded for UserByModelByDay. Please wait 79943 seconds before retrying.\"}}",
+      "test_metadata": {
+        "test_date": "2025-09-05T07:26:54.106499700+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "openai/gpt-5-chat",
+      "friendly_name": "OpenAI gpt-5-chat (preview)",
+      "pricing": {
+        "input_cost_per_token": 1.25e-6,
+        "output_cost_per_token": 0.00001,
+        "max_tokens": 128000
+      },
+      "performance": {
+        "response_time_seconds": 0.0,
+        "tokens_used": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_estimate_usd": 0.0,
+        "tokens_per_second": 0.0,
+        "cost_per_valid_output": 0.0,
+        "performance_score": 0.0,
+        "response_quality": "error",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": "HTTP 400 Bad Request: {\"error\":{\"code\":\"unavailable_model\",\"message\":\"Unavailable model: gpt-5-chat\",\"details\":\"Unavailable model: gpt-5-chat\"}}",
+      "test_metadata": {
+        "test_date": "2025-09-05T07:27:04.468487+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "openai/gpt-5-mini",
+      "friendly_name": "OpenAI gpt-5-mini",
+      "pricing": {
+        "input_cost_per_token": 2.5e-7,
+        "output_cost_per_token": 2e-6,
+        "max_tokens": 128000
+      },
+      "performance": {
+        "response_time_seconds": 0.0,
+        "tokens_used": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_estimate_usd": 0.0,
+        "tokens_per_second": 0.0,
+        "cost_per_valid_output": 0.0,
+        "performance_score": 0.0,
+        "response_quality": "error",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": "HTTP 400 Bad Request: {\"error\":{\"code\":\"unavailable_model\",\"message\":\"Unavailable model: gpt-5-mini\",\"details\":\"Unavailable model: gpt-5-mini\"}}",
+      "test_metadata": {
+        "test_date": "2025-09-05T07:27:14.921967+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "openai/gpt-5-nano",
+      "friendly_name": "OpenAI gpt-5-nano",
+      "pricing": {
+        "input_cost_per_token": 5e-8,
+        "output_cost_per_token": 4e-7,
+        "max_tokens": 128000
+      },
+      "performance": {
+        "response_time_seconds": 0.0,
+        "tokens_used": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_estimate_usd": 0.0,
+        "tokens_per_second": 0.0,
+        "cost_per_valid_output": 0.0,
+        "performance_score": 0.0,
+        "response_quality": "error",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": "HTTP 400 Bad Request: {\"error\":{\"code\":\"unavailable_model\",\"message\":\"Unavailable model: gpt-5-nano\",\"details\":\"Unavailable model: gpt-5-nano\"}}",
+      "test_metadata": {
+        "test_date": "2025-09-05T07:27:25.377893200+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "openai/o1",
+      "friendly_name": "OpenAI o1",
+      "pricing": {
+        "input_cost_per_token": 0.000015,
+        "output_cost_per_token": 0.00006,
+        "max_tokens": 100000
+      },
+      "performance": {
+        "response_time_seconds": 0.0,
+        "tokens_used": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_estimate_usd": 0.0,
+        "tokens_per_second": 0.0,
+        "cost_per_valid_output": 0.0,
+        "performance_score": 0.0,
+        "response_quality": "error",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": "HTTP 403 Forbidden: ",
+      "test_metadata": {
+        "test_date": "2025-09-05T07:27:35.740646900+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "openai/o1-mini",
+      "friendly_name": "OpenAI o1-mini",
+      "pricing": {
+        "input_cost_per_token": 1.1e-6,
+        "output_cost_per_token": 4.4e-6,
+        "max_tokens": 65536
+      },
+      "performance": {
+        "response_time_seconds": 0.0,
+        "tokens_used": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_estimate_usd": 0.0,
+        "tokens_per_second": 0.0,
+        "cost_per_valid_output": 0.0,
+        "performance_score": 0.0,
+        "response_quality": "error",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": "HTTP 403 Forbidden: ",
+      "test_metadata": {
+        "test_date": "2025-09-05T07:27:46.067309+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "openai/o1-preview",
+      "friendly_name": "OpenAI o1-preview",
+      "pricing": {
+        "input_cost_per_token": 0.000015,
+        "output_cost_per_token": 0.00006,
+        "max_tokens": 32768
+      },
+      "performance": {
+        "response_time_seconds": 0.0,
+        "tokens_used": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_estimate_usd": 0.0,
+        "tokens_per_second": 0.0,
+        "cost_per_valid_output": 0.0,
+        "performance_score": 0.0,
+        "response_quality": "error",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": "HTTP 403 Forbidden: ",
+      "test_metadata": {
+        "test_date": "2025-09-05T07:27:56.419998700+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "openai/o3",
+      "friendly_name": "OpenAI o3",
+      "pricing": {
+        "input_cost_per_token": 2e-6,
+        "output_cost_per_token": 8e-6,
+        "max_tokens": 100000
+      },
+      "performance": {
+        "response_time_seconds": 0.0,
+        "tokens_used": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_estimate_usd": 0.0,
+        "tokens_per_second": 0.0,
+        "cost_per_valid_output": 0.0,
+        "performance_score": 0.0,
+        "response_quality": "error",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": "HTTP 403 Forbidden: ",
+      "test_metadata": {
+        "test_date": "2025-09-05T07:28:06.819987700+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "openai/o3-mini",
+      "friendly_name": "OpenAI o3-mini",
+      "pricing": {
+        "input_cost_per_token": 1.1e-6,
+        "output_cost_per_token": 4.4e-6,
+        "max_tokens": 100000
+      },
+      "performance": {
+        "response_time_seconds": 0.0,
+        "tokens_used": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_estimate_usd": 0.0,
+        "tokens_per_second": 0.0,
+        "cost_per_valid_output": 0.0,
+        "performance_score": 0.0,
+        "response_quality": "error",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": "HTTP 403 Forbidden: ",
+      "test_metadata": {
+        "test_date": "2025-09-05T07:28:17.183899400+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "openai/o4-mini",
+      "friendly_name": "OpenAI o4-mini",
+      "pricing": {
+        "input_cost_per_token": 1.1e-6,
+        "output_cost_per_token": 4.4e-6,
+        "max_tokens": 100000
+      },
+      "performance": {
+        "response_time_seconds": 0.0,
+        "tokens_used": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_estimate_usd": 0.0,
+        "tokens_per_second": 0.0,
+        "cost_per_valid_output": 0.0,
+        "performance_score": 0.0,
+        "response_quality": "error",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": "HTTP 400 Bad Request: {\"error\":{\"code\":\"unavailable_model\",\"message\":\"Unavailable model: o4-mini\",\"details\":\"Unavailable model: o4-mini\"}}",
+      "test_metadata": {
+        "test_date": "2025-09-05T07:28:27.655864+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "microsoft/MAI-DS-R1",
+      "friendly_name": "MAI-DS-R1",
+      "pricing": {
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "max_tokens": 4096
+      },
+      "performance": {
+        "response_time_seconds": 22.9371611,
+        "tokens_used": 4251,
+        "input_tokens": 2203,
+        "output_tokens": 2048,
+        "cost_estimate_usd": 0.0,
+        "tokens_per_second": 185.33243854663425,
+        "cost_per_valid_output": null,
+        "performance_score": 0.0,
+        "response_quality": "very_poor",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": null,
+      "test_metadata": {
+        "test_date": "2025-09-05T07:29:00.603508+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "microsoft/Phi-3.5-MoE-instruct",
+      "friendly_name": "Phi-3.5-MoE instruct (128k)",
+      "pricing": {
+        "input_cost_per_token": 1.6e-7,
+        "output_cost_per_token": 6.4e-7,
+        "max_tokens": 4096
+      },
+      "performance": {
+        "response_time_seconds": 0.0,
+        "tokens_used": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_estimate_usd": 0.0,
+        "tokens_per_second": 0.0,
+        "cost_per_valid_output": 0.0,
+        "performance_score": 0.0,
+        "response_quality": "error",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": "Request error: error sending request for url (https://models.github.ai/inference/chat/completions)",
+      "test_metadata": {
+        "test_date": "2025-09-05T07:30:10.619175200+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "microsoft/Phi-3.5-mini-instruct",
+      "friendly_name": "Phi-3.5-mini instruct (128k)",
+      "pricing": {
+        "input_cost_per_token": 1.3e-7,
+        "output_cost_per_token": 5.2e-7,
+        "max_tokens": 4096
+      },
+      "performance": {
+        "response_time_seconds": 0.0,
+        "tokens_used": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_estimate_usd": 0.0,
+        "tokens_per_second": 0.0,
+        "cost_per_valid_output": 0.0,
+        "performance_score": 0.0,
+        "response_quality": "error",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": "Request error: error sending request for url (https://models.github.ai/inference/chat/completions)",
+      "test_metadata": {
+        "test_date": "2025-09-05T07:31:20.632606300+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "microsoft/Phi-3.5-vision-instruct",
+      "friendly_name": "Phi-3.5-vision instruct (128k)",
+      "pricing": {
+        "input_cost_per_token": 1.3e-7,
+        "output_cost_per_token": 5.2e-7,
+        "max_tokens": 4096
+      },
+      "performance": {
+        "response_time_seconds": 43.8149436,
+        "tokens_used": 4768,
+        "input_tokens": 2720,
+        "output_tokens": 2048,
+        "cost_estimate_usd": 0.00141856,
+        "tokens_per_second": 108.82132003931189,
+        "cost_per_valid_output": null,
+        "performance_score": 0.0,
+        "response_quality": "very_poor",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": null,
+      "test_metadata": {
+        "test_date": "2025-09-05T07:32:14.468961800+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "microsoft/Phi-3-medium-128k-instruct",
+      "friendly_name": "Phi-3-medium instruct (128k)",
+      "pricing": {
+        "input_cost_per_token": 1.7e-7,
+        "output_cost_per_token": 6.8e-7,
+        "max_tokens": 4096
+      },
+      "performance": {
+        "response_time_seconds": 36.7354315,
+        "tokens_used": 3288,
+        "input_tokens": 1240,
+        "output_tokens": 2048,
+        "cost_estimate_usd": 0.0016034399999999998,
+        "tokens_per_second": 89.50486943375091,
+        "cost_per_valid_output": 0.00040085999999999995,
+        "performance_score": 0.106,
+        "response_quality": "very_poor",
+        "correct_cleanings": 12,
+        "accuracy_rate": 0.2
+      },
+      "error": null,
+      "test_metadata": {
+        "test_date": "2025-09-05T07:33:01.213184700+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "microsoft/Phi-3-medium-4k-instruct",
+      "friendly_name": "Phi-3-medium instruct (4k)",
+      "pricing": {
+        "input_cost_per_token": 1.4e-7,
+        "output_cost_per_token": 1.4e-7,
+        "max_tokens": 4096
+      },
+      "performance": {
+        "response_time_seconds": 37.7285907,
+        "tokens_used": 2914,
+        "input_tokens": 1240,
+        "output_tokens": 1674,
+        "cost_estimate_usd": 0.00040796000000000007,
+        "tokens_per_second": 77.23585604272253,
+        "cost_per_valid_output": 0.00009414461538461542,
+        "performance_score": 0.0975,
+        "response_quality": "very_poor",
+        "correct_cleanings": 13,
+        "accuracy_rate": 0.21666666666666667
+      },
+      "error": null,
+      "test_metadata": {
+        "test_date": "2025-09-05T07:33:48.951394100+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "microsoft/Phi-3-mini-128k-instruct",
+      "friendly_name": "Phi-3-mini instruct (128k)",
+      "pricing": {
+        "input_cost_per_token": 1.3e-7,
+        "output_cost_per_token": 5.2e-7,
+        "max_tokens": 4096
+      },
+      "performance": {
+        "response_time_seconds": 23.5024265,
+        "tokens_used": 4760,
+        "input_tokens": 2712,
+        "output_tokens": 2048,
+        "cost_estimate_usd": 0.00141752,
+        "tokens_per_second": 202.53227895426033,
+        "cost_per_valid_output": null,
+        "performance_score": 0.0,
+        "response_quality": "very_poor",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": null,
+      "test_metadata": {
+        "test_date": "2025-09-05T07:34:22.467879300+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "microsoft/Phi-3-mini-4k-instruct",
+      "friendly_name": "Phi-3-mini instruct (4k)",
+      "pricing": {
+        "input_cost_per_token": 1.3e-7,
+        "output_cost_per_token": 5.2e-7,
+        "max_tokens": 4096
+      },
+      "performance": {
+        "response_time_seconds": 0.0,
+        "tokens_used": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_estimate_usd": 0.0,
+        "tokens_per_second": 0.0,
+        "cost_per_valid_output": 0.0,
+        "performance_score": 0.0,
+        "response_quality": "error",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": "HTTP 400 Bad Request: {\"error\":{\"code\":\"Bad Request\",\"message\":\"{\\\"object\\\":\\\"error\\\",\\\"message\\\":\\\"This model's maximum context length is 4096 tokens. However, you requested 4760 tokens (2712 in the messages, 2048 in the completion). Please reduce the length of the messages or completion.\\\",\\\"type\\\":\\\"BadRequestError\\\",\\\"param\\\":null,\\\"code\\\":400}\",\"status\":400}}",
+      "test_metadata": {
+        "test_date": "2025-09-05T07:34:32.857478900+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "microsoft/Phi-3-small-128k-instruct",
+      "friendly_name": "Phi-3-small instruct (128k)",
+      "pricing": {
+        "input_cost_per_token": 1.5e-7,
+        "output_cost_per_token": 6e-7,
+        "max_tokens": 4096
+      },
+      "performance": {
+        "response_time_seconds": 51.1077321,
+        "tokens_used": 4239,
+        "input_tokens": 2191,
+        "output_tokens": 2048,
+        "cost_estimate_usd": 0.00155745,
+        "tokens_per_second": 82.94243993659816,
+        "cost_per_valid_output": 0.00022249285714285715,
+        "performance_score": 0.1435,
+        "response_quality": "very_poor",
+        "correct_cleanings": 21,
+        "accuracy_rate": 0.35
+      },
+      "error": null,
+      "test_metadata": {
+        "test_date": "2025-09-05T07:35:33.985061500+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "microsoft/Phi-3-small-8k-instruct",
+      "friendly_name": "Phi-3-small instruct (8k)",
+      "pricing": {
+        "input_cost_per_token": 1.5e-7,
+        "output_cost_per_token": 6e-7,
+        "max_tokens": 4096
+      },
+      "performance": {
+        "response_time_seconds": 34.0707915,
+        "tokens_used": 4239,
+        "input_tokens": 2191,
+        "output_tokens": 2048,
+        "cost_estimate_usd": 0.00155745,
+        "tokens_per_second": 124.41742071064009,
+        "cost_per_valid_output": 0.00009734062500000001,
+        "performance_score": 0.416,
+        "response_quality": "poor",
+        "correct_cleanings": 48,
+        "accuracy_rate": 0.8
+      },
+      "error": null,
+      "test_metadata": {
+        "test_date": "2025-09-05T07:36:18.066914500+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "microsoft/Phi-4",
+      "friendly_name": "Phi-4",
+      "pricing": {
+        "input_cost_per_token": 7e-8,
+        "output_cost_per_token": 3.5e-7,
+        "max_tokens": 32768
+      },
+      "performance": {
+        "response_time_seconds": 0.0,
+        "tokens_used": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_estimate_usd": 0.0,
+        "tokens_per_second": 0.0,
+        "cost_per_valid_output": 0.0,
+        "performance_score": 0.0,
+        "response_quality": "error",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": "Request error: error sending request for url (https://models.github.ai/inference/chat/completions)",
+      "test_metadata": {
+        "test_date": "2025-09-05T07:37:28.084564+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "microsoft/Phi-4-mini-instruct",
+      "friendly_name": "Phi-4-mini-instruct",
+      "pricing": {
+        "input_cost_per_token": 7.5e-8,
+        "output_cost_per_token": 3e-7,
+        "max_tokens": 4096
+      },
+      "performance": {
+        "response_time_seconds": 46.4154504,
+        "tokens_used": 3000,
+        "input_tokens": 952,
+        "output_tokens": 2048,
+        "cost_estimate_usd": 0.0006858,
+        "tokens_per_second": 64.63365052254238,
+        "cost_per_valid_output": null,
+        "performance_score": 0.0,
+        "response_quality": "very_poor",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": null,
+      "test_metadata": {
+        "test_date": "2025-09-05T07:38:24.510632900+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "microsoft/Phi-4-mini-reasoning",
+      "friendly_name": "Phi-4-mini-reasoning",
+      "pricing": {
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "max_tokens": 4096
+      },
+      "performance": {
+        "response_time_seconds": 0.0,
+        "tokens_used": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_estimate_usd": 0.0,
+        "tokens_per_second": 0.0,
+        "cost_per_valid_output": 0.0,
+        "performance_score": 0.0,
+        "response_quality": "error",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": "Request error: error sending request for url (https://models.github.ai/inference/chat/completions)",
+      "test_metadata": {
+        "test_date": "2025-09-05T07:39:34.526344900+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "microsoft/Phi-4-multimodal-instruct",
+      "friendly_name": "Phi-4-multimodal-instruct",
+      "pricing": {
+        "input_cost_per_token": 5e-8,
+        "output_cost_per_token": 1e-7,
+        "max_tokens": 131072
+      },
+      "performance": {
+        "response_time_seconds": 0.0,
+        "tokens_used": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_estimate_usd": 0.0,
+        "tokens_per_second": 0.0,
+        "cost_per_valid_output": 0.0,
+        "performance_score": 0.0,
+        "response_quality": "error",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": "Request error: error sending request for url (https://models.github.ai/inference/chat/completions)",
+      "test_metadata": {
+        "test_date": "2025-09-05T07:40:44.542022800+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "microsoft/Phi-4-reasoning",
+      "friendly_name": "Phi-4-reasoning",
+      "pricing": {
+        "input_cost_per_token": 7e-8,
+        "output_cost_per_token": 3.5e-7,
+        "max_tokens": 32768
+      },
+      "performance": {
+        "response_time_seconds": 0.0,
+        "tokens_used": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_estimate_usd": 0.0,
+        "tokens_per_second": 0.0,
+        "cost_per_valid_output": 0.0,
+        "performance_score": 0.0,
+        "response_quality": "error",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": "Request error: error sending request for url (https://models.github.ai/inference/chat/completions)",
+      "test_metadata": {
+        "test_date": "2025-09-05T07:41:54.565217200+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "ai21 labs/AI21-Jamba-1.5-Large",
+      "friendly_name": "AI21 Jamba 1.5 Large",
+      "pricing": {
+        "input_cost_per_token": 2e-7,
+        "output_cost_per_token": 4e-7,
+        "max_tokens": 256000
+      },
+      "performance": {
+        "response_time_seconds": 0.0,
+        "tokens_used": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_estimate_usd": 0.0,
+        "tokens_per_second": 0.0,
+        "cost_per_valid_output": 0.0,
+        "performance_score": 0.0,
+        "response_quality": "error",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": "Request error: error sending request for url (https://models.github.ai/inference/chat/completions)",
+      "test_metadata": {
+        "test_date": "2025-09-05T07:43:04.573477100+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "ai21 labs/AI21-Jamba-1.5-Mini",
+      "friendly_name": "AI21 Jamba 1.5 Mini",
+      "pricing": {
+        "input_cost_per_token": 2e-7,
+        "output_cost_per_token": 4e-7,
+        "max_tokens": 256000
+      },
+      "performance": {
+        "response_time_seconds": 19.344012,
+        "tokens_used": 3893,
+        "input_tokens": 2502,
+        "output_tokens": 1391,
+        "cost_estimate_usd": 0.0010568,
+        "tokens_per_second": 201.25090906684716,
+        "cost_per_valid_output": 0.0005284,
+        "performance_score": 0.025,
+        "response_quality": "very_poor",
+        "correct_cleanings": 6,
+        "accuracy_rate": 0.1
+      },
+      "error": null,
+      "test_metadata": {
+        "test_date": "2025-09-05T07:43:33.927118300+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "mistral ai/Codestral-2501",
+      "friendly_name": "Codestral 25.01",
+      "pricing": {
+        "input_cost_per_token": 2e-7,
+        "output_cost_per_token": 6e-7,
+        "max_tokens": 128000
+      },
+      "performance": {
+        "response_time_seconds": 22.6061045,
+        "tokens_used": 4920,
+        "input_tokens": 2221,
+        "output_tokens": 2699,
+        "cost_estimate_usd": 0.0020636,
+        "tokens_per_second": 217.64032808040855,
+        "cost_per_valid_output": 0.00010861052631578947,
+        "performance_score": 0.95,
+        "response_quality": "excellent",
+        "correct_cleanings": 57,
+        "accuracy_rate": 0.95
+      },
+      "error": null,
+      "test_metadata": {
+        "test_date": "2025-09-05T07:44:06.545584300+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "cohere/Cohere-command-r-08-2024",
+      "friendly_name": "Cohere Command R 08-2024",
+      "pricing": {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "max_tokens": 4096
+      },
+      "performance": {
+        "response_time_seconds": 55.6369381,
+        "tokens_used": 4236,
+        "input_tokens": 2188,
+        "output_tokens": 2048,
+        "cost_estimate_usd": 0.006284,
+        "tokens_per_second": 76.13646876803955,
+        "cost_per_valid_output": null,
+        "performance_score": 0.0,
+        "response_quality": "very_poor",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": null,
+      "test_metadata": {
+        "test_date": "2025-09-05T07:45:12.200584100+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "cohere/Cohere-command-r-plus-08-2024",
+      "friendly_name": "Cohere Command R+ 08-2024",
+      "pricing": {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "max_tokens": 4096
+      },
+      "performance": {
+        "response_time_seconds": 0.0,
+        "tokens_used": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_estimate_usd": 0.0,
+        "tokens_per_second": 0.0,
+        "cost_per_valid_output": 0.0,
+        "performance_score": 0.0,
+        "response_quality": "error",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": "Request error: error sending request for url (https://models.github.ai/inference/chat/completions)",
+      "test_metadata": {
+        "test_date": "2025-09-05T07:46:22.218965200+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "deepseek/DeepSeek-R1",
+      "friendly_name": "DeepSeek-R1",
+      "pricing": {
+        "input_cost_per_token": 4e-7,
+        "output_cost_per_token": 4e-7,
+        "max_tokens": 32768
+      },
+      "performance": {
+        "response_time_seconds": 0.0,
+        "tokens_used": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_estimate_usd": 0.0,
+        "tokens_per_second": 0.0,
+        "cost_per_valid_output": 0.0,
+        "performance_score": 0.0,
+        "response_quality": "error",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": "Request error: error sending request for url (https://models.github.ai/inference/chat/completions)",
+      "test_metadata": {
+        "test_date": "2025-09-05T07:47:32.249616600+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "deepseek/DeepSeek-R1-0528",
+      "friendly_name": "DeepSeek-R1-0528",
+      "pricing": {
+        "input_cost_per_token": 3e-6,
+        "output_cost_per_token": 8e-6,
+        "max_tokens": 160000
+      },
+      "performance": {
+        "response_time_seconds": 31.9921515,
+        "tokens_used": 5203,
+        "input_tokens": 2203,
+        "output_tokens": 3000,
+        "cost_estimate_usd": 0.030609,
+        "tokens_per_second": 162.63363844097825,
+        "cost_per_valid_output": null,
+        "performance_score": 0.0,
+        "response_quality": "very_poor",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": null,
+      "test_metadata": {
+        "test_date": "2025-09-05T07:48:14.252133800+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "deepseek/DeepSeek-V3-0324",
+      "friendly_name": "DeepSeek-V3-0324",
+      "pricing": {
+        "input_cost_per_token": 3e-6,
+        "output_cost_per_token": 4.5e-6,
+        "max_tokens": 32768
+      },
+      "performance": {
+        "response_time_seconds": 20.7159171,
+        "tokens_used": 4615,
+        "input_tokens": 2203,
+        "output_tokens": 2412,
+        "cost_estimate_usd": 0.017463,
+        "tokens_per_second": 222.7755584134868,
+        "cost_per_valid_output": 0.0009701666666666667,
+        "performance_score": 0.9,
+        "response_quality": "good",
+        "correct_cleanings": 54,
+        "accuracy_rate": 0.9
+      },
+      "error": null,
+      "test_metadata": {
+        "test_date": "2025-09-05T07:48:44.973014700+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "meta/Llama-3.2-11B-Vision-Instruct",
+      "friendly_name": "Llama-3.2-11B-Vision-Instruct",
+      "pricing": {
+        "input_cost_per_token": 3.7e-7,
+        "output_cost_per_token": 3.7e-7,
+        "max_tokens": 2048
+      },
+      "performance": {
+        "response_time_seconds": 0.0,
+        "tokens_used": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_estimate_usd": 0.0,
+        "tokens_per_second": 0.0,
+        "cost_per_valid_output": 0.0,
+        "performance_score": 0.0,
+        "response_quality": "error",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": "Input too long: ~2045 tokens (max: 2048)",
+      "test_metadata": {
+        "test_date": "2025-09-05T07:48:54.977551200+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "meta/Llama-3.2-90B-Vision-Instruct",
+      "friendly_name": "Llama-3.2-90B-Vision-Instruct",
+      "pricing": {
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "max_tokens": 128000
+      },
+      "performance": {
+        "response_time_seconds": 0.0,
+        "tokens_used": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_estimate_usd": 0.0,
+        "tokens_per_second": 0.0,
+        "cost_per_valid_output": 0.0,
+        "performance_score": 0.0,
+        "response_quality": "error",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": "Request error: error sending request for url (https://models.github.ai/inference/chat/completions)",
+      "test_metadata": {
+        "test_date": "2025-09-05T07:50:04.991662300+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "meta/Llama-3.3-70B-Instruct",
+      "friendly_name": "Llama-3.3-70B-Instruct",
+      "pricing": {
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "max_tokens": 128000
+      },
+      "performance": {
+        "response_time_seconds": 39.8349754,
+        "tokens_used": 4062,
+        "input_tokens": 2144,
+        "output_tokens": 1918,
+        "cost_estimate_usd": 0.0,
+        "tokens_per_second": 101.9706918157153,
+        "cost_per_valid_output": 0.0,
+        "performance_score": 0.9,
+        "response_quality": "good",
+        "correct_cleanings": 54,
+        "accuracy_rate": 0.9
+      },
+      "error": null,
+      "test_metadata": {
+        "test_date": "2025-09-05T07:50:54.842131700+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "meta/Llama-4-Maverick-17B-128E-Instruct-FP8",
+      "friendly_name": "Llama 4 Maverick 17B 128E Instruct FP8",
+      "pricing": {
+        "input_cost_per_token": 7.2e-7,
+        "output_cost_per_token": 7.2e-7,
+        "max_tokens": 512000
+      },
+      "performance": {
+        "response_time_seconds": 19.4738264,
+        "tokens_used": 4502,
+        "input_tokens": 2093,
+        "output_tokens": 2409,
+        "cost_estimate_usd": 0.00324144,
+        "tokens_per_second": 231.1820957795947,
+        "cost_per_valid_output": 0.00016481898305084746,
+        "performance_score": 0.9833333333333333,
+        "response_quality": "excellent",
+        "correct_cleanings": 59,
+        "accuracy_rate": 0.9833333333333333
+      },
+      "error": null,
+      "test_metadata": {
+        "test_date": "2025-09-05T07:51:24.329273100+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "meta/Llama-4-Scout-17B-16E-Instruct",
+      "friendly_name": "Llama 4 Scout 17B 16E Instruct",
+      "pricing": {
+        "input_cost_per_token": 4e-7,
+        "output_cost_per_token": 7e-7,
+        "max_tokens": 8192
+      },
+      "performance": {
+        "response_time_seconds": 18.3724041,
+        "tokens_used": 3923,
+        "input_tokens": 2093,
+        "output_tokens": 1830,
+        "cost_estimate_usd": 0.0021181999999999998,
+        "tokens_per_second": 213.52676430625647,
+        "cost_per_valid_output": 0.00011767777777777776,
+        "performance_score": 0.9,
+        "response_quality": "good",
+        "correct_cleanings": 54,
+        "accuracy_rate": 0.9
+      },
+      "error": null,
+      "test_metadata": {
+        "test_date": "2025-09-05T07:51:52.717147200+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "meta/Meta-Llama-3.1-405B-Instruct",
+      "friendly_name": "Meta-Llama-3.1-405B-Instruct",
+      "pricing": {
+        "input_cost_per_token": 3.5e-6,
+        "output_cost_per_token": 3.5e-6,
+        "max_tokens": 4096
+      },
+      "performance": {
+        "response_time_seconds": 0.0,
+        "tokens_used": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_estimate_usd": 0.0,
+        "tokens_per_second": 0.0,
+        "cost_per_valid_output": 0.0,
+        "performance_score": 0.0,
+        "response_quality": "error",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": "Request error: error sending request for url (https://models.github.ai/inference/chat/completions)",
+      "test_metadata": {
+        "test_date": "2025-09-05T07:53:02.727494+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "meta/Meta-Llama-3.1-8B-Instruct",
+      "friendly_name": "Meta-Llama-3.1-8B-Instruct",
+      "pricing": {
+        "input_cost_per_token": 1.5e-8,
+        "output_cost_per_token": 2e-8,
+        "max_tokens": 131072
+      },
+      "performance": {
+        "response_time_seconds": 9.8810695,
+        "tokens_used": 3993,
+        "input_tokens": 2144,
+        "output_tokens": 1849,
+        "cost_estimate_usd": 0.00006914,
+        "tokens_per_second": 404.1060534995731,
+        "cost_per_valid_output": 3.638947368421053e-6,
+        "performance_score": 0.95,
+        "response_quality": "excellent",
+        "correct_cleanings": 57,
+        "accuracy_rate": 0.95
+      },
+      "error": null,
+      "test_metadata": {
+        "test_date": "2025-09-05T07:53:22.630804400+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "mistral ai/Ministral-3B",
+      "friendly_name": "Ministral 3B",
+      "pricing": {
+        "input_cost_per_token": 4e-8,
+        "output_cost_per_token": 4e-8,
+        "max_tokens": 4096
+      },
+      "performance": {
+        "response_time_seconds": 10.4311918,
+        "tokens_used": 4267,
+        "input_tokens": 2219,
+        "output_tokens": 2048,
+        "cost_estimate_usd": 0.00017067999999999999,
+        "tokens_per_second": 409.0615992699894,
+        "cost_per_valid_output": 0.00017067999999999999,
+        "performance_score": 0.026,
+        "response_quality": "very_poor",
+        "correct_cleanings": 3,
+        "accuracy_rate": 0.05
+      },
+      "error": null,
+      "test_metadata": {
+        "test_date": "2025-09-05T07:53:43.083813+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "mistral ai/Mistral-Large-2411",
+      "friendly_name": "Mistral Large 24.11",
+      "pricing": {
+        "input_cost_per_token": 2e-6,
+        "output_cost_per_token": 6e-6,
+        "max_tokens": 8191
+      },
+      "performance": {
+        "response_time_seconds": 51.1939353,
+        "tokens_used": 5302,
+        "input_tokens": 2632,
+        "output_tokens": 2670,
+        "cost_estimate_usd": 0.021283999999999997,
+        "tokens_per_second": 103.56695512720235,
+        "cost_per_valid_output": 0.0011008965517241378,
+        "performance_score": 0.9666666666666667,
+        "response_quality": "excellent",
+        "correct_cleanings": 58,
+        "accuracy_rate": 0.9666666666666667
+      },
+      "error": null,
+      "test_metadata": {
+        "test_date": "2025-09-05T07:54:44.295396700+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "mistral ai/Mistral-Nemo",
+      "friendly_name": "Mistral Nemo",
+      "pricing": {
+        "input_cost_per_token": 3e-6,
+        "output_cost_per_token": 3e-6,
+        "max_tokens": 128000
+      },
+      "performance": {
+        "response_time_seconds": 20.9808058,
+        "tokens_used": 4346,
+        "input_tokens": 2219,
+        "output_tokens": 2127,
+        "cost_estimate_usd": 0.013038000000000001,
+        "tokens_per_second": 207.1417104485091,
+        "cost_per_valid_output": 0.0019557000000000003,
+        "performance_score": 0.19666666666666663,
+        "response_quality": "very_poor",
+        "correct_cleanings": 20,
+        "accuracy_rate": 0.3333333333333333
+      },
+      "error": null,
+      "test_metadata": {
+        "test_date": "2025-09-05T07:55:15.289856800+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "cohere/cohere-command-a",
+      "friendly_name": "Cohere Command A",
+      "pricing": {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "max_tokens": 4096
+      },
+      "performance": {
+        "response_time_seconds": 0.0,
+        "tokens_used": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_estimate_usd": 0.0,
+        "tokens_per_second": 0.0,
+        "cost_per_valid_output": 0.0,
+        "performance_score": 0.0,
+        "response_quality": "error",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": "Request error: error sending request for url (https://models.github.ai/inference/chat/completions)",
+      "test_metadata": {
+        "test_date": "2025-09-05T07:56:25.308913100+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "xai/grok-3",
+      "friendly_name": "Grok 3",
+      "pricing": {
+        "input_cost_per_token": 3e-6,
+        "output_cost_per_token": 0.000015,
+        "max_tokens": 131072
+      },
+      "performance": {
+        "response_time_seconds": 30.9873933,
+        "tokens_used": 4600,
+        "input_tokens": 2061,
+        "output_tokens": 2539,
+        "cost_estimate_usd": 0.044268,
+        "tokens_per_second": 148.44746556981286,
+        "cost_per_valid_output": 0.0024593333333333333,
+        "performance_score": 0.9,
+        "response_quality": "good",
+        "correct_cleanings": 54,
+        "accuracy_rate": 0.9
+      },
+      "error": null,
+      "test_metadata": {
+        "test_date": "2025-09-05T07:57:06.309134800+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "xai/grok-3-mini",
+      "friendly_name": "Grok 3 Mini",
+      "pricing": {
+        "input_cost_per_token": 3e-7,
+        "output_cost_per_token": 5e-7,
+        "max_tokens": 131072
+      },
+      "performance": {
+        "response_time_seconds": 21.6658273,
+        "tokens_used": 5062,
+        "input_tokens": 5062,
+        "output_tokens": 0,
+        "cost_estimate_usd": 0.0015186,
+        "tokens_per_second": 233.63982043741296,
+        "cost_per_valid_output": null,
+        "performance_score": 0.0,
+        "response_quality": "very_poor",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": null,
+      "test_metadata": {
+        "test_date": "2025-09-05T07:57:37.995815800+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "core42/jais-30b-chat",
+      "friendly_name": "JAIS 30b Chat",
+      "pricing": {
+        "input_cost_per_token": 0.0032,
+        "output_cost_per_token": 0.00971,
+        "max_tokens": 8192
+      },
+      "performance": {
+        "response_time_seconds": 0.0,
+        "tokens_used": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_estimate_usd": 0.0,
+        "tokens_per_second": 0.0,
+        "cost_per_valid_output": 0.0,
+        "performance_score": 0.0,
+        "response_quality": "error",
+        "correct_cleanings": 0,
+        "accuracy_rate": 0.0
+      },
+      "error": "Request error: error sending request for url (https://models.github.ai/inference/chat/completions)",
+      "test_metadata": {
+        "test_date": "2025-09-05T07:58:48.024815800+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "mistral ai/mistral-medium-2505",
+      "friendly_name": "Mistral Medium 3 (25.05)",
+      "pricing": {
+        "input_cost_per_token": 4e-7,
+        "output_cost_per_token": 2e-6,
+        "max_tokens": 8191
+      },
+      "performance": {
+        "response_time_seconds": 55.1910588,
+        "tokens_used": 4815,
+        "input_tokens": 2221,
+        "output_tokens": 2594,
+        "cost_estimate_usd": 0.0060764,
+        "tokens_per_second": 87.24239224053444,
+        "cost_per_valid_output": 0.00031429655172413793,
+        "performance_score": 0.9666666666666667,
+        "response_quality": "excellent",
+        "correct_cleanings": 58,
+        "accuracy_rate": 0.9666666666666667
+      },
+      "error": null,
+      "test_metadata": {
+        "test_date": "2025-09-05T07:59:53.232816200+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    },
+    {
+      "model_id": "mistral ai/mistral-small-2503",
+      "friendly_name": "Mistral Small 3.1",
+      "pricing": {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 3e-6,
+        "max_tokens": 128000
+      },
+      "performance": {
+        "response_time_seconds": 15.5790169,
+        "tokens_used": 4470,
+        "input_tokens": 2221,
+        "output_tokens": 2249,
+        "cost_estimate_usd": 0.008968,
+        "tokens_per_second": 286.9243950816948,
+        "cost_per_valid_output": 0.0004638620689655172,
+        "performance_score": 0.9666666666666667,
+        "response_quality": "excellent",
+        "correct_cleanings": 58,
+        "accuracy_rate": 0.9666666666666667
+      },
+      "error": null,
+      "test_metadata": {
+        "test_date": "2025-09-05T08:00:18.822672300+00:00",
+        "test_data_size": 60,
+        "test_type": "track_name_cleaning"
+      }
+    }
+  ]
+}
