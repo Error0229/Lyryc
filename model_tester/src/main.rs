@@ -4,8 +4,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
+use std::path::Path;
 use std::time::{Duration, Instant};
 use tokio;
+use rand::seq::SliceRandom;
+use rand::thread_rng;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ModelInfo {
@@ -209,22 +212,24 @@ impl ModelPerformanceTester {
 
         println!("Prepared {} models for testing", self.test_models.len());
 
-        // Load test data (30 rows for more comprehensive testing)
+        // Load all test data first, then randomly sample up to 65 cases
         let csv_content = fs::read_to_string("../tests/LyricCleanData.csv")?;
         let mut reader = csv::Reader::from_reader(csv_content.as_bytes());
+        let mut all_test_data = Vec::new();
 
-        for (i, result) in reader.records().enumerate() {
-            if i >= 30 {
-                break;
-            } // Increased to 30 test cases
+        for result in reader.records() {
             let record = result?;
             if record.len() >= 2 {
-                self.test_data
-                    .push((record[0].to_string(), record[1].to_string()));
+                all_test_data.push((record[0].to_string(), record[1].to_string()));
             }
         }
 
-        println!("Loaded {} test cases", self.test_data.len());
+        // Randomly sample up to 65 test cases
+        let mut rng = thread_rng();
+        all_test_data.shuffle(&mut rng);
+        self.test_data = all_test_data.into_iter().take(65).collect();
+
+        println!("Loaded {} test cases (randomly sampled)", self.test_data.len());
 
         // Load prompt template
         let prompt_content = fs::read_to_string("../TrackNameCleaner.prompt.yml")?;
@@ -284,7 +289,7 @@ preserve_parenthetical_if_ambiguous: true
         )
     }
 
-    async fn test_model(&self, model_id: &str) -> ModelTestResult {
+    async fn test_model(&self, model_id: &str, test_index: usize) -> ModelTestResult {
         println!("Testing model: {}", model_id);
 
         let (model_info, pricing_info) = self.get_model_info(model_id);
@@ -398,6 +403,9 @@ preserve_parenthetical_if_ambiguous: true
                             .as_str()
                             .unwrap_or("");
 
+                        // Log response to file
+                        self.log_response_to_file(model_id, response_text, test_index).await.ok();
+
                         // Evaluate response quality
                         let performance_score = self.evaluate_response_quality(response_text);
                         let quality = if performance_score > 0.7 {
@@ -500,6 +508,36 @@ preserve_parenthetical_if_ambiguous: true
         }
     }
 
+    async fn log_response_to_file(&self, model_id: &str, response_text: &str, test_index: usize) -> Result<(), Box<dyn std::error::Error>> {
+        // Create logs directory if it doesn't exist
+        let logs_dir = "../test_logs";
+        if !Path::new(logs_dir).exists() {
+            fs::create_dir_all(logs_dir)?;
+        }
+
+        // Create a safe filename from model_id
+        let safe_model_id = model_id.replace("/", "_").replace(":", "_");
+        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+        let filename = format!("{}/{}_{}_test_{}.log", logs_dir, safe_model_id, timestamp, test_index);
+
+        // Log both request details and response
+        let log_content = format!(
+            "Model: {}\nTest Index: {}\nTimestamp: {}\nTest Data Size: {}\n{}
+\nResponse:\n{}\n{}",
+            model_id,
+            test_index,
+            chrono::Utc::now().to_rfc3339(),
+            self.test_data.len(),
+            "=".repeat(80),
+            response_text,
+            "=".repeat(80)
+        );
+
+        fs::write(&filename, log_content)?;
+        println!("  📝 Response logged to: {}", filename);
+        Ok(())
+    }
+
     fn evaluate_response_quality(&self, response_text: &str) -> f64 {
         let lines: Vec<&str> = response_text.trim().split('\n').collect();
         let mut valid_json_count = 0;
@@ -540,7 +578,7 @@ preserve_parenthetical_if_ambiguous: true
                 display_name
             );
 
-            let result = self.test_model(model_id).await;
+            let result = self.test_model(model_id, i).await;
 
             if let Some(error) = &result.error {
                 println!("  ❌ Error: {}", error);
@@ -559,8 +597,8 @@ preserve_parenthetical_if_ambiguous: true
 
             results.push(result);
 
-            // Small delay between requests
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            // Increased delay between requests to 10 seconds due to rate limit
+            tokio::time::sleep(Duration::from_secs(10)).await;
         }
 
         results
