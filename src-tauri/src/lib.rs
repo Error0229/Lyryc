@@ -13,7 +13,7 @@ mod websocket_commands;
 mod window_management;
 
 // Import types and functions from modules
-use commands::{get_current_track, set_current_track};
+use commands::{clean_track_name_command, get_current_track, set_current_track};
 use lyrics::{fetch_lrclib_raw, fetch_lyrics};
 use types::{ClickThroughState, TrackState, WebSocketState};
 use websocket_commands::{
@@ -141,6 +141,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_current_track,
             set_current_track,
+            clean_track_name_command,
             fetch_lyrics,
             fetch_lrclib_raw,
             init_extension_connection,

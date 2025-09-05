@@ -1,3 +1,4 @@
+use crate::track_cleaning::clean_track_name;
 use crate::types::{TrackInfo, TrackState};
 use tauri::State;
 
@@ -15,4 +16,9 @@ pub async fn set_current_track(
     let mut current_track = state.lock().await;
     *current_track = Some(track);
     Ok(())
+}
+
+#[tauri::command]
+pub async fn clean_track_name_command(track_name: String) -> Result<String, String> {
+    Ok(clean_track_name(&track_name).await)
 }

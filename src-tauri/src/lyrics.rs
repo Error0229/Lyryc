@@ -99,9 +99,9 @@ pub async fn fetch_lyrics(
 ) -> Result<Vec<LyricLine>, String> {
     info!("Fetching lyrics for: {} by {}", track_name, artist_name);
 
-    let cleaned_track = clean_track_name(&track_name);
+    let cleaned_track = clean_track_name(&track_name).await;
     let track_without_artist = remove_artist_from_track(&track_name, &artist_name);
-    let cleaned_track_without_artist = clean_track_name(&track_without_artist);
+    let cleaned_track_without_artist = clean_track_name(&track_without_artist).await;
 
     // Build candidates with priority (higher = more likely to succeed)
     let mut candidates = Vec::new();

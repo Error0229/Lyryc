@@ -1,7 +1,10 @@
-use log::debug;
+use log::{debug, info};
 use regex::Regex;
+use reqwest::Client;
+use serde_json::{json, Value};
+use std::time::Duration;
 
-pub fn clean_track_name(track_name: &str) -> String {
+pub fn clean_track_name_sync(track_name: &str) -> String {
     let mut cleaned = track_name.to_string();
     let original_cleaned = track_name.to_string(); // Store original for reference
     debug!("Cleaning track name: '{}'", track_name);
@@ -578,6 +581,235 @@ pub fn remove_artist_from_track(track_name: &str, artist_name: &str) -> String {
     result
 }
 
+/// Main track cleaning function - tries LLM first, falls back to regex
+pub async fn clean_track_name(track_name: &str) -> String {
+    match clean_track_name_llm(track_name).await {
+        Ok(cleaned) => cleaned,
+        Err(e) => {
+            debug!("LLM cleaning failed, using regex fallback: {}", e);
+            clean_track_name_sync(track_name)
+        }
+    }
+}
+
+/// Cleans track name using LLM when GitHub token is available
+pub async fn clean_track_name_llm(track_name: &str) -> Result<String, String> {
+    // Load environment variables
+    dotenv::dotenv().ok();
+
+    let github_token = match std::env::var("GITHUB_TOKEN") {
+        Ok(token) => token,
+        Err(_) => {
+            debug!("No GitHub token found, falling back to regex cleaning");
+            return Ok(clean_track_name_sync(track_name));
+        }
+    };
+
+    // Best performing models from testing
+    let models = [
+        "meta/Meta-Llama-3.1-8B-Instruct",
+        "meta/Llama-4-Maverick-17B-128E-Instruct-FP8",
+        "mistral-ai/Ministral-3B",
+    ];
+
+    for (i, model_id) in models.iter().enumerate() {
+        match try_llm_cleaning(track_name, model_id, &github_token).await {
+            Ok(cleaned) => {
+                info!(
+                    "LLM cleaning successful with {}: '{}' -> '{}'",
+                    model_id, track_name, cleaned
+                );
+                return Ok(cleaned);
+            }
+            Err(e) => {
+                debug!(
+                    "LLM cleaning failed with {}: {} (attempt {}/{})",
+                    model_id,
+                    e,
+                    i + 1,
+                    models.len()
+                );
+                if i < models.len() - 1 {
+                    // Add delay between attempts
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+            }
+        }
+    }
+
+    // If all LLM attempts failed, fall back to regex cleaning
+    debug!("All LLM attempts failed, falling back to regex cleaning");
+    Ok(clean_track_name_sync(track_name))
+}
+
+async fn try_llm_cleaning(
+    track_name: &str,
+    model_id: &str,
+    github_token: &str,
+) -> Result<String, String> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    // Create the prompt with configuration
+    let user_content = format!(
+        r#"**Task**: Clean the following track titles into canonical song titles using human judgment.
+
+**Configuration** (YAML):
+
+```yaml
+keep_feat: false
+keep_version_markers: true
+prefer_primary_language: as_is
+allow_album_context: false
+preserve_parenthetical_if_ambiguous: true
+```
+
+**Items (one per line):**
+
+```
+{}
+```
+
+**Output Format - CRITICAL**:
+- Return EXACTLY one JSON object per input line
+- Each JSON object must be on its own line
+- NO markdown formatting (no ```json blocks)  
+- NO wrapping in code blocks or backticks
+- NO extra text, explanations, or commentary
+- ONLY raw JSON objects, one per line
+- Schema: `cleaned_title`, `kept_markers`, `removed_context`, `confidence`, `notes`
+
+IMPORTANT: Output must be parseable as raw JSON. Do not use markdown, code blocks, or any formatting."#,
+        track_name
+    );
+
+    let system_content = r#"You are a meticulous music metadata editor.
+
+Your task: **read each original track title carefully and decide the correct "cleaned title"** that best represents the work's identity, **using human judgment rather than mechanical rules**. When in doubt, prefer preserving the creator's intended title.
+
+## Principles
+
+1. **Human judgment first, not regex or rule shortcuts.** Decide based on semantics and common music publishing practices.
+
+2. **Keep identity-bearing content.** Keep elements that define the work (e.g., "(Sometimes)" in "I Always Wanna Die (Sometimes)", version markers like *Acoustic/Live/Remix/Stripped* when they are part of the release identity, official subtitles that are part of the title).
+
+3. **Remove distribution context.** Remove platform/format/marketing context (e.g., *Official Video/MV/Visualizer/Audio*, *THE FIRST TAKE*, *\[playlist]*, uploaders' commentary like "lyrics", "4K remaster"), **only when clearly non-title**.
+
+4. **Artist prefixes.** If the title begins with an artist name like "Artist – Title", drop the artist part and keep only the title.
+
+5. **Featuring credits.** Follow the configuration flag `keep_feat`:
+   * If `true`, keep canonical "(feat. X)" with consistent casing.
+   * If `false`, remove it from the title (featuring remains discoverable by metadata, not title).
+
+6. **Language & transliteration.** Do **not translate**. Preserve the script/language used in the title unless the item itself presents an official bilingual title; in that case, keep the **main song title portion** that best matches common usage.
+
+7. **Albums/episodes/track #**. If the string contains album/series scaffolding like "| album | track 1", keep only the **song title segment**, unless configuration requires preserving sequence markers.
+
+8. **Ambiguity.** If you are not confident, prefer **conservative retention**. Do not hallucinate or rewrite unknown parts.
+
+9. **No chain-of-thought.** Output only the requested structured fields.
+
+## Output format (for each item)
+
+Return **one JSON object per input** with keys:
+
+* `cleaned_title` (string, required)
+* `kept_markers` (array of short strings; version tags you intentionally kept, e.g., `["Acoustic"]`)
+* `removed_context` (array of short strings; context you intentionally removed, e.g., `["Official Video"]`)
+* `confidence` (0.0–1.0, float; your confidence about the cleaned title)
+* `notes` (≤20 words, optional, concise justification; no reasoning chains)
+
+Follow the configuration strictly, but still apply human judgment per the principles above."#;
+
+    let payload = json!({
+        "messages": [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": user_content}
+        ],
+        "temperature": 0.1,
+        "max_tokens": 1000,
+        "model": model_id
+    });
+
+    let response = client
+        .post("https://models.github.ai/inference/chat/completions")
+        .header("Content-Type", "application/json")
+        .header("Authorization", format!("Bearer {}", github_token))
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let error_text = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
+        return Err(format!("HTTP {}: {}", status, error_text));
+    }
+
+    let result: Value = response.json().await.map_err(|e| e.to_string())?;
+    let response_text = result["choices"][0]["message"]["content"]
+        .as_str()
+        .ok_or("No content in response".to_string())?;
+
+    // Parse the JSON response
+    let cleaned_response = clean_markdown_formatting(response_text);
+    let lines: Vec<&str> = cleaned_response.trim().split('\n').collect();
+
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.starts_with('{') && trimmed.ends_with('}') {
+            if let Ok(parsed) = serde_json::from_str::<Value>(trimmed) {
+                if let Some(cleaned_title) = parsed.get("cleaned_title") {
+                    if let Some(title_str) = cleaned_title.as_str() {
+                        let title_trimmed = title_str.trim();
+                        if !title_trimmed.is_empty() {
+                            return Ok(title_trimmed.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Err("Could not parse valid cleaned title from LLM response".to_string())
+}
+
+fn clean_markdown_formatting(text: &str) -> String {
+    let mut result = text.to_string();
+
+    // Remove markdown code blocks
+    result = result.replace("```json", "");
+    result = result.replace("```JSON", "");
+    result = result.replace("```", "");
+
+    // Remove single backticks around JSON objects
+    result = result.replace("`{", "{");
+    result = result.replace("}`", "}");
+
+    // Remove common markdown artifacts
+    result = result.replace("**Output:**", "");
+    result = result.replace("**Response:**", "");
+    result = result.replace("Here is the output:", "");
+    result = result.replace("Here are the results:", "");
+    result = result.replace("Output:", "");
+    result = result.replace("Response:", "");
+
+    // Clean up extra whitespace and empty lines
+    result = result
+        .lines()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -586,14 +818,14 @@ mod tests {
     #[test]
     fn cleans_japanese_title_with_romaji_suffix_after_hyphen() {
         let input = "私じゃなかったんだね。 - Watashijyanakattandane.";
-        let cleaned = clean_track_name(input);
+        let cleaned = clean_track_name_sync(input);
         assert_eq!(cleaned, "私じゃなかったんだね。");
     }
 
     #[test]
     fn cleans_youtube_suffixes_and_brackets() {
         let input = "【MV】私じゃなかったんだね。(Official Video) - YouTube Music";
-        let cleaned = clean_track_name(input);
+        let cleaned = clean_track_name_sync(input);
         assert!(cleaned.contains("私じゃなかったんだね"));
         assert!(!cleaned.contains("YouTube"));
     }
@@ -678,7 +910,7 @@ mod tests {
         let mut failed_cases = Vec::new();
 
         for (i, case) in test_cases.iter().enumerate() {
-            let cleaned = clean_track_name(&case.original);
+            let cleaned = clean_track_name_sync(&case.original);
             let is_correct = cleaned == case.expected;
 
             if is_correct {
@@ -745,7 +977,7 @@ mod tests {
         ];
 
         for (input, _expected) in test_cases {
-            let cleaned = clean_track_name(input);
+            let cleaned = clean_track_name_sync(input);
             println!("'{}' -> '{}'", input, cleaned);
             // Note: Not asserting exact match here as these are just pattern tests
         }
