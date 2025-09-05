@@ -241,4 +241,4 @@ messages:
       the schema specified in the System Prompt (`cleaned_title`,
       `kept_markers`, `removed_context`, `confidence`, `notes`). Do not include
       explanations beyond `notes`. Do not translate titles.
-model: openai/gpt-4o
+model: "{{ MODEL_NAME }}"
