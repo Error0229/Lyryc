@@ -33,6 +33,21 @@ function App() {
   const [isLoadingLyrics, setIsLoadingLyrics] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [lyricsError, setLyricsError] = useState<string | null>(null);
+  
+  // Auto-hide error notifications after 5 seconds
+  useEffect(() => {
+    if (connectionError) {
+      const timer = setTimeout(() => setConnectionError(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [connectionError]);
+
+  useEffect(() => {
+    if (lyricsError) {
+      const timer = setTimeout(() => setLyricsError(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [lyricsError]);
   const [lyricsProcessor] = useState(
     () =>
       new LyricsProcessor({
@@ -151,6 +166,10 @@ function App() {
       `[App] Starting lyrics fetch #${currentSequence} for: "${title}" by "${artist}"`
     );
 
+    // Clear previous lyrics and state immediately when starting new fetch
+    setLyrics([]);
+    setTranslatedLyrics([]);
+    translationStore.setTranslationError(null);
     setIsLoadingLyrics(true);
     setLyricsError(null);
 
