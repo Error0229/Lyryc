@@ -541,9 +541,11 @@ async fn translate_lyrics_gemini(
 
     // Available Gemini models (based on the pricing table)
     let models = [
-        "gemini-2.5-flash", // Fast with 250K TPM, 10 RPM
-        "gemini-2.0-flash", // Latest with 1M TPM, 15 RPM
-        "gemini-2.5-pro",   // Most capable with 250K TPM, 5 RPM
+        "gemini-2.5-flash-lite", // Fast with 250K TPM, 10 RPM
+        "gemini-2.0-flash",      // Latest with 1M TPM, 15 RPM
+        "gemini-2.5-flash",      // Fast with 250K TPM, 10 RPM
+        "gemini-2.0-flash-lite", // Fast with 250K TPM, 10 RPM
+        "gemini-2.5-pro",        // Most capable with 250K TPM, 5 RPM
     ];
 
     // Pass language detection to translation function - no separate API call
@@ -637,7 +639,7 @@ Approach each song as a complete artistic work with unified themes, emotions, an
         }],
         "generationConfig": {
             "temperature": 0.3,
-            "maxOutputTokens": 2048,
+            "maxOutputTokens": 8192,
             "topP": 0.95,
             "topK": 40
         },
@@ -685,10 +687,41 @@ Approach each song as a complete artistic work with unified themes, emotions, an
 
     let result: Value = response.json().await.map_err(|e| e.to_string())?;
 
-    // Parse Gemini response format
+    // Check for finish reason issues first
+    if let Some(finish_reason) = result["candidates"][0]["finishReason"].as_str() {
+        if finish_reason == "MAX_TOKENS" {
+            return Err("Gemini response truncated due to token limit. Try shorter input or increase maxOutputTokens.".to_string());
+        }
+        if finish_reason != "STOP" {
+            return Err(format!(
+                "Gemini response incomplete. Finish reason: {}",
+                finish_reason
+            ));
+        }
+    }
+
+    // Parse Gemini response format - handle both old and new response structures
     let response_text = result["candidates"][0]["content"]["parts"][0]["text"]
         .as_str()
-        .ok_or("No content in Gemini response".to_string())?;
+        .or_else(|| {
+            // Fallback for newer API versions that might have different structure
+            result["candidates"][0]["content"]["text"].as_str()
+        })
+        .or_else(|| {
+            // Another fallback - check if parts array exists but is structured differently
+            if let Some(parts) = result["candidates"][0]["content"]["parts"].as_array() {
+                if let Some(first_part) = parts.get(0) {
+                    return first_part["text"].as_str();
+                }
+            }
+            None
+        })
+        .ok_or_else(|| {
+            format!(
+                "No text content found in Gemini response. Response structure: {:?}",
+                result["candidates"][0]["content"]
+            )
+        })?;
 
     // For auto-detection, use fallback detection or "unknown"
     let final_detected_language = if source_language == "auto" {

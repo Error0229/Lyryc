@@ -917,7 +917,7 @@ Return only the cleaned title, nothing else:"#,
         }],
         "generationConfig": {
             "temperature": 0.1,
-            "maxOutputTokens": 200,
+            "maxOutputTokens": 512,
             "topP": 0.8,
             "topK": 10
         },
@@ -962,10 +962,38 @@ Return only the cleaned title, nothing else:"#,
 
     let result: Value = response.json().await.map_err(|e| e.to_string())?;
     
-    // Parse Gemini response format
+    // Check for finish reason issues first
+    if let Some(finish_reason) = result["candidates"][0]["finishReason"].as_str() {
+        if finish_reason == "MAX_TOKENS" {
+            return Err("Gemini response truncated due to token limit".to_string());
+        }
+        if finish_reason != "STOP" {
+            return Err(format!("Gemini response incomplete. Finish reason: {}", finish_reason));
+        }
+    }
+
+    // Parse Gemini response format - handle both old and new response structures
     let response_text = result["candidates"][0]["content"]["parts"][0]["text"]
         .as_str()
-        .ok_or("No content in Gemini response".to_string())?;
+        .or_else(|| {
+            // Fallback for newer API versions that might have different structure
+            result["candidates"][0]["content"]["text"].as_str()
+        })
+        .or_else(|| {
+            // Another fallback - check if parts array exists but is structured differently
+            if let Some(parts) = result["candidates"][0]["content"]["parts"].as_array() {
+                if let Some(first_part) = parts.get(0) {
+                    return first_part["text"].as_str();
+                }
+            }
+            None
+        })
+        .ok_or_else(|| {
+            format!(
+                "No text content found in Gemini response. Response structure: {:?}",
+                result["candidates"][0]["content"]
+            )
+        })?;
 
     // Clean and extract the title
     let cleaned_title = response_text.trim()
