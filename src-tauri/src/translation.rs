@@ -1,10 +1,10 @@
-use log::{debug, info, error, warn};
+use log::{debug, error, info, warn};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::time::Duration;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 // Global model blacklist to track rate-limited models
 lazy_static::lazy_static! {
@@ -19,9 +19,12 @@ pub fn is_model_blacklisted(model_id: &str) -> bool {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_secs();
-            
+
             if current_time < blacklist_until {
-                debug!("Model {} is blacklisted until {}", model_id, blacklist_until);
+                debug!(
+                    "Model {} is blacklisted until {}",
+                    model_id, blacklist_until
+                );
                 return true;
             } else {
                 // Blacklist has expired, remove it
@@ -41,11 +44,15 @@ pub fn blacklist_model(model_id: &str, wait_seconds: u64) {
     let blacklist_until = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
-        .as_secs() + wait_seconds;
-    
+        .as_secs()
+        + wait_seconds;
+
     if let Ok(mut blacklist) = MODEL_BLACKLIST.lock() {
         blacklist.insert(model_id.to_string(), blacklist_until);
-        warn!("Blacklisted model {} for {} seconds (until {})", model_id, wait_seconds, blacklist_until);
+        warn!(
+            "Blacklisted model {} for {} seconds (until {})",
+            model_id, wait_seconds, blacklist_until
+        );
     }
 }
 
@@ -115,7 +122,7 @@ pub async fn translate_lyrics(
     config: TranslationConfig,
 ) -> Result<TranslationResult, String> {
     let start_time = std::time::Instant::now();
-    
+
     if lyrics.is_empty() {
         return Ok(TranslationResult {
             success: false,
@@ -126,18 +133,53 @@ pub async fn translate_lyrics(
         });
     }
 
-    info!("Starting translation for {} lines from {} to {}", 
-          lyrics.len(), config.source_language, config.target_language);
+    info!(
+        "Starting translation for {} lines from {} to {}",
+        lyrics.len(),
+        config.source_language,
+        config.target_language
+    );
 
     let result = match config.provider.as_str() {
-        "gemini" => translate_lyrics_gemini(&lyrics, &config).await,
-        "github" | _ => translate_lyrics_github(&lyrics, &config).await,
+        "gemini" => {
+            // Check if Gemini API key is available before attempting request
+            if config
+                .gemini_api_key
+                .as_ref()
+                .map_or(false, |key| !key.trim().is_empty())
+                || std::env::var("GEMINI_API_KEY").is_ok()
+            {
+                debug!("Gemini API key available, attempting translation");
+                translate_lyrics_gemini(&lyrics, &config).await
+            } else {
+                debug!("No Gemini API key available, skipping Gemini translation");
+                Err("No Gemini API key available".to_string())
+            }
+        }
+        "github" | _ => {
+            // Check if GitHub token is available before attempting request
+            if config
+                .github_api_key
+                .as_ref()
+                .map_or(false, |key| !key.trim().is_empty())
+                || std::env::var("GITHUB_TOKEN").is_ok()
+            {
+                debug!("GitHub token available, attempting translation");
+                translate_lyrics_github(&lyrics, &config).await
+            } else {
+                debug!("No GitHub token available, skipping GitHub translation");
+                Err("No GitHub token available".to_string())
+            }
+        }
     };
 
     match result {
         Ok(mut translation_result) => {
             translation_result.processing_time_ms = start_time.elapsed().as_millis() as u64;
-            info!("Translation completed successfully in {}ms", translation_result.processing_time_ms);
+            info!(
+                "Translation completed successfully in {}ms",
+                translation_result.processing_time_ms
+            );
             Ok(translation_result)
         }
         Err(e) => {
@@ -159,25 +201,26 @@ async fn translate_lyrics_github(
     lyrics: &[LyricLine],
     config: &TranslationConfig,
 ) -> Result<TranslationResult, String> {
-    // Get API key from config or environment
+    // Get GitHub token (caller has already verified availability)
     let github_token = config.github_api_key.clone()
+        .filter(|key| !key.trim().is_empty())
         .or_else(|| std::env::var("GITHUB_TOKEN").ok())
-        .ok_or_else(|| "GitHub API key required for translation".to_string())?;
+        .ok_or_else(|| "GitHub API key required for translation. Please enter your API key in the Translation settings.".to_string())?;
 
     // High-performance models from test results - only use models that work
     let all_models = [
-        "meta/Llama-4-Maverick-17B-128E-Instruct-FP8",  // 98.33% accuracy - best performer
-        "openai/gpt-4.1-nano",                           // 98.33% accuracy - excellent
-        "openai/gpt-4o-mini",                            // 96.67% accuracy - reliable
-        "mistral ai/Mistral-Large-2411",                 // 96.67% accuracy - proven
-        "mistral ai/mistral-medium-2505",                // 96.67% accuracy - consistent
-        "mistral ai/mistral-small-2503",                 // 96.67% accuracy - fast
-        "meta/Meta-Llama-3.1-8B-Instruct",              // 95% accuracy - very fast
-        "mistral ai/Codestral-2501",                     // 95% accuracy - good
-        "deepseek/DeepSeek-V3-0324",                     // 90% accuracy - backup
-        "meta/Llama-3.3-70B-Instruct",                   // 90% accuracy - free
-        "xai/grok-3",                                     // 90% accuracy - alternative
-        "meta/Llama-4-Scout-17B-16E-Instruct",          // 90% accuracy - reliable
+        "meta/Llama-4-Maverick-17B-128E-Instruct-FP8", // 98.33% accuracy - best performer
+        "openai/gpt-4.1-nano",                         // 98.33% accuracy - excellent
+        "openai/gpt-4o-mini",                          // 96.67% accuracy - reliable
+        "mistral ai/Mistral-Large-2411",               // 96.67% accuracy - proven
+        "mistral ai/mistral-medium-2505",              // 96.67% accuracy - consistent
+        "mistral ai/mistral-small-2503",               // 96.67% accuracy - fast
+        "meta/Meta-Llama-3.1-8B-Instruct",             // 95% accuracy - very fast
+        "mistral ai/Codestral-2501",                   // 95% accuracy - good
+        "deepseek/DeepSeek-V3-0324",                   // 90% accuracy - backup
+        "meta/Llama-3.3-70B-Instruct",                 // 90% accuracy - free
+        "xai/grok-3",                                  // 90% accuracy - alternative
+        "meta/Llama-4-Scout-17B-16E-Instruct",         // 90% accuracy - reliable
     ];
 
     // Filter out blacklisted models
@@ -191,7 +234,11 @@ async fn translate_lyrics_github(
         return Err("All GitHub AI models are currently rate-limited".to_string());
     }
 
-    info!("Available GitHub models: {} out of {} total", available_models.len(), all_models.len());
+    info!(
+        "Available GitHub models: {} out of {} total",
+        available_models.len(),
+        all_models.len()
+    );
 
     // Pass language detection to translation function - no separate API call
     let source_language = config.source_language.clone();
@@ -201,7 +248,8 @@ async fn translate_lyrics_github(
             Ok(result) => {
                 info!(
                     "Translation successful with {}: {} lines translated",
-                    model_id, result.translated_lines.len()
+                    model_id,
+                    result.translated_lines.len()
                 );
                 return Ok(result);
             }
@@ -212,10 +260,13 @@ async fn translate_lyrics_github(
                     blacklist_model(model_id, 86400); // 24 hours = 86400 seconds
                     warn!("Model {} rate limited, blacklisted for 24 hours", model_id);
                 }
-                
+
                 debug!(
                     "Translation failed with {}: {} (attempt {}/{})",
-                    model_id, e, i + 1, available_models.len()
+                    model_id,
+                    e,
+                    i + 1,
+                    available_models.len()
                 );
                 if i < available_models.len() - 1 {
                     // Add delay between attempts
@@ -318,7 +369,8 @@ Approach each song as a complete artistic work with unified themes, emotions, an
     };
 
     // Parse the translation response
-    let translated_lines = parse_translation_response(response_text, lyrics, &final_detected_language)?;
+    let translated_lines =
+        parse_translation_response(response_text, lyrics, &final_detected_language)?;
 
     Ok(TranslationResult {
         success: true,
@@ -337,7 +389,7 @@ fn build_translation_prompt(
     custom_prompt: Option<&str>,
 ) -> String {
     let target_lang_name = get_language_name(target_lang);
-    
+
     // If custom prompt is provided, use it as-is
     if let Some(custom) = custom_prompt {
         return format!(
@@ -476,40 +528,46 @@ fn parse_translation_response(
     Ok(translated_lines)
 }
 
-
 /// Translate lyrics using Google Gemini API
 async fn translate_lyrics_gemini(
     lyrics: &[LyricLine],
     config: &TranslationConfig,
 ) -> Result<TranslationResult, String> {
-    // Get API key from config or environment
+    // Get Gemini API key (caller has already verified availability)
     let gemini_api_key = config.gemini_api_key.clone()
+        .filter(|key| !key.trim().is_empty())
         .or_else(|| std::env::var("GEMINI_API_KEY").ok())
-        .ok_or_else(|| "Gemini API key required for translation".to_string())?;
+        .ok_or_else(|| "Gemini API key required for translation. Please enter your API key in the Translation settings.".to_string())?;
 
     // Available Gemini models (based on the pricing table)
     let models = [
-        "gemini-2.0-flash",      // Latest with 1M TPM, 15 RPM
-        "gemini-2.5-flash",      // Fast with 250K TPM, 10 RPM
-        "gemini-2.5-pro",        // Most capable with 250K TPM, 5 RPM
+        "gemini-2.5-flash", // Fast with 250K TPM, 10 RPM
+        "gemini-2.0-flash", // Latest with 1M TPM, 15 RPM
+        "gemini-2.5-pro",   // Most capable with 250K TPM, 5 RPM
     ];
 
     // Pass language detection to translation function - no separate API call
     let source_language = config.source_language.clone();
 
     for (i, model_id) in models.iter().enumerate() {
-        match try_gemini_translation(lyrics, config, &source_language, model_id, &gemini_api_key).await {
+        match try_gemini_translation(lyrics, config, &source_language, model_id, &gemini_api_key)
+            .await
+        {
             Ok(result) => {
                 info!(
                     "Translation successful with {}: {} lines translated",
-                    model_id, result.translated_lines.len()
+                    model_id,
+                    result.translated_lines.len()
                 );
                 return Ok(result);
             }
             Err(e) => {
                 debug!(
                     "Translation failed with {}: {} (attempt {}/{})",
-                    model_id, e, i + 1, models.len()
+                    model_id,
+                    e,
+                    i + 1,
+                    models.len()
                 );
                 if i < models.len() - 1 {
                     // Add delay between attempts
@@ -589,7 +647,7 @@ Approach each song as a complete artistic work with unified themes, emotions, an
                 "threshold": "BLOCK_MEDIUM_AND_ABOVE"
             },
             {
-                "category": "HARM_CATEGORY_HATE_SPEECH", 
+                "category": "HARM_CATEGORY_HATE_SPEECH",
                 "threshold": "BLOCK_MEDIUM_AND_ABOVE"
             },
             {
@@ -603,8 +661,11 @@ Approach each song as a complete artistic work with unified themes, emotions, an
         ]
     });
 
-    let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}", model_id, gemini_api_key);
-    
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+        model_id, gemini_api_key
+    );
+
     let response = client
         .post(&url)
         .header("Content-Type", "application/json")
@@ -623,7 +684,7 @@ Approach each song as a complete artistic work with unified themes, emotions, an
     }
 
     let result: Value = response.json().await.map_err(|e| e.to_string())?;
-    
+
     // Parse Gemini response format
     let response_text = result["candidates"][0]["content"]["parts"][0]["text"]
         .as_str()
@@ -637,7 +698,8 @@ Approach each song as a complete artistic work with unified themes, emotions, an
     };
 
     // Parse the translation response using the shared function
-    let translated_lines = parse_translation_response(response_text, lyrics, &final_detected_language)?;
+    let translated_lines =
+        parse_translation_response(response_text, lyrics, &final_detected_language)?;
 
     Ok(TranslationResult {
         success: true,
@@ -647,7 +709,6 @@ Approach each song as a complete artistic work with unified themes, emotions, an
         error: None,
     })
 }
-
 
 fn detect_language_fallback(lyrics: &[LyricLine]) -> String {
     let sample_text = lyrics
@@ -662,19 +723,31 @@ fn detect_language_fallback(lyrics: &[LyricLine]) -> String {
     if sample_text.chars().any(|c| matches!(c, '\u{3040}'..='\u{309f}' | '\u{30a0}'..='\u{30ff}' | '\u{4e00}'..='\u{9faf}')) {
         return "ja".to_string(); // Japanese
     }
-    if sample_text.chars().any(|c| matches!(c, '\u{ac00}'..='\u{d7af}')) {
+    if sample_text
+        .chars()
+        .any(|c| matches!(c, '\u{ac00}'..='\u{d7af}'))
+    {
         return "ko".to_string(); // Korean
     }
-    if sample_text.chars().any(|c| matches!(c, '\u{4e00}'..='\u{9fff}')) {
+    if sample_text
+        .chars()
+        .any(|c| matches!(c, '\u{4e00}'..='\u{9fff}'))
+    {
         return "zh".to_string(); // Chinese (default to simplified)
     }
-    if sample_text.chars().any(|c| matches!(c, '\u{0400}'..='\u{04ff}')) {
+    if sample_text
+        .chars()
+        .any(|c| matches!(c, '\u{0400}'..='\u{04ff}'))
+    {
         return "ru".to_string(); // Russian
     }
-    if sample_text.chars().any(|c| matches!(c, '\u{0600}'..='\u{06ff}')) {
+    if sample_text
+        .chars()
+        .any(|c| matches!(c, '\u{0600}'..='\u{06ff}'))
+    {
         return "ar".to_string(); // Arabic
     }
-    
+
     // Default to English for Latin scripts
     debug!("Language detection fallback to English");
     "en".to_string()
@@ -685,7 +758,7 @@ fn get_language_name(code: &str) -> &str {
         "auto" => "Auto-detect",
         "en" => "English",
         "es" => "Spanish",
-        "fr" => "French", 
+        "fr" => "French",
         "de" => "German",
         "it" => "Italian",
         "pt" => "Portuguese",
@@ -707,24 +780,20 @@ mod tests {
 
     #[test]
     fn test_language_detection() {
-        let japanese_lyrics = vec![
-            LyricLine {
-                time: 0.0,
-                text: "これは日本語の歌詞です".to_string(),
-                duration: Some(3.0),
-            }
-        ];
-        
+        let japanese_lyrics = vec![LyricLine {
+            time: 0.0,
+            text: "これは日本語の歌詞です".to_string(),
+            duration: Some(3.0),
+        }];
+
         assert_eq!(detect_language_fallback(&japanese_lyrics), "ja");
-        
-        let english_lyrics = vec![
-            LyricLine {
-                time: 0.0,
-                text: "This is an English song".to_string(), 
-                duration: Some(3.0),
-            }
-        ];
-        
+
+        let english_lyrics = vec![LyricLine {
+            time: 0.0,
+            text: "This is an English song".to_string(),
+            duration: Some(3.0),
+        }];
+
         assert_eq!(detect_language_fallback(&english_lyrics), "en");
     }
 
@@ -740,7 +809,7 @@ mod tests {
     #[tokio::test]
     async fn test_translation_backend() {
         println!("🧪 Starting translation backend test...");
-        
+
         // Test data - simple Spanish lyrics
         let test_lyrics = vec![
             LyricLine {
@@ -772,7 +841,7 @@ mod tests {
         for line in &test_lyrics {
             println!("  {}s: '{}'", line.time, line.text);
         }
-        
+
         match translate_lyrics(test_lyrics, test_config).await {
             Ok(result) => {
                 println!("✅ Translation successful!");
@@ -780,14 +849,22 @@ mod tests {
                 println!("  Lines translated: {}", result.translated_lines.len());
                 println!("  Detected language: {:?}", result.detected_language);
                 println!("  Processing time: {}ms", result.processing_time_ms);
-                
+
                 for (i, line) in result.translated_lines.iter().enumerate() {
-                    println!("  Line {}: '{}' -> '{}'", i+1, line.original_text, line.translated_text);
+                    println!(
+                        "  Line {}: '{}' -> '{}'",
+                        i + 1,
+                        line.original_text,
+                        line.translated_text
+                    );
                 }
-                
+
                 assert!(result.success, "Translation should succeed");
-                assert!(!result.translated_lines.is_empty(), "Should have translated lines");
-            },
+                assert!(
+                    !result.translated_lines.is_empty(),
+                    "Should have translated lines"
+                );
+            }
             Err(e) => {
                 println!("❌ Translation failed: {}", e);
                 // Don't panic in test - just report the failure

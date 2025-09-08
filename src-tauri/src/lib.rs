@@ -15,7 +15,7 @@ mod window_management;
 
 // Import types and functions from modules
 use commands::{
-    clean_track_name_command, get_current_track, get_supported_languages, set_current_track,
+    clean_track_name_command, clean_track_name_with_config, get_current_track, get_supported_languages, set_current_track,
     translate_lyrics_command,
 };
 use lyrics::{fetch_lrclib_raw, fetch_lyrics};
@@ -31,6 +31,11 @@ use window_management::{
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Load environment variables from .env file
+    if let Err(e) = dotenv::dotenv() {
+        eprintln!("Could not load .env file: {}. Continuing without it.", e);
+    }
+
     // Initialize logger
     env_logger::Builder::from_default_env()
         .filter_level(log::LevelFilter::Debug)
@@ -146,6 +151,7 @@ pub fn run() {
             get_current_track,
             set_current_track,
             clean_track_name_command,
+            clean_track_name_with_config,
             translate_lyrics_command,
             get_supported_languages,
             fetch_lyrics,

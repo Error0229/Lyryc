@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useLyricsStyleStore } from '../stores/lyricsStyleStore';
 import { useTranslationStore } from '../stores/translationStore';
+import { validateApiKey, getApiKeyLinks } from '../utils/apiKeyValidation';
 
 interface StyleControlsProps {
   isOpen: boolean;
@@ -12,6 +13,11 @@ const StyleControls: React.FC<StyleControlsProps> = ({ isOpen, onClose }) => {
   const { style, updateStyle, applyPreset, getPresets, resetToDefault } = useLyricsStyleStore();
   const { displayMode, updateDisplayMode, config, updateConfig } = useTranslationStore();
   const [activeTab, setActiveTab] = useState<'presets' | 'font' | 'colors' | 'effects' | 'layout' | 'translation'>('presets');
+  
+  // Validate current API key
+  const currentApiKey = config.provider === 'github' ? config.github_api_key : config.gemini_api_key;
+  const apiKeyValidation = useMemo(() => validateApiKey(config.provider, currentApiKey), [config.provider, currentApiKey]);
+  const apiKeyLinks = useMemo(() => getApiKeyLinks(config.provider), [config.provider]);
   
   const presets = getPresets();
   
@@ -559,30 +565,71 @@ const StyleControls: React.FC<StyleControlsProps> = ({ isOpen, onClose }) => {
                   <div>
                     <label className="block text-white/80 text-sm mb-2">
                       {config.provider === 'github' ? 'GitHub API Key' : 'Gemini API Key'}
-                    </label>
-                    <input
-                      type="password"
-                      placeholder={config.provider === 'github' 
-                        ? 'Enter GitHub personal access token' 
-                        : 'Enter Gemini API key'
-                      }
-                      value={config.provider === 'github' 
-                        ? config.github_api_key || '' 
-                        : config.gemini_api_key || ''
-                      }
-                      onChange={(e) => updateConfig(
-                        config.provider === 'github'
-                          ? { github_api_key: e.target.value }
-                          : { gemini_api_key: e.target.value }
+                      {apiKeyValidation.isValid && (
+                        <span className="text-green-400 text-xs ml-2">✓ {apiKeyValidation.message}</span>
                       )}
-                      className="w-full px-3 py-2 bg-white/5 border border-white/20 rounded text-white placeholder-white/50 focus:border-blue-400 focus:outline-none"
-                    />
-                    <div className="text-xs text-white/50 mt-1">
-                      {config.provider === 'github' 
-                        ? 'Get your token from GitHub Settings → Developer settings → Personal access tokens'
-                        : 'Get your API key from Google AI Studio'
-                      }
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="password"
+                        placeholder={config.provider === 'github' 
+                          ? 'Enter GitHub personal access token' 
+                          : 'Enter Gemini API key'
+                        }
+                        value={config.provider === 'github' 
+                          ? config.github_api_key || '' 
+                          : config.gemini_api_key || ''
+                        }
+                        onChange={(e) => {
+                          const trimmedValue = e.target.value.trim();
+                          updateConfig(
+                            config.provider === 'github'
+                              ? { github_api_key: trimmedValue }
+                              : { gemini_api_key: trimmedValue }
+                          );
+                        }}
+                        className={`w-full px-3 py-2 bg-white/5 border rounded text-white placeholder-white/50 focus:outline-none ${
+                          currentApiKey && !apiKeyValidation.isValid
+                            ? 'border-red-400 focus:border-red-400'
+                            : apiKeyValidation.isValid
+                            ? 'border-green-400 focus:border-green-400'
+                            : 'border-white/20 focus:border-blue-400'
+                        }`}
+                      />
                     </div>
+                    
+                    {/* Validation message */}
+                    {currentApiKey && !apiKeyValidation.isValid && (
+                      <div className={`text-xs mt-1 ${
+                        apiKeyValidation.severity === 'error' ? 'text-red-400' :
+                        apiKeyValidation.severity === 'warning' ? 'text-yellow-400' :
+                        'text-green-400'
+                      }`}>
+                        ⚠️ {apiKeyValidation.message}
+                      </div>
+                    )}
+                    
+                    {/* Help text and link */}
+                    <div className="flex items-center justify-between mt-1">
+                      <div className="text-xs text-white/50">
+                        {config.provider === 'github' 
+                          ? 'Get your token from GitHub Settings → Developer settings'
+                          : 'Get your API key from Google AI Studio'
+                        }
+                      </div>
+                      <button
+                        onClick={() => window.open(apiKeyLinks.url, '_blank')}
+                        className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                      >
+                        {apiKeyLinks.label} ↗
+                      </button>
+                    </div>
+                    
+                    {config.provider === 'github' && (
+                      <div className="text-xs text-yellow-400/70 mt-1">
+                        💡 Your token needs access to GitHub AI models. Select "All repositories" or specific repos with model access.
+                      </div>
+                    )}
                   </div>
 
                   {/* Animation Settings */}

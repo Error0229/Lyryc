@@ -584,29 +584,62 @@ pub fn remove_artist_from_track(track_name: &str, artist_name: &str) -> String {
     result
 }
 
-/// Main track cleaning function - tries LLM first, falls back to regex
+/// Main track cleaning function - tries GitHub AI first, then Gemini, then regex fallback
 pub async fn clean_track_name(track_name: &str) -> String {
-    match clean_track_name_llm(track_name).await {
+    // Load environment variables to check token availability
+    dotenv::dotenv().ok();
+    
+    // Check if GitHub token is available before attempting request
+    if let Ok(github_token) = std::env::var("GITHUB_TOKEN") {
+        if !github_token.trim().is_empty() {
+            debug!("GitHub token available, trying GitHub AI models");
+            match clean_track_name_github(track_name).await {
+                Ok(cleaned) => return cleaned,
+                Err(e) => {
+                    debug!("GitHub AI cleaning failed, trying Gemini fallback: {}", e);
+                }
+            }
+        } else {
+            debug!("GitHub token is empty, skipping GitHub AI models");
+        }
+    } else {
+        debug!("No GitHub token found, skipping GitHub AI models");
+    }
+    
+    // Try Gemini 2.5 Flash-Lite as fallback
+    match clean_track_name_gemini(track_name).await {
         Ok(cleaned) => cleaned,
         Err(e) => {
-            debug!("LLM cleaning failed, using regex fallback: {}", e);
+            debug!("Gemini cleaning also failed, using regex fallback: {}", e);
             clean_track_name_sync(track_name)
         }
     }
 }
 
-/// Cleans track name using LLM when GitHub token is available
-pub async fn clean_track_name_llm(track_name: &str) -> Result<String, String> {
-    // Load environment variables
-    dotenv::dotenv().ok();
+/// Cleans track name using GitHub AI models when token is available
+pub async fn clean_track_name_github(track_name: &str) -> Result<String, String> {
+    clean_track_name_github_with_key(track_name, None).await
+}
 
-    let github_token = match std::env::var("GITHUB_TOKEN") {
-        Ok(token) => token,
-        Err(_) => {
-            debug!("No GitHub token found, falling back to regex cleaning");
-            return Ok(clean_track_name_sync(track_name));
+/// Cleans track name using GitHub AI models with optional API key override
+pub async fn clean_track_name_github_with_key(track_name: &str, api_key_override: Option<String>) -> Result<String, String> {
+    // Prioritize provided API key, fallback to environment
+    let github_token = if let Some(key) = api_key_override {
+        if !key.trim().is_empty() {
+            key
+        } else {
+            return Err("Provided GitHub token is empty".to_string());
         }
+    } else {
+        // Load environment variables only if no override provided
+        dotenv::dotenv().ok();
+        std::env::var("GITHUB_TOKEN")
+            .map_err(|_| "No GitHub token found".to_string())?
     };
+
+    if github_token.trim().is_empty() {
+        return Err("GitHub token is empty".to_string());
+    }
 
     // Best performing models from testing
     // High-performance models from test results - only use models that work for track cleaning
@@ -811,6 +844,147 @@ Follow the configuration strictly, but still apply human judgment per the princi
     }
 
     Err("Could not parse valid cleaned title from LLM response".to_string())
+}
+
+/// Cleans track name using Gemini 2.5 Flash-Lite when API key is available
+pub async fn clean_track_name_gemini(track_name: &str) -> Result<String, String> {
+    clean_track_name_gemini_with_key(track_name, None).await
+}
+
+/// Cleans track name using Gemini with optional API key override
+pub async fn clean_track_name_gemini_with_key(track_name: &str, api_key_override: Option<String>) -> Result<String, String> {
+    // Load environment variables
+    dotenv::dotenv().ok();
+
+    // Prioritize provided API key, fallback to environment
+    let gemini_api_key = api_key_override
+        .filter(|key| !key.trim().is_empty())
+        .or_else(|| std::env::var("GEMINI_API_KEY").ok())
+        .ok_or_else(|| "No Gemini API key found".to_string())?;
+
+    // Use Gemini 2.5 Flash-Lite as the lightweight fallback model
+    let model_id = "gemini-2.5-flash-lite";
+
+    match try_gemini_cleaning(track_name, model_id, &gemini_api_key).await {
+        Ok(cleaned) => {
+            info!(
+                "Gemini cleaning successful with {}: '{}' -> '{}'",
+                model_id, track_name, cleaned
+            );
+            Ok(cleaned)
+        }
+        Err(e) => {
+            debug!("Gemini cleaning failed with {}: {}", model_id, e);
+            Err(e)
+        }
+    }
+}
+
+async fn try_gemini_cleaning(
+    track_name: &str,
+    model_id: &str,
+    gemini_api_key: &str,
+) -> Result<String, String> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    // Create a simplified prompt optimized for the lightweight Flash-Lite model
+    let user_content = format!(
+        r#"Clean this track title by removing platform/marketing fluff but keeping the actual song title:
+
+Original: "{}"
+
+Rules:
+- Remove: "Official Video", "MV", "YouTube Music", platform info, file extensions
+- Keep: song title, version markers (Acoustic, Remix, Live), artist collaborations if part of title
+- If "Artist - Title" format, return just the title part
+- Remove brackets/parentheses containing promotional text
+- Keep Japanese/other language titles as-is
+
+Return only the cleaned title, nothing else:"#,
+        track_name
+    );
+
+    let system_instruction = r#"You are a music metadata cleaner. Clean track titles by removing promotional/platform content while preserving the actual song title. Be concise and accurate. Return only the cleaned title with no explanations or formatting."#;
+
+    let payload = json!({
+        "contents": [{
+            "parts": [{
+                "text": format!("{}\n\n{}", system_instruction, user_content)
+            }]
+        }],
+        "generationConfig": {
+            "temperature": 0.1,
+            "maxOutputTokens": 200,
+            "topP": 0.8,
+            "topK": 10
+        },
+        "safetySettings": [
+            {
+                "category": "HARM_CATEGORY_HARASSMENT",
+                "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+            },
+            {
+                "category": "HARM_CATEGORY_HATE_SPEECH", 
+                "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+            },
+            {
+                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+            },
+            {
+                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+            }
+        ]
+    });
+
+    let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}", model_id, gemini_api_key);
+    
+    let response = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let error_text = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
+        return Err(format!("HTTP {}: {}", status, error_text));
+    }
+
+    let result: Value = response.json().await.map_err(|e| e.to_string())?;
+    
+    // Parse Gemini response format
+    let response_text = result["candidates"][0]["content"]["parts"][0]["text"]
+        .as_str()
+        .ok_or("No content in Gemini response".to_string())?;
+
+    // Clean and extract the title
+    let cleaned_title = response_text.trim()
+        .lines()
+        .next() // Take first line only
+        .unwrap_or(response_text.trim())
+        .trim_matches('"') // Remove quotes if present
+        .trim();
+
+    if cleaned_title.is_empty() {
+        return Err("Empty response from Gemini".to_string());
+    }
+
+    // Basic validation - the response should be reasonable
+    if cleaned_title.len() > track_name.len() * 2 {
+        return Err("Gemini response unreasonably long".to_string());
+    }
+
+    Ok(cleaned_title.to_string())
 }
 
 fn clean_markdown_formatting(text: &str) -> String {
