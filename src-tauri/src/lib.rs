@@ -7,13 +7,17 @@ use tokio::sync::Mutex;
 mod commands;
 mod lyrics;
 mod track_cleaning;
+mod translation;
 mod types;
 mod websocket;
 mod websocket_commands;
 mod window_management;
 
 // Import types and functions from modules
-use commands::{clean_track_name_command, get_current_track, set_current_track};
+use commands::{
+    clean_track_name_command, get_current_track, get_supported_languages, set_current_track,
+    translate_lyrics_command,
+};
 use lyrics::{fetch_lrclib_raw, fetch_lyrics};
 use types::{ClickThroughState, TrackState, WebSocketState};
 use websocket_commands::{
@@ -142,6 +146,8 @@ pub fn run() {
             get_current_track,
             set_current_track,
             clean_track_name_command,
+            translate_lyrics_command,
+            get_supported_languages,
             fetch_lyrics,
             fetch_lrclib_raw,
             init_extension_connection,

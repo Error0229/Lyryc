@@ -2,9 +2,11 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import { LyricLine, WordTiming } from '../stores/lyricsStore';
 import { useLyricsStyleStore } from '../stores/lyricsStyleStore';
+import { TranslatedLyricLine } from '../stores/translationStore';
+import { useTranslationStore } from '../stores/translationStore';
 
 interface CleanLyricDisplayProps {
-  line: LyricLine;
+  line: LyricLine | TranslatedLyricLine;
   currentTime: number;
   adjustedTime: number;
   fontFamily: string;
@@ -19,14 +21,72 @@ const CleanLyricDisplay: React.FC<CleanLyricDisplayProps> = ({
   viewMode = 'highlighted'
 }) => {
   const { style } = useLyricsStyleStore();
+  const { enabled, displayMode, showLanguageIndicator } = useTranslationStore();
   
+  // Calculate dynamic line height based on content type and display mode
+  const calculateLineHeight = (isTranslated: boolean, mode?: string): number => {
+    const baseFontSize = style.fontSize;
+    const animationBuffer = style.animationIntensity > 0 ? 0.2 : 0; // Extra space for animations
+    
+    if (!isTranslated) {
+      // Single language - use standard line height with animation buffer
+      return style.lineHeight + animationBuffer;
+    }
+    
+    // For bilingual display, we need to account for:
+    // 1. Two lines of text stacked vertically
+    // 2. Different font sizes and custom spacing from displayMode
+    // 3. User-defined spacing between lines
+    // 4. Animation buffer for movement effects
+    
+    switch (displayMode.mode) {
+      case 'bilingual':
+        // Stack original and translated vertically
+        // Calculate based on actual font sizes used
+        const originalFontSize = baseFontSize * displayMode.fontSize.original;
+        const translatedFontSize = baseFontSize * displayMode.fontSize.translated;
+        
+        const originalHeight = originalFontSize * 1.2;
+        const translatedHeight = translatedFontSize * 1.2;
+        const userSpacing = displayMode.spacing / 16; // Convert px to rem (assuming 16px base)
+        const breathingRoom = 0.3 + animationBuffer; // Base space + animation buffer
+        
+        return (originalHeight + translatedHeight + userSpacing + breathingRoom) / baseFontSize;
+        
+      case 'side-by-side':
+        // Horizontal layout - use max of both font sizes with animation buffer
+        const maxFontMultiplier = Math.max(displayMode.fontSize.original, displayMode.fontSize.translated);
+        return Math.max(style.lineHeight * maxFontMultiplier, 1.4) + animationBuffer;
+        
+      case 'original':
+        // Single line display with original font size
+        return (style.lineHeight * displayMode.fontSize.original) + animationBuffer;
+        
+      case 'translated':
+        // Single line display with translated font size  
+        return (style.lineHeight * displayMode.fontSize.translated) + animationBuffer;
+        
+      default:
+        // Fallback bilingual mode
+        return Math.max(style.lineHeight * 1.8, 2.2) + animationBuffer;
+    }
+  };
+  
+  // Check if this is a translated line for dynamic calculations
+  const isTranslatedLine = (line: LyricLine | TranslatedLyricLine): line is TranslatedLyricLine => {
+    return 'translatedText' in line;
+  };
+
+  const isTranslated = enabled && isTranslatedLine(line);
+  const dynamicLineHeight = calculateLineHeight(isTranslated, displayMode.mode);
+
   // Create dynamic styles based on user preferences
   const baseTextStyle = {
     fontFamily: style.fontFamily,
     fontSize: `${style.fontSize}rem`,
     fontWeight: style.fontWeight,
     color: style.textColor,
-    lineHeight: style.lineHeight,
+    lineHeight: dynamicLineHeight,
     letterSpacing: `${style.letterSpacing}em`,
     textAlign: style.textAlign as 'left' | 'center' | 'right',
     textShadow: style.textShadow 
@@ -43,6 +103,103 @@ const CleanLyricDisplay: React.FC<CleanLyricDisplayProps> = ({
     borderRadius: '12px',
     padding: '16px 24px',
   } : {};
+
+  // Enhanced bilingual display for translated lines with proper layout handling
+  if (isTranslated) {
+    const translatedLine = line as TranslatedLyricLine;
+    
+    // Apply display mode customization from translation store
+    const originalStyle = {
+      ...baseTextStyle,
+      fontSize: `${style.fontSize * displayMode.fontSize.original}rem`,
+      color: displayMode.colors.original,
+      opacity: displayMode.opacity.original,
+      lineHeight: 1.2, // Override for individual text elements within container
+    };
+    
+    const translatedStyle = {
+      ...baseTextStyle,
+      fontSize: `${style.fontSize * displayMode.fontSize.translated}rem`,
+      color: displayMode.colors.translated,
+      opacity: displayMode.opacity.translated,
+      lineHeight: 1.2, // Override for individual text elements within container
+    };
+
+    // Handle different display modes
+    const renderBilingualContent = () => {
+      switch (displayMode.mode) {
+        case 'original':
+          return (
+            <div style={originalStyle}>
+              {translatedLine.originalText}
+            </div>
+          );
+          
+        case 'translated':
+          return translatedLine.translatedText && (
+            <div style={translatedStyle}>
+              {translatedLine.translatedText}
+            </div>
+          );
+          
+        case 'side-by-side':
+          return (
+            <div className="flex items-center justify-center gap-4">
+              <div style={originalStyle} className="flex-1 text-right">
+                {translatedLine.originalText}
+              </div>
+              <div className="text-white/30">•</div>
+              {translatedLine.translatedText && (
+                <div style={translatedStyle} className="flex-1 text-left">
+                  {translatedLine.translatedText}
+                </div>
+              )}
+            </div>
+          );
+          
+        case 'bilingual':
+        default:
+          // Apply animation settings if enabled
+          const animationProps = displayMode.animation.enabled ? {
+            transition: `all ${displayMode.animation.duration}ms ease-in-out`,
+            transform: style.animationIntensity > 0 ? `scale(${1 + style.animationIntensity / 1000})` : undefined,
+          } : {};
+
+          return (
+            <div 
+              className="transition-all duration-300"
+              style={{ 
+                textAlign: style.textAlign,
+                gap: `${displayMode.spacing}px`,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: style.textAlign === 'center' ? 'center' : 
+                          style.textAlign === 'right' ? 'flex-end' : 'flex-start',
+                ...animationProps
+              }}
+            >
+              {/* Original text */}
+              <div style={originalStyle}>
+                {translatedLine.originalText}
+              </div>
+              
+              {/* Translated text (if available and different) */}
+              {translatedLine.translatedText && translatedLine.translatedText !== translatedLine.originalText && (
+                <div style={translatedStyle}>
+                  {translatedLine.translatedText}
+                </div>
+              )}
+            </div>
+          );
+      }
+    };
+
+    return (
+      <div style={{ ...backgroundStyle }}>
+        {renderBilingualContent()}
+      </div>
+    );
+  }
 
   // If plain mode, just render the text without any highlighting
   if (viewMode === 'plain') {

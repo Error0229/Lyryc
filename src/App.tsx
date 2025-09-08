@@ -8,7 +8,9 @@ import { useLyricsStore } from "./stores/lyricsStore";
 import { useThemeStore } from "./stores/themeStore";
 import { useOffsetStore } from "./stores/offsetStore";
 import { useViewModeStore } from "./stores/viewModeStore";
+import { useTranslationStore } from "./stores/translationStore";
 import { LyricsProcessor } from "./services/lyricsProcessor";
+import { translateLyrics, TranslatedLyricLine } from "./stores/translationStore";
 import { useCurrentTime } from "./hooks/useCurrentTime";
 import { useIndependentTimer } from "./hooks/useSmoothTime";
 import CleanLyricDisplay from "./components/CleanLyricDisplay";
@@ -41,6 +43,11 @@ function App() {
         fallbackToOriginal: true,
       })
   );
+  
+  // Translation state and service
+  const translationStore = useTranslationStore();
+  // Removed TranslationService - using direct store functions instead
+  const [translatedLyrics, setTranslatedLyrics] = useState<TranslatedLyricLine[]>([]);
 
   const [browserTime, setBrowserTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -69,6 +76,53 @@ function App() {
       fetchLyrics(currentTrack.title, currentTrack.artist);
     }
   }, [currentTrack]);
+
+  // Handle translation when lyrics change or translation settings change
+  useEffect(() => {
+    const handleTranslation = async () => {
+      if (!translationStore.enabled || !translationStore.autoTranslate || lyrics.length === 0) {
+        setTranslatedLyrics([]);
+        return;
+      }
+
+      translationStore.setIsTranslating(true);
+      translationStore.setTranslationError(null);
+
+      try {
+        const result = await translateLyrics(lyrics, translationStore.config);
+        
+        if (result.success) {
+          // Convert backend format to frontend format
+          const convertedLines: TranslatedLyricLine[] = result.translated_lines.map((line: any) => ({
+            time: line.time,
+            text: line.translated_text || line.text,
+            duration: line.duration,
+            words: [], // Translation doesn't preserve word timing
+            originalText: line.original_text,
+            translatedText: line.translated_text,
+            translationConfidence: line.translation_confidence,
+            detectedLanguage: line.detected_language
+          }));
+          
+          setTranslatedLyrics(convertedLines);
+          translationStore.setLastTranslationTime(Date.now());
+          console.log(`[App] Translation completed in ${result.processing_time_ms}ms`);
+        } else {
+          console.error('[App] Translation failed:', result.error);
+          translationStore.setTranslationError(result.error || 'Translation failed');
+          setTranslatedLyrics([]);
+        }
+      } catch (error) {
+        console.error('[App] Translation error:', error);
+        translationStore.setTranslationError(error instanceof Error ? error.message : 'Unknown error');
+        setTranslatedLyrics([]);
+      } finally {
+        translationStore.setIsTranslating(false);
+      }
+    };
+
+    handleTranslation();
+  }, [lyrics, translationStore.enabled, translationStore.autoTranslate, translationStore.config]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -291,9 +345,12 @@ function App() {
     };
   }, [setCurrentTrack, setIsPlaying]);
 
-  // Get current line for clean display
+  // Get current line for clean display (with translation support)
   const getCurrentLine = () => {
-    if (!lyrics.length) return null;
+    // Use translated lyrics if available, otherwise fall back to original
+    const displayLyrics = translationStore.enabled && translatedLyrics.length > 0 ? translatedLyrics : lyrics;
+    
+    if (!displayLyrics.length) return null;
     
     const totalOffset = getTotalOffset(currentTrack?.artist || "", currentTrack?.title || "");
     const adjustedTime = currentTime + totalOffset;
@@ -303,9 +360,9 @@ function App() {
       console.log(`[App.getCurrentLine] Offset ${totalOffset.toFixed(2)}s applied: ${currentTime.toFixed(2)}s → ${adjustedTime.toFixed(2)}s for "${currentTrack?.title}" by "${currentTrack?.artist}"`);
     }
     
-    for (let i = 0; i < lyrics.length; i++) {
-      const currentLine = lyrics[i];
-      const nextLine = lyrics[i + 1];
+    for (let i = 0; i < displayLyrics.length; i++) {
+      const currentLine = displayLyrics[i];
+      const nextLine = displayLyrics[i + 1];
       
       if (adjustedTime >= currentLine.time && 
           (!nextLine || adjustedTime < nextLine.time)) {
@@ -601,6 +658,7 @@ function App() {
           </div>
         </motion.div>
       )}
+
     </div>
   );
 }

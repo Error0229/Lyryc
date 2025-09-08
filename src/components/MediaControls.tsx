@@ -5,6 +5,7 @@ import { useLyricsStore } from '../stores/lyricsStore';
 import { useOffsetStore } from '../stores/offsetStore';
 import { useViewModeStore } from '../stores/viewModeStore';
 import AlignmentTester from './AlignmentTester';
+import TranslationSettings from './TranslationSettings';
 
 interface MediaControlsProps {
   currentTime: number;
@@ -283,52 +284,52 @@ const MediaControls: React.FC<MediaControlsProps> = ({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -10, scale: 0.9 }}
             transition={{ type: "spring", stiffness: 400, damping: 30 }}
-            className="absolute bottom-full mb-2 left-1/2 transform -translate-x-1/2 w-72"
+            className="absolute bottom-full mb-2 left-1/2 transform -translate-x-1/2 w-64"
           >
             <div className="
-              bg-black/20 backdrop-blur-xl border border-white/10 
-              rounded-2xl p-4 shadow-2xl space-y-3
+              bg-black/90 backdrop-blur-xl border border-white/20 
+              rounded-xl p-3 shadow-2xl space-y-2
             " style={{
-              background: 'linear-gradient(135deg, rgba(255,255,255,0.15) 0%, rgba(255,255,255,0.05) 100%)',
+              background: 'linear-gradient(135deg, rgba(0,0,0,0.95) 0%, rgba(0,0,0,0.85) 100%)',
               backdropFilter: 'blur(20px) saturate(180%)',
-              boxShadow: '0 8px 32px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.2)'
+              boxShadow: '0 8px 32px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.1)'
             }}>
               
-              {/* Header with View Mode and Style */}
+              {/* Header Row */}
               <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-2">
+                <div className="flex items-center space-x-1">
                   <button
                     onClick={() => setViewMode(viewMode === 'highlighted' ? 'plain' : 'highlighted')}
                     className={`
-                      px-2 py-1 rounded-lg text-xs font-medium transition-all
+                      px-1.5 py-0.5 rounded text-xs transition-all
                       ${viewMode === 'highlighted' 
-                        ? 'bg-blue-500/30 text-blue-200 border border-blue-400/50' 
-                        : 'bg-white/10 text-white/70 border border-white/20 hover:bg-white/20'
+                        ? 'bg-blue-500/30 text-blue-200' 
+                        : 'bg-white/10 text-white/70 hover:bg-white/20'
                       }
                     `}
                   >
-                    {viewMode === 'highlighted' ? '✨ Synced' : '📝 Plain'}
+                    {viewMode === 'highlighted' ? 'Synced' : 'Plain'}
                   </button>
 
                   {onOpenStyleControls && (
                     <button
                       onClick={onOpenStyleControls}
-                      className="px-2 py-1 bg-purple-500/20 hover:bg-purple-500/30 text-purple-200 rounded-lg text-xs font-medium transition-all border border-purple-400/30"
+                      className="px-1.5 py-0.5 bg-purple-500/20 hover:bg-purple-500/30 text-purple-200 rounded text-xs transition-all"
                     >
-                      🎨 Style
+                      Style
                     </button>
                   )}
                 </div>
 
-                <div className="flex items-center space-x-1">
+                <div className="flex items-center space-x-0.5">
                   <button 
-                    className="w-5 h-5 text-white/50 hover:text-white/80 hover:bg-white/10 rounded-full flex items-center justify-center transition-all text-xs"
+                    className="w-4 h-4 text-white/50 hover:text-white/80 hover:bg-white/10 rounded text-xs flex items-center justify-center transition-all"
                     onClick={() => handlePrevNext('previous')}
                   >
                     ⏮
                   </button>
                   <button 
-                    className="w-5 h-5 text-white/50 hover:text-white/80 hover:bg-white/10 rounded-full flex items-center justify-center transition-all text-xs"
+                    className="w-4 h-4 text-white/50 hover:text-white/80 hover:bg-white/10 rounded text-xs flex items-center justify-center transition-all"
                     onClick={() => handlePrevNext('next')}
                   >
                     ⏭
@@ -336,28 +337,35 @@ const MediaControls: React.FC<MediaControlsProps> = ({
                 </div>
               </div>
 
-              {/* Detailed Sync Controls */}
-              <div className="space-y-2">
-                <div className="text-xs text-white/60 font-medium">Track Sync</div>
+              {/* Compact Sync Controls */}
+              <div className="space-y-1">
+                <div className="text-xs text-white/50">Sync</div>
                 <div className="flex items-center justify-center space-x-1">
-                  <button onClick={() => adjustOffset(-0.5)} className="px-2 py-1 bg-red-500/20 hover:bg-red-500/30 text-white rounded-md text-xs transition-all">-0.5</button>
-                  <button onClick={() => adjustOffset(-0.1)} className="px-2 py-1 bg-red-500/15 hover:bg-red-500/25 text-white rounded-md text-xs transition-all">-0.1</button>
-                  <button onClick={() => resetOffset(false)} className="px-2 py-1 bg-white/10 hover:bg-white/20 text-white rounded-md text-xs transition-all">Reset</button>
-                  <button onClick={() => adjustOffset(0.1)} className="px-2 py-1 bg-green-500/15 hover:bg-green-500/25 text-white rounded-md text-xs transition-all">+0.1</button>
-                  <button onClick={() => adjustOffset(0.5)} className="px-2 py-1 bg-green-500/20 hover:bg-green-500/30 text-white rounded-md text-xs transition-all">+0.5</button>
+                  <button onClick={() => adjustOffset(-0.5)} className="px-1 py-0.5 bg-red-500/20 hover:bg-red-500/30 text-red-200 rounded text-xs transition-all">-0.5</button>
+                  <button onClick={() => adjustOffset(-0.1)} className="px-1 py-0.5 bg-red-500/15 hover:bg-red-500/25 text-red-200 rounded text-xs transition-all">-0.1</button>
+                  <button onClick={() => resetOffset(false)} className="px-1 py-0.5 bg-white/10 hover:bg-white/20 text-white/70 rounded text-xs transition-all">0</button>
+                  <button onClick={() => adjustOffset(0.1)} className="px-1 py-0.5 bg-green-500/15 hover:bg-green-500/25 text-green-200 rounded text-xs transition-all">+0.1</button>
+                  <button onClick={() => adjustOffset(0.5)} className="px-1 py-0.5 bg-green-500/20 hover:bg-green-500/30 text-green-200 rounded text-xs transition-all">+0.5</button>
                 </div>
-                
-                <div className="text-xs text-white/60 font-medium">Global Sync</div>
-                <div className="flex items-center justify-center space-x-2">
-                  <button onClick={() => adjustOffset(-0.2, true)} className="px-2 py-1 bg-orange-500/20 hover:bg-orange-500/30 text-orange-200 rounded-md text-xs transition-all">-0.2</button>
-                  <span className="font-mono text-orange-300 text-xs bg-white/5 px-2 py-1 rounded-md">{formatOffset(globalOffset)}</span>
-                  <button onClick={() => adjustOffset(0.2, true)} className="px-2 py-1 bg-orange-500/20 hover:bg-orange-500/30 text-orange-200 rounded-md text-xs transition-all">+0.2</button>
+                <div className="flex items-center justify-center space-x-1">
+                  <span className="text-xs text-white/40">Global:</span>
+                  <button onClick={() => adjustOffset(-0.2, true)} className="px-1 py-0.5 bg-orange-500/20 hover:bg-orange-500/30 text-orange-200 rounded text-xs transition-all">-0.2</button>
+                  <span className="font-mono text-orange-300 text-xs px-1">{formatOffset(globalOffset)}</span>
+                  <button onClick={() => adjustOffset(0.2, true)} className="px-1 py-0.5 bg-orange-500/20 hover:bg-orange-500/30 text-orange-200 rounded text-xs transition-all">+0.2</button>
+                </div>
+              </div>
+
+              {/* Translation Controls */}
+              <div className="space-y-1 pt-1 border-t border-white/10">
+                <div className="text-xs text-white/50">Translation</div>
+                <div className="flex justify-center">
+                  <TranslationSettings className="text-xs" />
                 </div>
               </div>
 
               {/* Alignment Tester */}
-              <div className="pt-2 border-t border-white/10">
-                <div className="text-xs text-white/60 font-medium mb-2">Alignment Test</div>
+              <div className="pt-1 border-t border-white/10">
+                <div className="text-xs text-white/50 mb-1">Test Alignment</div>
                 <AlignmentTester totalDurationSec={duration} />
               </div>
             </div>

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useLyricsStyleStore } from '../stores/lyricsStyleStore';
+import { useTranslationStore } from '../stores/translationStore';
 
 interface StyleControlsProps {
   isOpen: boolean;
@@ -9,7 +10,8 @@ interface StyleControlsProps {
 
 const StyleControls: React.FC<StyleControlsProps> = ({ isOpen, onClose }) => {
   const { style, updateStyle, applyPreset, getPresets, resetToDefault } = useLyricsStyleStore();
-  const [activeTab, setActiveTab] = useState<'presets' | 'font' | 'colors' | 'effects' | 'layout'>('presets');
+  const { displayMode, updateDisplayMode, config, updateConfig } = useTranslationStore();
+  const [activeTab, setActiveTab] = useState<'presets' | 'font' | 'colors' | 'effects' | 'layout' | 'translation'>('presets');
   
   const presets = getPresets();
   
@@ -19,6 +21,7 @@ const StyleControls: React.FC<StyleControlsProps> = ({ isOpen, onClose }) => {
     { id: 'colors', label: '🌈 Colors', icon: '🌈' },
     { id: 'effects', label: '✨ Effects', icon: '✨' },
     { id: 'layout', label: '📐 Layout', icon: '📐' },
+    { id: 'translation', label: '🌍 Translation', icon: '🌍' },
   ];
 
   const fontOptions = [
@@ -47,7 +50,7 @@ const StyleControls: React.FC<StyleControlsProps> = ({ isOpen, onClose }) => {
       >
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-white/10">
-          <h2 className="text-white text-lg font-medium">Lyrics Style</h2>
+          <h2 className="text-white text-lg font-medium">Display Settings</h2>
           <button 
             onClick={onClose}
             className="text-white/60 hover:text-white transition-colors p-1 rounded hover:bg-white/10"
@@ -385,6 +388,261 @@ const StyleControls: React.FC<StyleControlsProps> = ({ isOpen, onClose }) => {
                       onChange={(e) => updateStyle({ letterSpacing: parseFloat(e.target.value) })}
                       className="w-full"
                     />
+                  </div>
+                </motion.div>
+              )}
+
+              {activeTab === 'translation' && (
+                <motion.div
+                  key="translation"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -20 }}
+                  className="space-y-4"
+                >
+                  {/* Display Mode */}
+                  <div>
+                    <label className="block text-white/80 text-sm mb-2">Display Mode</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {(['original', 'translated', 'bilingual', 'side-by-side'] as const).map((mode) => (
+                        <button
+                          key={mode}
+                          onClick={() => updateDisplayMode({ mode })}
+                          className={`
+                            p-2 rounded text-sm transition-colors capitalize
+                            ${displayMode.mode === mode 
+                              ? 'bg-blue-500/30 text-blue-200 border border-blue-400/50' 
+                              : 'bg-white/5 text-white/70 border border-white/10 hover:bg-white/10'
+                            }
+                          `}
+                        >
+                          {mode === 'side-by-side' ? 'Side by Side' : mode}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Font Sizes */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-white/80 text-sm mb-2">Original Size: {Math.round(displayMode.fontSize.original * 100)}%</label>
+                      <input
+                        type="range"
+                        min="0.5"
+                        max="1.5"
+                        step="0.05"
+                        value={displayMode.fontSize.original}
+                        onChange={(e) => updateDisplayMode({ 
+                          fontSize: { ...displayMode.fontSize, original: parseFloat(e.target.value) }
+                        })}
+                        className="w-full"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-white/80 text-sm mb-2">Translation Size: {Math.round(displayMode.fontSize.translated * 100)}%</label>
+                      <input
+                        type="range"
+                        min="0.5"
+                        max="1.5"
+                        step="0.05"
+                        value={displayMode.fontSize.translated}
+                        onChange={(e) => updateDisplayMode({ 
+                          fontSize: { ...displayMode.fontSize, translated: parseFloat(e.target.value) }
+                        })}
+                        className="w-full"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Opacity Settings */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-white/80 text-sm mb-2">Original Opacity: {Math.round(displayMode.opacity.original * 100)}%</label>
+                      <input
+                        type="range"
+                        min="0.3"
+                        max="1"
+                        step="0.05"
+                        value={displayMode.opacity.original}
+                        onChange={(e) => updateDisplayMode({ 
+                          opacity: { ...displayMode.opacity, original: parseFloat(e.target.value) }
+                        })}
+                        className="w-full"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-white/80 text-sm mb-2">Translation Opacity: {Math.round(displayMode.opacity.translated * 100)}%</label>
+                      <input
+                        type="range"
+                        min="0.3"
+                        max="1"
+                        step="0.05"
+                        value={displayMode.opacity.translated}
+                        onChange={(e) => updateDisplayMode({ 
+                          opacity: { ...displayMode.opacity, translated: parseFloat(e.target.value) }
+                        })}
+                        className="w-full"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Colors */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="flex items-center space-x-3">
+                      <div className="text-white/80 text-sm">Original Color</div>
+                      <input
+                        type="color"
+                        value={displayMode.colors.original}
+                        onChange={(e) => updateDisplayMode({ 
+                          colors: { ...displayMode.colors, original: e.target.value }
+                        })}
+                        className="w-12 h-8 rounded border border-white/20 bg-transparent"
+                      />
+                    </div>
+                    <div className="flex items-center space-x-3">
+                      <div className="text-white/80 text-sm">Translation Color</div>
+                      <input
+                        type="color"
+                        value={displayMode.colors.translated}
+                        onChange={(e) => updateDisplayMode({ 
+                          colors: { ...displayMode.colors, translated: e.target.value }
+                        })}
+                        className="w-12 h-8 rounded border border-white/20 bg-transparent"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Spacing */}
+                  <div>
+                    <label className="block text-white/80 text-sm mb-2">Line Spacing: {displayMode.spacing}px</label>
+                    <input
+                      type="range"
+                      min="0"
+                      max="20"
+                      value={displayMode.spacing}
+                      onChange={(e) => updateDisplayMode({ spacing: parseInt(e.target.value) })}
+                      className="w-full"
+                    />
+                  </div>
+
+                  {/* Provider Selection */}
+                  <div>
+                    <label className="block text-white/80 text-sm mb-2">Translation Provider</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {(['github', 'gemini'] as const).map((provider) => (
+                        <button
+                          key={provider}
+                          onClick={() => updateConfig({ provider })}
+                          className={`
+                            p-3 rounded text-sm transition-colors capitalize
+                            ${config.provider === provider 
+                              ? 'bg-blue-500/30 text-blue-200 border border-blue-400/50' 
+                              : 'bg-white/5 text-white/70 border border-white/10 hover:bg-white/10'
+                            }
+                          `}
+                        >
+                          <div className="font-medium">
+                            {provider === 'github' ? 'GitHub AI' : 'Google Gemini'}
+                          </div>
+                          <div className="text-xs opacity-70 mt-1">
+                            {provider === 'github' ? 'Llama, Maverick, Ministral' : '2.0 Flash, 2.5 Flash, 2.5 Pro'}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* API Key Configuration */}
+                  <div>
+                    <label className="block text-white/80 text-sm mb-2">
+                      {config.provider === 'github' ? 'GitHub API Key' : 'Gemini API Key'}
+                    </label>
+                    <input
+                      type="password"
+                      placeholder={config.provider === 'github' 
+                        ? 'Enter GitHub personal access token' 
+                        : 'Enter Gemini API key'
+                      }
+                      value={config.provider === 'github' 
+                        ? config.github_api_key || '' 
+                        : config.gemini_api_key || ''
+                      }
+                      onChange={(e) => updateConfig(
+                        config.provider === 'github'
+                          ? { github_api_key: e.target.value }
+                          : { gemini_api_key: e.target.value }
+                      )}
+                      className="w-full px-3 py-2 bg-white/5 border border-white/20 rounded text-white placeholder-white/50 focus:border-blue-400 focus:outline-none"
+                    />
+                    <div className="text-xs text-white/50 mt-1">
+                      {config.provider === 'github' 
+                        ? 'Get your token from GitHub Settings → Developer settings → Personal access tokens'
+                        : 'Get your API key from Google AI Studio'
+                      }
+                    </div>
+                  </div>
+
+                  {/* Animation Settings */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-white/80 text-sm">Animations</span>
+                      <button
+                        onClick={() => updateDisplayMode({ 
+                          animation: { ...displayMode.animation, enabled: !displayMode.animation.enabled }
+                        })}
+                        className={`
+                          px-3 py-1 rounded text-sm transition-colors
+                          ${displayMode.animation.enabled 
+                            ? 'bg-green-500/30 text-green-200' 
+                            : 'bg-white/10 text-white/60'
+                          }
+                        `}
+                      >
+                        {displayMode.animation.enabled ? 'On' : 'Off'}
+                      </button>
+                    </div>
+                    
+                    {displayMode.animation.enabled && (
+                      <>
+                        <div>
+                          <label className="block text-white/80 text-sm mb-2">Animation Type</label>
+                          <div className="grid grid-cols-3 gap-2">
+                            {(['fade', 'slide', 'scale'] as const).map((type) => (
+                              <button
+                                key={type}
+                                onClick={() => updateDisplayMode({ 
+                                  animation: { ...displayMode.animation, type }
+                                })}
+                                className={`
+                                  p-2 rounded text-sm transition-colors capitalize
+                                  ${displayMode.animation.type === type 
+                                    ? 'bg-blue-500/30 text-blue-200 border border-blue-400/50' 
+                                    : 'bg-white/5 text-white/70 border border-white/10 hover:bg-white/10'
+                                  }
+                                `}
+                              >
+                                {type}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        
+                        <div>
+                          <label className="block text-white/80 text-sm mb-2">Duration: {displayMode.animation.duration}ms</label>
+                          <input
+                            type="range"
+                            min="100"
+                            max="1000"
+                            step="50"
+                            value={displayMode.animation.duration}
+                            onChange={(e) => updateDisplayMode({ 
+                              animation: { ...displayMode.animation, duration: parseInt(e.target.value) }
+                            })}
+                            className="w-full"
+                          />
+                        </div>
+                      </>
+                    )}
                   </div>
                 </motion.div>
               )}
