@@ -1,8 +1,55 @@
-use log::{debug, info, error};
+use log::{debug, info, error, warn};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+// Global model blacklist to track rate-limited models
+lazy_static::lazy_static! {
+    static ref MODEL_BLACKLIST: Arc<Mutex<HashMap<String, u64>>> = Arc::new(Mutex::new(HashMap::new()));
+}
+
+/// Check if a model is currently blacklisted (rate-limited)
+pub fn is_model_blacklisted(model_id: &str) -> bool {
+    if let Ok(blacklist) = MODEL_BLACKLIST.lock() {
+        if let Some(&blacklist_until) = blacklist.get(model_id) {
+            let current_time = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            
+            if current_time < blacklist_until {
+                debug!("Model {} is blacklisted until {}", model_id, blacklist_until);
+                return true;
+            } else {
+                // Blacklist has expired, remove it
+                debug!("Model {} blacklist expired, removing", model_id);
+                drop(blacklist);
+                if let Ok(mut blacklist) = MODEL_BLACKLIST.lock() {
+                    blacklist.remove(model_id);
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Blacklist a model for a specified duration (in seconds)
+pub fn blacklist_model(model_id: &str, wait_seconds: u64) {
+    let blacklist_until = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() + wait_seconds;
+    
+    if let Ok(mut blacklist) = MODEL_BLACKLIST.lock() {
+        blacklist.insert(model_id.to_string(), blacklist_until);
+        warn!("Blacklisted model {} for {} seconds (until {})", model_id, wait_seconds, blacklist_until);
+    }
+}
+
+// Removed parse_rate_limit_wait_time since we use fixed 24-hour blacklisting
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TranslationConfig {
@@ -55,7 +102,7 @@ impl Default for TranslationConfig {
             preserve_rhyme: true,
             preserve_meaning: true,
             maintain_structure: true,
-            provider: "github".to_string(),
+            provider: "gemini".to_string(), // Default to Gemini for better rate limits
             github_api_key: None,
             gemini_api_key: None,
         }
@@ -117,17 +164,39 @@ async fn translate_lyrics_github(
         .or_else(|| std::env::var("GITHUB_TOKEN").ok())
         .ok_or_else(|| "GitHub API key required for translation".to_string())?;
 
-    // Best performing models from testing (similar to track cleaning)
-    let models = [
-        "meta/Meta-Llama-3.1-8B-Instruct",
-        "meta/Llama-4-Maverick-17B-128E-Instruct-FP8", 
-        "mistral-ai/Ministral-3B",
+    // High-performance models from test results - only use models that work
+    let all_models = [
+        "meta/Llama-4-Maverick-17B-128E-Instruct-FP8",  // 98.33% accuracy - best performer
+        "openai/gpt-4.1-nano",                           // 98.33% accuracy - excellent
+        "openai/gpt-4o-mini",                            // 96.67% accuracy - reliable
+        "mistral ai/Mistral-Large-2411",                 // 96.67% accuracy - proven
+        "mistral ai/mistral-medium-2505",                // 96.67% accuracy - consistent
+        "mistral ai/mistral-small-2503",                 // 96.67% accuracy - fast
+        "meta/Meta-Llama-3.1-8B-Instruct",              // 95% accuracy - very fast
+        "mistral ai/Codestral-2501",                     // 95% accuracy - good
+        "deepseek/DeepSeek-V3-0324",                     // 90% accuracy - backup
+        "meta/Llama-3.3-70B-Instruct",                   // 90% accuracy - free
+        "xai/grok-3",                                     // 90% accuracy - alternative
+        "meta/Llama-4-Scout-17B-16E-Instruct",          // 90% accuracy - reliable
     ];
+
+    // Filter out blacklisted models
+    let available_models: Vec<&str> = all_models
+        .iter()
+        .filter(|model| !is_model_blacklisted(model))
+        .cloned()
+        .collect();
+
+    if available_models.is_empty() {
+        return Err("All GitHub AI models are currently rate-limited".to_string());
+    }
+
+    info!("Available GitHub models: {} out of {} total", available_models.len(), all_models.len());
 
     // Pass language detection to translation function - no separate API call
     let source_language = config.source_language.clone();
 
-    for (i, model_id) in models.iter().enumerate() {
+    for (i, model_id) in available_models.iter().enumerate() {
         match try_llm_translation(lyrics, config, &source_language, model_id, &github_token).await {
             Ok(result) => {
                 info!(
@@ -137,11 +206,18 @@ async fn translate_lyrics_github(
                 return Ok(result);
             }
             Err(e) => {
+                // Check if this is a rate limit error and blacklist the model for 24 hours
+                if e.contains("429") && e.contains("Rate limit") {
+                    // GitHub AI rate limits are daily per model, so blacklist for exactly 24 hours
+                    blacklist_model(model_id, 86400); // 24 hours = 86400 seconds
+                    warn!("Model {} rate limited, blacklisted for 24 hours", model_id);
+                }
+                
                 debug!(
                     "Translation failed with {}: {} (attempt {}/{})",
-                    model_id, e, i + 1, models.len()
+                    model_id, e, i + 1, available_models.len()
                 );
-                if i < models.len() - 1 {
+                if i < available_models.len() - 1 {
                     // Add delay between attempts
                     tokio::time::sleep(Duration::from_millis(500)).await;
                 }
@@ -687,7 +763,7 @@ mod tests {
             preserve_rhyme: true,
             preserve_meaning: true,
             maintain_structure: true,
-            provider: "github".to_string(),
+            provider: "github".to_string(), // Use GitHub for testing
             github_api_key: None,
             gemini_api_key: None,
         };

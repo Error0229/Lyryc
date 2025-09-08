@@ -529,7 +529,7 @@ const StyleControls: React.FC<StyleControlsProps> = ({ isOpen, onClose }) => {
                   <div>
                     <label className="block text-white/80 text-sm mb-2">Translation Provider</label>
                     <div className="grid grid-cols-2 gap-2">
-                      {(['github', 'gemini'] as const).map((provider) => (
+                      {(['gemini', 'github'] as const).map((provider) => (
                         <button
                           key={provider}
                           onClick={() => updateConfig({ provider })}
@@ -543,6 +543,9 @@ const StyleControls: React.FC<StyleControlsProps> = ({ isOpen, onClose }) => {
                         >
                           <div className="font-medium">
                             {provider === 'github' ? 'GitHub AI' : 'Google Gemini'}
+                            {provider === 'gemini' && (
+                              <span className="text-green-400 text-xs ml-1">• Recommended</span>
+                            )}
                           </div>
                           <div className="text-xs opacity-70 mt-1">
                             {provider === 'github' ? 'Llama, Maverick, Ministral' : '2.0 Flash, 2.5 Flash, 2.5 Pro'}

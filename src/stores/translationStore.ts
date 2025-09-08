@@ -130,7 +130,7 @@ const defaultConfig: TranslationConfig = {
   preserve_rhyme: true,
   preserve_meaning: true,
   maintain_structure: true,
-  provider: 'github',
+  provider: 'gemini', // Default to Gemini for better rate limits
   github_api_key: undefined,
   gemini_api_key: undefined
 };

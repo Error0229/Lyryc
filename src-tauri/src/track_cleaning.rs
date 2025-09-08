@@ -1,8 +1,11 @@
-use log::{debug, info};
+use log::{debug, info, warn};
 use regex::Regex;
 use reqwest::Client;
 use serde_json::{json, Value};
 use std::time::Duration;
+
+// Import shared model blacklist from translation module
+use crate::translation::{is_model_blacklisted, blacklist_model};
 
 pub fn clean_track_name_sync(track_name: &str) -> String {
     let mut cleaned = track_name.to_string();
@@ -606,13 +609,37 @@ pub async fn clean_track_name_llm(track_name: &str) -> Result<String, String> {
     };
 
     // Best performing models from testing
-    let models = [
-        "meta/Meta-Llama-3.1-8B-Instruct",
-        "meta/Llama-4-Maverick-17B-128E-Instruct-FP8",
-        "mistral-ai/Ministral-3B",
+    // High-performance models from test results - only use models that work for track cleaning
+    let all_models = [
+        "meta/Llama-4-Maverick-17B-128E-Instruct-FP8",  // 98.33% accuracy - best performer
+        "openai/gpt-4.1-nano",                           // 98.33% accuracy - excellent
+        "openai/gpt-4o-mini",                            // 96.67% accuracy - reliable
+        "mistral ai/Mistral-Large-2411",                 // 96.67% accuracy - proven
+        "mistral ai/mistral-medium-2505",                // 96.67% accuracy - consistent
+        "mistral ai/mistral-small-2503",                 // 96.67% accuracy - fast
+        "meta/Meta-Llama-3.1-8B-Instruct",              // 95% accuracy - very fast
+        "mistral ai/Codestral-2501",                     // 95% accuracy - good
+        "deepseek/DeepSeek-V3-0324",                     // 90% accuracy - backup
+        "meta/Llama-3.3-70B-Instruct",                   // 90% accuracy - free
+        "xai/grok-3",                                     // 90% accuracy - alternative
+        "meta/Llama-4-Scout-17B-16E-Instruct",          // 90% accuracy - reliable
     ];
 
-    for (i, model_id) in models.iter().enumerate() {
+    // Filter out blacklisted models
+    let available_models: Vec<&str> = all_models
+        .iter()
+        .filter(|model| !is_model_blacklisted(model))
+        .cloned()
+        .collect();
+
+    if available_models.is_empty() {
+        debug!("All GitHub AI models are currently rate-limited, falling back to regex cleaning");
+        return Ok(clean_track_name_sync(track_name));
+    }
+
+    info!("Available GitHub models for track cleaning: {} out of {} total", available_models.len(), all_models.len());
+
+    for (i, model_id) in available_models.iter().enumerate() {
         match try_llm_cleaning(track_name, model_id, &github_token).await {
             Ok(cleaned) => {
                 info!(
@@ -622,14 +649,21 @@ pub async fn clean_track_name_llm(track_name: &str) -> Result<String, String> {
                 return Ok(cleaned);
             }
             Err(e) => {
+                // Check if this is a rate limit error and blacklist the model for 24 hours
+                if e.contains("429") && e.contains("Rate limit") {
+                    // GitHub AI rate limits are daily per model, so blacklist for exactly 24 hours
+                    blacklist_model(model_id, 86400); // 24 hours = 86400 seconds
+                    warn!("Model {} rate limited for track cleaning, blacklisted for 24 hours", model_id);
+                }
+                
                 debug!(
                     "LLM cleaning failed with {}: {} (attempt {}/{})",
                     model_id,
                     e,
                     i + 1,
-                    models.len()
+                    available_models.len()
                 );
-                if i < models.len() - 1 {
+                if i < available_models.len() - 1 {
                     // Add delay between attempts
                     tokio::time::sleep(Duration::from_millis(500)).await;
                 }
