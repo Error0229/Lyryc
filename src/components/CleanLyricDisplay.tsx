@@ -5,7 +5,7 @@ import { useLyricsStyleStore } from '../stores/lyricsStyleStore';
 import { TranslatedLyricLine } from '../stores/translationStore';
 import { useTranslationStore } from '../stores/translationStore';
 import { useHiraganaStore } from '../stores/hiraganaStore';
-import { kuroshiroService } from '../services/kuroshiroService';
+import { invoke } from '@tauri-apps/api/core';
 import { isJapanese, hasKanji, isLikelyJapanese } from '../utils/japaneseDetection';
 import '../styles/ruby.css';
 
@@ -60,13 +60,13 @@ const CleanLyricDisplay: React.FC<CleanLyricDisplayProps> = ({
       
       try {
         // Convert full text
-        const fullHiragana = await kuroshiroService.convertToHiragana(textToConvert);
+        const furiganaResult = await invoke<{segments: Array<{text: string, reading?: string}>, html: string}>('generate_furigana_command', { text: textToConvert });
+        const fullHiragana = furiganaResult.segments.map(segment => segment.reading || segment.text).join('');
         setHiraganaText(fullHiragana);
 
         // Generate furigana data for ruby display using autoruby
         if (hiraganaSettings.displayMode === 'ruby') {
-          const furiganaSegments = await kuroshiroService.getFuriganaSegments(textToConvert);
-          setFuriganaData(furiganaSegments);
+          setFuriganaData(furiganaResult.segments);
         }
 
         // Convert individual words if available
@@ -77,10 +77,11 @@ const CleanLyricDisplay: React.FC<CleanLyricDisplayProps> = ({
           for (let i = 0; i < line.words.length; i++) {
             const word = line.words[i];
             if (isLikelyJapanese(word.word) && hasKanji(word.word)) {
-              wordHiraganaMap[i] = await kuroshiroService.convertToHiragana(word.word);
+              const wordResult = await invoke<{segments: Array<{text: string, reading?: string}>, html: string}>('generate_furigana_command', { text: word.word });
+              wordHiraganaMap[i] = wordResult.segments.map(segment => segment.reading || segment.text).join('');
               
               if (hiraganaSettings.displayMode === 'ruby') {
-                wordFuriganaMap[i] = await kuroshiroService.getFuriganaSegments(word.word);
+                wordFuriganaMap[i] = wordResult.segments;
               }
             }
           }

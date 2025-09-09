@@ -713,7 +713,7 @@ const StyleControls: React.FC<StyleControlsProps> = ({ isOpen, onClose }) => {
                   <HiraganaSettings isVisible={true} />
                   
                   <div className="text-xs text-white/50 border-t border-white/10 pt-3">
-                    <strong>How it works:</strong> When enabled, hiragana readings will automatically appear for Japanese lyrics containing kanji characters. The kuroshiro library analyzes the text and provides phonetic readings to help with pronunciation.
+                    <strong>How it works:</strong> When enabled, hiragana readings will automatically appear for Japanese lyrics containing kanji characters. The autoruby library analyzes the text and provides phonetic readings to help with pronunciation.
                   </div>
                 </motion.div>
               )}
