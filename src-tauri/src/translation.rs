@@ -310,10 +310,19 @@ Approach each song as a complete artistic work with unified themes, emotions, an
 
 ## Translation Approach
 - **Holistic Analysis**: Consider the entire song's context before translating any individual line
+- **Inter-line Fluency**: Ensure smooth transitions between consecutive lyrics lines - avoid abrupt tone changes or grammatical inconsistencies
 - **Natural Flow**: Prioritize idiomatic expressions over literal word-for-word translation  
-- **Coherence**: Ensure consistent tone, pronouns, and terminology throughout
+- **Progressive Coherence**: Build meaning gradually across lines, maintaining consistent pronouns, tenses, and narrative perspective
 - **Cultural Sensitivity**: Adapt cultural references appropriately while preserving meaning
-- **Musical Awareness**: Consider how the translation will sound when sung
+- **Musical Awareness**: Consider how consecutive lines will sound when sung together
+
+## Line-by-Line Fluency Guidelines
+- Each line should flow naturally into the next
+- Maintain consistent grammatical structure across related lines (verses/choruses)
+- Preserve parallel structures and repetitive patterns
+- Ensure pronoun consistency throughout (I/you/we/they)
+- Keep verb tenses coherent across the song's timeline
+- Create smooth semantic bridges between ideas
 
 ## Output Requirements
 - Return EXACTLY one translated line per input line
@@ -326,7 +335,7 @@ Approach each song as a complete artistic work with unified themes, emotions, an
 - Sound natural and idiomatic in the target language
 - Maintain emotional impact and artistic intent
 - Preserve names, emojis, and special markers
-- Create smooth, singable translations when appropriate"#;
+- Create smooth, singable translations with seamless line-to-line transitions"#;
 
     let payload = json!({
         "messages": [
@@ -424,48 +433,66 @@ Constraints:
         ),
         "rhyming" => format!(
             "You are a context-aware lyrics translator/adaptor to {}.
-Priorities: (1) rhyme scheme preservation, (2) musical flow, (3) meaning fidelity.
+Priorities: (1) rhyme scheme preservation, (2) line-to-line musical flow, (3) overall rhythm consistency, (4) meaning fidelity.
 
 Process:
 1) Read all lyrics first; identify rhyme patterns, meter, and musical structure
-2) Translate by verse/chorus sections, maintaining rhyme schemes and rhythm
-3) Allow moderate paraphrase to achieve singable rhymes in {}
-4) Keep names/emojis/special markers; prioritize rhyme over literal meaning
-5) Unify vocabulary across verses; prefer musical/rhythmic phrasing
+2) Translate by verse/chorus sections, ensuring smooth transitions between rhyming lines
+3) Allow moderate paraphrase to achieve singable rhymes in {} while maintaining flow
+4) Keep names/emojis/special markers; balance rhyme with natural line progression
+5) Unify vocabulary across verses; prefer musical/rhythmic phrasing that connects lines seamlessly
+
+Special Focus - Rhyming Flow:
+• Ensure rhyming lines connect naturally, not just phonetically
+• Maintain consistent meter that allows smooth singing between lines
+• Create bridges between non-rhyming lines within verses
+• Preserve the song's rhythmic momentum throughout
 
 Constraints:
 • No commentary/footnotes  
 • Output exactly in requested format
-• Maintain singability and rhyme structure",
+• Maintain singability and rhyme structure with seamless transitions",
             target_lang_name, target_lang_name
         ),
         "poetic" => format!(
             "You are a context-aware lyrics translator/adaptor to {}.
-Priorities: (1) artistic beauty, (2) emotional impact, (3) cultural resonance.
+Priorities: (1) artistic beauty, (2) line-to-line poetic flow, (3) emotional impact, (4) cultural resonance.
 
 Process:
 1) Read all lyrics first; infer artistic intent, imagery, and emotional arc
-2) Translate by stanza with focus on poetic devices and metaphor
-3) Allow creative adaptation to capture artistic essence in {}
-4) Keep names/emojis/special markers; enhance poetic elements
-5) Unify tone and imagery; prefer beautiful, evocative phrasing
+2) Translate by stanza with focus on poetic devices and smooth metaphor transitions
+3) Allow creative adaptation to capture artistic essence in {} while maintaining poetic continuity
+4) Keep names/emojis/special markers; enhance poetic elements that bridge lines beautifully
+5) Unify tone and imagery; prefer evocative phrasing that creates seamless poetic progression
+
+Special Focus - Poetic Flow:
+• Ensure each line builds upon the previous one poetically
+• Maintain consistent poetic voice and imagery throughout
+• Create graceful transitions between metaphors and concepts
+• Preserve the emotional crescendo across consecutive lines
 
 Constraints:
 • No commentary/footnotes
 • Output exactly in requested format  
-• Prioritize artistic impact over literal accuracy",
+• Prioritize artistic impact with smooth line-to-line transitions",
             target_lang_name, target_lang_name
         ),
         "natural" | _ => format!(
             "You are a context-aware lyrics translator/adaptor to {}.
-Priorities: (1) scenario fit & naturalness, (2) whole-song coherence, (3) meaning fidelity.
+Priorities: (1) scenario fit & naturalness, (2) line-to-line fluency, (3) whole-song coherence, (4) meaning fidelity.
 
 Process:
 1) Read all lyrics first; infer roles, mood, setting, time, register, and recurring motifs
-2) Translate by stanza (not strict line-by-line literal). Allow light paraphrase/reordering to sound natural in {}
-3) Keep names/emojis/special markers; maintain natural flow over strict rhyme
-4) Unify pronouns/tense/terms across the whole song; prefer idiomatic {}
-5) Final coherence sweep: remove awkward phrasing and contradictions
+2) Translate by stanza ensuring smooth line transitions. Allow light paraphrase/reordering to sound natural in {}
+3) Keep names/emojis/special markers; prioritize seamless line-to-line flow over strict literalness
+4) Unify pronouns/tense/terms across the whole song; prefer idiomatic {} with consistent voice
+5) Final fluency sweep: ensure each line flows naturally into the next, removing awkward transitions and contradictions
+
+Special Focus - Line Transitions:
+• Check that consecutive lines connect smoothly (grammatically and semantically)
+• Maintain consistent narrative voice and perspective throughout
+• Preserve the song's emotional arc with gradual builds and releases
+• Ensure parallel structures in repeated sections (chorus, bridge)
 
 Constraints:
 • No commentary/footnotes
@@ -613,10 +640,19 @@ Approach each song as a complete artistic work with unified themes, emotions, an
 
 ## Translation Approach
 - **Holistic Analysis**: Consider the entire song's context before translating any individual line
+- **Inter-line Fluency**: Ensure smooth transitions between consecutive lyrics lines - avoid abrupt tone changes or grammatical inconsistencies
 - **Natural Flow**: Prioritize idiomatic expressions over literal word-for-word translation  
-- **Coherence**: Ensure consistent tone, pronouns, and terminology throughout
+- **Progressive Coherence**: Build meaning gradually across lines, maintaining consistent pronouns, tenses, and narrative perspective
 - **Cultural Sensitivity**: Adapt cultural references appropriately while preserving meaning
-- **Musical Awareness**: Consider how the translation will sound when sung
+- **Musical Awareness**: Consider how consecutive lines will sound when sung together
+
+## Line-by-Line Fluency Guidelines
+- Each line should flow naturally into the next
+- Maintain consistent grammatical structure across related lines (verses/choruses)
+- Preserve parallel structures and repetitive patterns
+- Ensure pronoun consistency throughout (I/you/we/they)
+- Keep verb tenses coherent across the song's timeline
+- Create smooth semantic bridges between ideas
 
 ## Output Requirements
 - Return EXACTLY one translated line per input line
@@ -629,7 +665,7 @@ Approach each song as a complete artistic work with unified themes, emotions, an
 - Sound natural and idiomatic in the target language
 - Maintain emotional impact and artistic intent
 - Preserve names, emojis, and special markers
-- Create smooth, singable translations when appropriate"#;
+- Create smooth, singable translations with seamless line-to-line transitions"#;
 
     let payload = json!({
         "contents": [{
@@ -752,33 +788,42 @@ fn detect_language_fallback(lyrics: &[LyricLine]) -> String {
         .join(" ")
         .to_lowercase();
 
-    // Basic Unicode range detection for non-Latin scripts
-    if sample_text.chars().any(|c| matches!(c, '\u{3040}'..='\u{309f}' | '\u{30a0}'..='\u{30ff}' | '\u{4e00}'..='\u{9faf}')) {
-        return "ja".to_string(); // Japanese
+    // More accurate language detection that doesn't confuse Japanese and Chinese
+    let hiragana_count = sample_text.chars().filter(|c| matches!(c, '\u{3040}'..='\u{309f}')).count();
+    let katakana_count = sample_text.chars().filter(|c| matches!(c, '\u{30a0}'..='\u{30ff}')).count();
+    let kanji_count = sample_text.chars().filter(|c| matches!(c, '\u{4e00}'..='\u{9faf}')).count();
+    let total_chars = sample_text.chars().count();
+    
+    // Japanese detection: must have kana (hiragana or katakana)
+    if hiragana_count > 0 || katakana_count > 0 {
+        let kana_ratio = (hiragana_count + katakana_count) as f32 / total_chars as f32;
+        if kana_ratio > 0.1 { // At least 10% kana indicates Japanese
+            return "ja".to_string();
+        }
     }
-    if sample_text
-        .chars()
-        .any(|c| matches!(c, '\u{ac00}'..='\u{d7af}'))
-    {
-        return "ko".to_string(); // Korean
+    
+    // Korean detection
+    if sample_text.chars().any(|c| matches!(c, '\u{ac00}'..='\u{d7af}')) {
+        return "ko".to_string();
     }
-    if sample_text
-        .chars()
-        .any(|c| matches!(c, '\u{4e00}'..='\u{9fff}'))
-    {
-        return "zh".to_string(); // Chinese (default to simplified)
+    
+    // Chinese detection: has kanji but very little or no kana
+    if kanji_count > 0 {
+        let kana_ratio = (hiragana_count + katakana_count) as f32 / total_chars as f32;
+        let kanji_ratio = kanji_count as f32 / total_chars as f32;
+        if kanji_ratio > 0.3 && kana_ratio < 0.1 { // Mostly kanji with little kana
+            return "zh".to_string();
+        }
     }
-    if sample_text
-        .chars()
-        .any(|c| matches!(c, '\u{0400}'..='\u{04ff}'))
-    {
-        return "ru".to_string(); // Russian
+    
+    // Russian detection
+    if sample_text.chars().any(|c| matches!(c, '\u{0400}'..='\u{04ff}')) {
+        return "ru".to_string();
     }
-    if sample_text
-        .chars()
-        .any(|c| matches!(c, '\u{0600}'..='\u{06ff}'))
-    {
-        return "ar".to_string(); // Arabic
+    
+    // Arabic detection
+    if sample_text.chars().any(|c| matches!(c, '\u{0600}'..='\u{06ff}')) {
+        return "ar".to_string();
     }
 
     // Default to English for Latin scripts

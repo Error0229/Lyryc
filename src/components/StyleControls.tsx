@@ -2,7 +2,9 @@ import React, { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useLyricsStyleStore } from '../stores/lyricsStyleStore';
 import { useTranslationStore } from '../stores/translationStore';
+import { useHiraganaStore } from '../stores/hiraganaStore';
 import { validateApiKey, getApiKeyLinks } from '../utils/apiKeyValidation';
+import HiraganaSettings from './HiraganaSettings';
 
 interface StyleControlsProps {
   isOpen: boolean;
@@ -12,7 +14,9 @@ interface StyleControlsProps {
 const StyleControls: React.FC<StyleControlsProps> = ({ isOpen, onClose }) => {
   const { style, updateStyle, applyPreset, getPresets, resetToDefault } = useLyricsStyleStore();
   const { displayMode, updateDisplayMode, config, updateConfig } = useTranslationStore();
-  const [activeTab, setActiveTab] = useState<'presets' | 'font' | 'colors' | 'effects' | 'layout' | 'translation'>('presets');
+  const { settings: hiraganaSettings } = useHiraganaStore();
+  const [activeTab, setActiveTab] = useState<'presets' | 'font' | 'colors' | 'effects' | 'layout' | 'translation' | 'hiragana'>('presets');
+  const [showHiraganaSettings, setShowHiraganaSettings] = useState(false);
   
   // Validate current API key
   const currentApiKey = config.provider === 'github' ? config.github_api_key : config.gemini_api_key;
@@ -28,6 +32,7 @@ const StyleControls: React.FC<StyleControlsProps> = ({ isOpen, onClose }) => {
     { id: 'effects', label: '✨ Effects', icon: '✨' },
     { id: 'layout', label: '📐 Layout', icon: '📐' },
     { id: 'translation', label: '🌍 Translation', icon: '🌍' },
+    { id: 'hiragana', label: 'あ Hiragana', icon: 'あ' },
   ];
 
   const fontOptions = [
@@ -693,6 +698,22 @@ const StyleControls: React.FC<StyleControlsProps> = ({ isOpen, onClose }) => {
                         </div>
                       </>
                     )}
+                  </div>
+                </motion.div>
+              )}
+
+              {activeTab === 'hiragana' && (
+                <motion.div
+                  key="hiragana"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -20 }}
+                  className="space-y-4"
+                >
+                  <HiraganaSettings isVisible={true} />
+                  
+                  <div className="text-xs text-white/50 border-t border-white/10 pt-3">
+                    <strong>How it works:</strong> When enabled, hiragana readings will automatically appear for Japanese lyrics containing kanji characters. The kuroshiro library analyzes the text and provides phonetic readings to help with pronunciation.
                   </div>
                 </motion.div>
               )}

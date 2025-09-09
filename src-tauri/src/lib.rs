@@ -5,6 +5,7 @@ use tokio::sync::Mutex;
 
 // Module declarations
 mod commands;
+mod furigana;
 mod lyrics;
 mod track_cleaning;
 mod translation;
@@ -18,6 +19,7 @@ use commands::{
     clean_track_name_command, clean_track_name_with_config, get_current_track, get_supported_languages, set_current_track,
     translate_lyrics_command,
 };
+use furigana::generate_furigana_command;
 use lyrics::{fetch_lrclib_raw, fetch_lyrics};
 use types::{ClickThroughState, TrackState, WebSocketState};
 use websocket_commands::{
@@ -167,7 +169,8 @@ pub fn run() {
             restore_from_tray,
             toggle_window_visibility,
             quit_app,
-            enable_drag_mode
+            enable_drag_mode,
+            generate_furigana_command
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -6,6 +6,7 @@ import { useOffsetStore } from '../stores/offsetStore';
 import { useViewModeStore } from '../stores/viewModeStore';
 import AlignmentTester from './AlignmentTester';
 import TranslationSettings from './TranslationSettings';
+import HiraganaToggle from './HiraganaToggle';
 
 interface MediaControlsProps {
   currentTime: number;
@@ -357,9 +358,10 @@ const MediaControls: React.FC<MediaControlsProps> = ({
 
               {/* Translation Controls */}
               <div className="space-y-1 pt-1 border-t border-white/10">
-                <div className="text-xs text-white/50">Translation</div>
-                <div className="flex justify-center">
+                <div className="text-xs text-white/50">Translation & Reading</div>
+                <div className="flex justify-center gap-2">
                   <TranslationSettings className="text-xs" />
+                  <HiraganaToggle />
                 </div>
               </div>
 

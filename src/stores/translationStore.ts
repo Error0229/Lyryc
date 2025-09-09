@@ -247,9 +247,66 @@ export const useTranslationStatus = () => {
   };
 };
 
+// Language detection helper
+const detectLanguage = async (lyrics: LyricLine[]): Promise<string | null> => {
+  if (!lyrics.length) return null;
+  
+  try {
+    // Use the first few lines to detect language
+    const sampleText = lyrics.slice(0, 3).map(line => line.text).join(' ');
+    const result = await invoke<{detected_language: string}>('detect_language', {
+      text: sampleText
+    });
+    
+    return result.detected_language;
+  } catch (error) {
+    console.warn('[Translation] Language detection failed, will rely on backend detection:', error);
+    return null;
+  }
+};
+
 // Direct Tauri invoke functions - replacing the service layer
 export const translateLyrics = async (lyrics: LyricLine[], config: TranslationConfig): Promise<TranslationResult> => {
   try {
+    // Check if source language is specified and equals target language
+    if (config.source_language !== 'auto' && config.source_language === config.target_language) {
+      console.log(`[Translation] Skipping translation: source (${config.source_language}) equals target (${config.target_language})`);
+      return {
+        success: true,
+        translated_lines: lyrics.map(line => ({
+          ...line,
+          words: line.words || [],
+          originalText: line.text,
+          translatedText: line.text,
+          translationConfidence: 1.0,
+          detectedLanguage: config.source_language
+        })),
+        detected_language: config.source_language,
+        processing_time_ms: 0
+      };
+    }
+
+    // If auto-detect is enabled, try to detect language first
+    if (config.source_language === 'auto') {
+      const detectedLang = await detectLanguage(lyrics);
+      if (detectedLang && detectedLang === config.target_language) {
+        console.log(`[Translation] Skipping translation: detected language (${detectedLang}) equals target (${config.target_language})`);
+        return {
+          success: true,
+          translated_lines: lyrics.map(line => ({
+            ...line,
+            words: line.words || [],
+            originalText: line.text,
+            translatedText: line.text,
+            translationConfidence: 1.0,
+            detectedLanguage: detectedLang
+          })),
+          detected_language: detectedLang,
+          processing_time_ms: 0
+        };
+      }
+    }
+
     // Convert frontend lyrics to backend format
     const backendLyrics: BackendLyricLine[] = lyrics.map(line => ({
       time: line.time,

@@ -114,3 +114,4 @@ pub async fn get_supported_languages() -> Result<Vec<(String, String)>, String> 
         ("el".to_string(), "Greek".to_string()),
     ])
 }
+

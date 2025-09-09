@@ -1,0 +1,20 @@
+/* Ruby text styling for Japanese furigana */
+ruby {
+  ruby-align: center;
+}
+
+ruby.ruby-top {
+  ruby-position: over;
+}
+
+ruby.ruby-bottom {
+  ruby-position: under;
+}
+
+ruby rt {
+  font-size: 0.6em;
+  line-height: 1;
+  text-align: center;
+  font-weight: normal;
+  white-space: nowrap;
+}

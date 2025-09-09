@@ -31,6 +31,7 @@ lazy_static = "1.4"
 log = "0.4"
 env_logger = "0.11"
 dotenv = "0.15"
+autoruby = { version = "0.5.1", features = ["integrated"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-global-shortcut = "2"
