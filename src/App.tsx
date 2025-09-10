@@ -9,12 +9,13 @@ import { useThemeStore } from "./stores/themeStore";
 import { useOffsetStore } from "./stores/offsetStore";
 import { useViewModeStore } from "./stores/viewModeStore";
 import { useTranslationStore } from "./stores/translationStore";
+import { useHiraganaStore } from "./stores/hiraganaStore";
 import { LyricsProcessor } from "./services/lyricsProcessor";
 import { translateLyrics, TranslatedLyricLine } from "./stores/translationStore";
 import { useCurrentTime } from "./hooks/useCurrentTime";
 import { useIndependentTimer } from "./hooks/useSmoothTime";
+import { useAutoWindowHeight } from "./hooks/useAutoWindowHeight";
 import CleanLyricDisplay from "./components/CleanLyricDisplay";
-import StyleControls from "./components/StyleControls";
 import { motion, AnimatePresence } from "framer-motion";
 
 function App() {
@@ -61,6 +62,7 @@ function App() {
   
   // Translation state and service
   const translationStore = useTranslationStore();
+  const { settings: hiraganaSettings } = useHiraganaStore();
   // Removed TranslationService - using direct store functions instead
   const [translatedLyrics, setTranslatedLyrics] = useState<TranslatedLyricLine[]>([]);
 
@@ -107,6 +109,22 @@ function App() {
         const result = await translateLyrics(lyrics, translationStore.config);
         
         if (result.success) {
+          // Check LLM-determined same language flag first (more accurate)
+          if (result.is_same_language) {
+            console.log(`[App] LLM detected same language - skipping translation display`);
+            setTranslatedLyrics([]);
+            translationStore.setLastTranslationTime(Date.now());
+            return;
+          }
+          
+          // Fallback: Check if detected language equals target language
+          if (result.detected_language && result.detected_language === translationStore.config.target_language) {
+            console.log(`[App] Detected language (${result.detected_language}) equals target language (${translationStore.config.target_language}) - skipping translation display`);
+            setTranslatedLyrics([]);
+            translationStore.setLastTranslationTime(Date.now());
+            return;
+          }
+
           // Convert backend format to frontend format
           const convertedLines: TranslatedLyricLine[] = result.translated_lines.map((line: any) => ({
             time: line.time,
@@ -121,7 +139,7 @@ function App() {
           
           setTranslatedLyrics(convertedLines);
           translationStore.setLastTranslationTime(Date.now());
-          console.log(`[App] Translation completed in ${result.processing_time_ms}ms`);
+          console.log(`[App] Translation completed in ${result.processing_time_ms}ms for ${result.detected_language} -> ${translationStore.config.target_language}`);
         } else {
           console.error('[App] Translation failed:', result.error);
           translationStore.setTranslationError(result.error || 'Translation failed');
@@ -393,9 +411,20 @@ function App() {
 
   const currentLineData = getCurrentLine();
   const [showControls, setShowControls] = useState(false);
-  const [showStyleControls, setShowStyleControls] = useState(false);
   const [isClickThrough, setIsClickThrough] = useState(true); // Start with click-through enabled
   const [dragModeEnabled, setDragModeEnabled] = useState(false);
+
+  // Get detected language from translated lyrics
+  const detectedLanguage = translatedLyrics.length > 0 ? translatedLyrics[0]?.detectedLanguage : undefined;
+
+  // Auto window height adjustment
+  const { containerRef } = useAutoWindowHeight({
+    enabled: true,
+    hasTranslation: translationStore.enabled && translatedLyrics.length > 0,
+    hasFurigana: hiraganaSettings.enabled && hiraganaSettings.displayMode !== 'replace',
+    songId: currentTrack?.track_name ? `${currentTrack.artist}-${currentTrack.track_name}` : undefined,
+    detectedLanguage: detectedLanguage
+  });
 
   // Simplified drag solution: Click and drag on background areas
   const handleDragArea = async (e: React.MouseEvent) => {
@@ -483,7 +512,7 @@ function App() {
       onMouseDown={isClickThrough ? undefined : handleDragArea}
     >
       {/* Clean Current Lyric Display */}
-      <div className="text-center max-w-full mx-auto px-2">
+      <div ref={containerRef} className="text-center max-w-full mx-auto px-2">
         {currentLineData ? (
           <motion.div
             key={currentLineData.index}
@@ -548,7 +577,13 @@ function App() {
                   console.log("⚠️ Fallback seek called:", time);
                   setBrowserTime(time);
                 }}
-                onOpenStyleControls={() => setShowStyleControls(true)}
+                onOpenStyleControls={async () => {
+                  try {
+                    await invoke('open_settings_window');
+                  } catch (error) {
+                    console.error('Failed to open settings window:', error);
+                  }
+                }}
               />
             </div>
           </div>
@@ -654,13 +689,6 @@ function App() {
         )}
       </AnimatePresence>
 
-      {/* Style Controls Modal */}
-      <AnimatePresence>
-        <StyleControls 
-          isOpen={showStyleControls} 
-          onClose={() => setShowStyleControls(false)} 
-        />
-      </AnimatePresence>
 
       {/* Error Notifications (Brief, Auto-hide) */}
       {(connectionError || lyricsError) && (

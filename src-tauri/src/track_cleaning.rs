@@ -1,11 +1,29 @@
 use log::{debug, info, warn};
 use regex::Regex;
 use reqwest::Client;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::time::Duration;
 
 // Import shared model blacklist from translation module
-use crate::translation::{is_model_blacklisted, blacklist_model};
+use crate::translation::{blacklist_model, is_model_blacklisted};
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CleaningResult {
+    pub cleaned_title: String,
+    pub cleaned_artist: Option<String>, // Kept for backward compatibility
+    pub cleaned_artists: Vec<String>,   // New field: array of artist names
+    pub kept_markers: Vec<String>,
+    pub removed_context: Vec<String>,
+    pub confidence: f64,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ArtistTrackCleaningResult {
+    pub artist: CleaningResult,
+    pub track: CleaningResult,
+}
 
 pub fn clean_track_name_sync(track_name: &str) -> String {
     let mut cleaned = track_name.to_string();
@@ -588,7 +606,7 @@ pub fn remove_artist_from_track(track_name: &str, artist_name: &str) -> String {
 pub async fn clean_track_name(track_name: &str) -> String {
     // Load environment variables to check token availability
     dotenv::dotenv().ok();
-    
+
     // Check if GitHub token is available before attempting request
     if let Ok(github_token) = std::env::var("GITHUB_TOKEN") {
         if !github_token.trim().is_empty() {
@@ -605,7 +623,7 @@ pub async fn clean_track_name(track_name: &str) -> String {
     } else {
         debug!("No GitHub token found, skipping GitHub AI models");
     }
-    
+
     // Try Gemini 2.5 Flash-Lite as fallback
     match clean_track_name_gemini(track_name).await {
         Ok(cleaned) => cleaned,
@@ -622,7 +640,10 @@ pub async fn clean_track_name_github(track_name: &str) -> Result<String, String>
 }
 
 /// Cleans track name using GitHub AI models with optional API key override
-pub async fn clean_track_name_github_with_key(track_name: &str, api_key_override: Option<String>) -> Result<String, String> {
+pub async fn clean_track_name_github_with_key(
+    track_name: &str,
+    api_key_override: Option<String>,
+) -> Result<String, String> {
     // Prioritize provided API key, fallback to environment
     let github_token = if let Some(key) = api_key_override {
         if !key.trim().is_empty() {
@@ -633,8 +654,7 @@ pub async fn clean_track_name_github_with_key(track_name: &str, api_key_override
     } else {
         // Load environment variables only if no override provided
         dotenv::dotenv().ok();
-        std::env::var("GITHUB_TOKEN")
-            .map_err(|_| "No GitHub token found".to_string())?
+        std::env::var("GITHUB_TOKEN").map_err(|_| "No GitHub token found".to_string())?
     };
 
     if github_token.trim().is_empty() {
@@ -644,18 +664,18 @@ pub async fn clean_track_name_github_with_key(track_name: &str, api_key_override
     // Best performing models from testing
     // High-performance models from test results - only use models that work for track cleaning
     let all_models = [
-        "meta/Llama-4-Maverick-17B-128E-Instruct-FP8",  // 98.33% accuracy - best performer
-        "openai/gpt-4.1-nano",                           // 98.33% accuracy - excellent
-        "openai/gpt-4o-mini",                            // 96.67% accuracy - reliable
-        "mistral ai/Mistral-Large-2411",                 // 96.67% accuracy - proven
-        "mistral ai/mistral-medium-2505",                // 96.67% accuracy - consistent
-        "mistral ai/mistral-small-2503",                 // 96.67% accuracy - fast
-        "meta/Meta-Llama-3.1-8B-Instruct",              // 95% accuracy - very fast
-        "mistral ai/Codestral-2501",                     // 95% accuracy - good
-        "deepseek/DeepSeek-V3-0324",                     // 90% accuracy - backup
-        "meta/Llama-3.3-70B-Instruct",                   // 90% accuracy - free
-        "xai/grok-3",                                     // 90% accuracy - alternative
-        "meta/Llama-4-Scout-17B-16E-Instruct",          // 90% accuracy - reliable
+        "meta/Llama-4-Maverick-17B-128E-Instruct-FP8", // 98.33% accuracy - best performer
+        "openai/gpt-4.1-nano",                         // 98.33% accuracy - excellent
+        "openai/gpt-4o-mini",                          // 96.67% accuracy - reliable
+        "mistral ai/Mistral-Large-2411",               // 96.67% accuracy - proven
+        "mistral ai/mistral-medium-2505",              // 96.67% accuracy - consistent
+        "mistral ai/mistral-small-2503",               // 96.67% accuracy - fast
+        "meta/Meta-Llama-3.1-8B-Instruct",             // 95% accuracy - very fast
+        "mistral ai/Codestral-2501",                   // 95% accuracy - good
+        "deepseek/DeepSeek-V3-0324",                   // 90% accuracy - backup
+        "meta/Llama-3.3-70B-Instruct",                 // 90% accuracy - free
+        "xai/grok-3",                                  // 90% accuracy - alternative
+        "meta/Llama-4-Scout-17B-16E-Instruct",         // 90% accuracy - reliable
     ];
 
     // Filter out blacklisted models
@@ -670,7 +690,11 @@ pub async fn clean_track_name_github_with_key(track_name: &str, api_key_override
         return Ok(clean_track_name_sync(track_name));
     }
 
-    info!("Available GitHub models for track cleaning: {} out of {} total", available_models.len(), all_models.len());
+    info!(
+        "Available GitHub models for track cleaning: {} out of {} total",
+        available_models.len(),
+        all_models.len()
+    );
 
     for (i, model_id) in available_models.iter().enumerate() {
         match try_llm_cleaning(track_name, model_id, &github_token).await {
@@ -686,9 +710,12 @@ pub async fn clean_track_name_github_with_key(track_name: &str, api_key_override
                 if e.contains("429") && e.contains("Rate limit") {
                     // GitHub AI rate limits are daily per model, so blacklist for exactly 24 hours
                     blacklist_model(model_id, 86400); // 24 hours = 86400 seconds
-                    warn!("Model {} rate limited for track cleaning, blacklisted for 24 hours", model_id);
+                    warn!(
+                        "Model {} rate limited for track cleaning, blacklisted for 24 hours",
+                        model_id
+                    );
                 }
-                
+
                 debug!(
                     "LLM cleaning failed with {}: {} (attempt {}/{})",
                     model_id,
@@ -852,7 +879,10 @@ pub async fn clean_track_name_gemini(track_name: &str) -> Result<String, String>
 }
 
 /// Cleans track name using Gemini with optional API key override
-pub async fn clean_track_name_gemini_with_key(track_name: &str, api_key_override: Option<String>) -> Result<String, String> {
+pub async fn clean_track_name_gemini_with_key(
+    track_name: &str,
+    api_key_override: Option<String>,
+) -> Result<String, String> {
     // Load environment variables
     dotenv::dotenv().ok();
 
@@ -927,7 +957,7 @@ Return only the cleaned title, nothing else:"#,
                 "threshold": "BLOCK_MEDIUM_AND_ABOVE"
             },
             {
-                "category": "HARM_CATEGORY_HATE_SPEECH", 
+                "category": "HARM_CATEGORY_HATE_SPEECH",
                 "threshold": "BLOCK_MEDIUM_AND_ABOVE"
             },
             {
@@ -941,8 +971,11 @@ Return only the cleaned title, nothing else:"#,
         ]
     });
 
-    let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}", model_id, gemini_api_key);
-    
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+        model_id, gemini_api_key
+    );
+
     let response = client
         .post(&url)
         .header("Content-Type", "application/json")
@@ -961,14 +994,17 @@ Return only the cleaned title, nothing else:"#,
     }
 
     let result: Value = response.json().await.map_err(|e| e.to_string())?;
-    
+
     // Check for finish reason issues first
     if let Some(finish_reason) = result["candidates"][0]["finishReason"].as_str() {
         if finish_reason == "MAX_TOKENS" {
             return Err("Gemini response truncated due to token limit".to_string());
         }
         if finish_reason != "STOP" {
-            return Err(format!("Gemini response incomplete. Finish reason: {}", finish_reason));
+            return Err(format!(
+                "Gemini response incomplete. Finish reason: {}",
+                finish_reason
+            ));
         }
     }
 
@@ -996,7 +1032,8 @@ Return only the cleaned title, nothing else:"#,
         })?;
 
     // Clean and extract the title
-    let cleaned_title = response_text.trim()
+    let cleaned_title = response_text
+        .trim()
         .lines()
         .next() // Take first line only
         .unwrap_or(response_text.trim())
@@ -1218,4 +1255,407 @@ mod tests {
             // Note: Not asserting exact match here as these are just pattern tests
         }
     }
+}
+
+/// Clean both artist and track names using LLM
+pub async fn clean_artist_and_track_names(
+    artist_name: &str,
+    track_name: &str,
+) -> Result<ArtistTrackCleaningResult, String> {
+    // Try GitHub AI first, fallback to Gemini
+    match clean_artist_and_track_names_github(artist_name, track_name).await {
+        Ok(result) => Ok(result),
+        Err(github_error) => {
+            warn!("GitHub cleaning failed, trying Gemini: {}", github_error);
+            clean_artist_and_track_names_gemini(artist_name, track_name).await
+        }
+    }
+}
+
+/// Clean artist and track names using GitHub AI
+pub async fn clean_artist_and_track_names_github(
+    artist_name: &str,
+    track_name: &str,
+) -> Result<ArtistTrackCleaningResult, String> {
+    // Get GitHub token
+    let github_token = std::env::var("GITHUB_TOKEN").map_err(|_| {
+        "GitHub API key required for cleaning. Please set GITHUB_TOKEN environment variable."
+            .to_string()
+    })?;
+
+    // High-performance models - same as translation
+    let all_models = [
+        "meta/Llama-4-Maverick-17B-128E-Instruct-FP8", // 98.33% accuracy - best performer
+        "openai/gpt-4.1-nano",                         // 98.33% accuracy - excellent
+        "openai/gpt-4o-mini",                          // 96.67% accuracy - reliable
+        "mistral ai/Mistral-Large-2411",               // 96.67% accuracy - proven
+        "mistral ai/mistral-medium-2505",              // 96.67% accuracy - consistent
+        "mistral ai/mistral-small-2503",               // 96.67% accuracy - fast
+        "meta/Meta-Llama-3.1-8B-Instruct",             // 95% accuracy - very fast
+        "mistral ai/Codestral-2501",                   // 95% accuracy - good
+        "deepseek/DeepSeek-V3-0324",                   // 90% accuracy - backup
+        "meta/Llama-3.3-70B-Instruct",                 // 90% accuracy - free
+        "xai/grok-3",                                  // 90% accuracy - alternative
+        "meta/Llama-4-Scout-17B-16E-Instruct",         // 90% accuracy - reliable
+    ];
+
+    // Filter out blacklisted models
+    let available_models: Vec<&str> = all_models
+        .iter()
+        .filter(|model| !is_model_blacklisted(model))
+        .cloned()
+        .collect();
+
+    if available_models.is_empty() {
+        return Err("All GitHub AI models are currently rate-limited".to_string());
+    }
+
+    for model_id in available_models {
+        match try_llm_artist_track_cleaning(artist_name, track_name, model_id, &github_token).await
+        {
+            Ok(result) => {
+                info!("Artist/track cleaning successful with {}", model_id);
+                return Ok(result);
+            }
+            Err(e) => {
+                if e.contains("429") && e.contains("Rate limit") {
+                    blacklist_model(model_id, 86400); // 24 hours
+                    warn!("Model {} rate limited, blacklisted for 24 hours", model_id);
+                }
+                debug!("Cleaning failed with {}: {}", model_id, e);
+            }
+        }
+    }
+
+    Err("All GitHub AI cleaning attempts failed".to_string())
+}
+
+async fn try_llm_artist_track_cleaning(
+    artist_name: &str,
+    track_name: &str,
+    model_id: &str,
+    github_token: &str,
+) -> Result<ArtistTrackCleaningResult, String> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    // Create the enhanced prompt for both artist and track cleaning
+    let user_content = format!(
+        r#"**Task**: Clean the following artist name and track title into canonical forms using human judgment.
+
+**Configuration** (YAML):
+
+```yaml
+keep_feat: false
+keep_version_markers: true
+prefer_primary_language: as_is
+allow_album_context: false
+preserve_parenthetical_if_ambiguous: true
+```
+
+**Items to clean:**
+
+```
+ARTIST: {}
+TRACK: {}
+```
+
+**Output Format - CRITICAL**:
+- Return EXACTLY ONE JSON object with "artist" and "track" fields
+- Artist field contains: cleaned_title, cleaned_artists (array), kept_markers, removed_context, confidence, notes
+- Track field contains: cleaned_title, kept_markers, removed_context, confidence, notes
+- IMPORTANT: cleaned_artists must be an array of individual artist names
+- NO markdown formatting (no ```json blocks)
+- NO wrapping in code blocks or backticks
+- NO extra text, explanations, or commentary
+- ONLY raw JSON object
+
+IMPORTANT: Output must be parseable as raw JSON. Do not use markdown, code blocks, or any formatting."#,
+        artist_name, track_name
+    );
+
+    let system_content = r#"You are a meticulous music metadata editor specializing in cleaning artist names and track titles.
+
+## Artist Name Cleaning Principles:
+1. **Remove prefixes/suffixes**: Remove channel names, "Official", "VEVO", etc.
+2. **Normalize separators**: Handle various separator formats (-, /, |, etc.)
+3. **Preserve artist identity**: Keep the core artist name, stage names, band names
+4. **Handle collaborations**: Split multiple artists into separate array entries
+5. **Language preservation**: Don't translate artist names, preserve original script
+6. **Remove metadata**: Remove record labels, years, album info from artist field
+7. **CRITICAL - Multiple Artists**: Return ALL artists as separate entries in cleaned_artists array
+
+## Track Title Cleaning Principles:
+1. **Keep identity-bearing content**: Version markers like "Acoustic", "Live", "Remix" when part of release identity
+2. **Remove distribution context**: "Official Video", "MV", "Visualizer", platform names
+3. **Handle parenthetical content**: Keep meaningful subtitles, remove marketing text  
+4. **Featuring credits**: Follow keep_feat configuration (currently false)
+5. **Language preservation**: Don't translate titles, keep original script
+6. **Extract from containers**: Remove artist prefixes when title format is "Artist - Title"
+
+## Output Format:
+Return ONE JSON object with this exact structure:
+{
+  "artist": {
+    "cleaned_title": "Primary artist name for backward compatibility",
+    "cleaned_artists": ["Artist 1", "Artist 2", "Artist 3"],
+    "kept_markers": ["array", "of", "strings"],
+    "removed_context": ["array", "of", "strings"], 
+    "confidence": 0.95,
+    "notes": "Optional brief explanation"
+  },
+  "track": {
+    "cleaned_title": "string", 
+    "kept_markers": ["array", "of", "strings"],
+    "removed_context": ["array", "of", "strings"],
+    "confidence": 0.95,
+    "notes": "Optional brief explanation"
+  }
+}
+
+## Artist Separation Examples:
+- "Artist A feat. Artist B" → cleaned_artists: ["Artist A", "Artist B"]
+- "Artist A & Artist B" → cleaned_artists: ["Artist A", "Artist B"] 
+- "Artist A, Artist B, Artist C" → cleaned_artists: ["Artist A", "Artist B", "Artist C"]
+- "Artist A / Artist B" → cleaned_artists: ["Artist A", "Artist B"]
+- "Artist A x Artist B" → cleaned_artists: ["Artist A", "Artist B"]
+
+Use human judgment. When in doubt, prefer conservative cleaning."#;
+
+    let payload = json!({
+        "model": model_id,
+        "messages": [
+            {
+                "role": "system",
+                "content": system_content
+            },
+            {
+                "role": "user",
+                "content": user_content
+            }
+        ],
+        "max_tokens": 500,
+        "temperature": 0.1
+    });
+
+    let response = client
+        .post("https://models.inference.ai.azure.com/chat/completions")
+        .header("Authorization", format!("Bearer {}", github_token))
+        .header("Content-Type", "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let error_text = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
+        return Err(format!("HTTP {}: {}", status, error_text));
+    }
+
+    let result: Value = response.json().await.map_err(|e| e.to_string())?;
+    let response_text = result["choices"][0]["message"]["content"]
+        .as_str()
+        .ok_or("No content in response".to_string())?;
+
+    // Parse the JSON response
+    parse_artist_track_cleaning_response(response_text)
+}
+
+fn parse_artist_track_cleaning_response(
+    response_text: &str,
+) -> Result<ArtistTrackCleaningResult, String> {
+    let cleaned_text = response_text.trim();
+
+    // Try to parse as JSON directly
+    match serde_json::from_str::<Value>(cleaned_text) {
+        Ok(json_value) => {
+            let artist_obj = json_value["artist"]
+                .as_object()
+                .ok_or("Missing 'artist' field in response")?;
+            let track_obj = json_value["track"]
+                .as_object()
+                .ok_or("Missing 'track' field in response")?;
+
+            let artist_result = CleaningResult {
+                cleaned_title: artist_obj["cleaned_title"]
+                    .as_str()
+                    .ok_or("Missing cleaned_title in artist")?
+                    .to_string(),
+                cleaned_artist: None, // Not used for artist cleaning
+                cleaned_artists: artist_obj["cleaned_artists"]
+                    .as_array()
+                    .unwrap_or(&vec![])
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .collect(),
+                kept_markers: artist_obj["kept_markers"]
+                    .as_array()
+                    .unwrap_or(&vec![])
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .collect(),
+                removed_context: artist_obj["removed_context"]
+                    .as_array()
+                    .unwrap_or(&vec![])
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .collect(),
+                confidence: artist_obj["confidence"].as_f64().unwrap_or(0.8),
+                notes: artist_obj["notes"].as_str().map(|s| s.to_string()),
+            };
+
+            let track_result = CleaningResult {
+                cleaned_title: track_obj["cleaned_title"]
+                    .as_str()
+                    .ok_or("Missing cleaned_title in track")?
+                    .to_string(),
+                cleaned_artist: None, // Not used for track cleaning
+                cleaned_artists: vec![], // Empty for tracks
+                kept_markers: track_obj["kept_markers"]
+                    .as_array()
+                    .unwrap_or(&vec![])
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .collect(),
+                removed_context: track_obj["removed_context"]
+                    .as_array()
+                    .unwrap_or(&vec![])
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .collect(),
+                confidence: track_obj["confidence"].as_f64().unwrap_or(0.8),
+                notes: track_obj["notes"].as_str().map(|s| s.to_string()),
+            };
+
+            Ok(ArtistTrackCleaningResult {
+                artist: artist_result,
+                track: track_result,
+            })
+        }
+        Err(e) => {
+            warn!(
+                "Failed to parse artist/track cleaning response as JSON: {}",
+                e
+            );
+            warn!("Response was: {}", cleaned_text);
+            Err(format!("Failed to parse cleaning response: {}", e))
+        }
+    }
+}
+
+/// Clean artist and track names using Gemini
+pub async fn clean_artist_and_track_names_gemini(
+    artist_name: &str,
+    track_name: &str,
+) -> Result<ArtistTrackCleaningResult, String> {
+    let gemini_api_key = std::env::var("GEMINI_API_KEY").map_err(|_| {
+        "Gemini API key required. Please set GEMINI_API_KEY environment variable.".to_string()
+    })?;
+
+    try_gemini_artist_track_cleaning(
+        artist_name,
+        track_name,
+        "gemini-1.5-flash-8b",
+        &gemini_api_key,
+    )
+    .await
+}
+
+async fn try_gemini_artist_track_cleaning(
+    artist_name: &str,
+    track_name: &str,
+    model_id: &str,
+    gemini_api_key: &str,
+) -> Result<ArtistTrackCleaningResult, String> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let prompt = format!(
+        r#"Clean this artist name and track title into canonical forms:
+
+ARTIST: {}
+TRACK: {}
+
+Return ONE JSON object with this exact structure:
+{{
+  "artist": {{
+    "cleaned_title": "cleaned artist name",
+    "kept_markers": [],
+    "removed_context": [],
+    "confidence": 0.95,
+    "notes": "brief explanation"
+  }},
+  "track": {{
+    "cleaned_title": "cleaned track title",
+    "kept_markers": [],
+    "removed_context": [],
+    "confidence": 0.95,
+    "notes": "brief explanation"
+  }}
+}}
+
+Remove: platform names, "Official", "MV", record labels, years, marketing text.
+Keep: artist identity, meaningful version markers, original language."#,
+        artist_name, track_name
+    );
+
+    let payload = json!({
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "text": prompt
+                    }
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.1,
+            "topK": 1,
+            "topP": 0.1,
+            "maxOutputTokens": 500
+        }
+    });
+
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+        model_id, gemini_api_key
+    );
+
+    let response = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let error_text = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
+        return Err(format!("HTTP {}: {}", status, error_text));
+    }
+
+    let result: Value = response.json().await.map_err(|e| e.to_string())?;
+    let response_text = result["candidates"][0]["content"]["parts"][0]["text"]
+        .as_str()
+        .ok_or("No text in Gemini response")?;
+
+    parse_artist_track_cleaning_response(response_text)
 }

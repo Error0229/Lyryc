@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import type { UserConfig as VitestUserConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
+import { resolve } from "path";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
@@ -8,6 +9,15 @@ const host = process.env.TAURI_DEV_HOST;
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
   plugins: [react()],
+  
+  build: {
+    rollupOptions: {
+      input: {
+        main: resolve(__dirname, 'index.html'),
+        settings: resolve(__dirname, 'settings.html')
+      }
+    }
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

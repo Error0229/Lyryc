@@ -36,6 +36,7 @@ export interface TranslationResult {
   detected_language?: string;
   processing_time_ms: number;
   error?: string;
+  is_same_language: boolean; // New field: LLM-determined same language flag
 }
 
 export interface TranslationDisplayMode {
@@ -265,6 +266,9 @@ const detectLanguage = async (lyrics: LyricLine[]): Promise<string | null> => {
   }
 };
 
+// Note: Language detection is now handled by the LLM backend in translateLyrics
+// The detected language is returned in TranslationResult.detected_language
+
 // Direct Tauri invoke functions - replacing the service layer
 export const translateLyrics = async (lyrics: LyricLine[], config: TranslationConfig): Promise<TranslationResult> => {
   try {
@@ -323,6 +327,21 @@ export const translateLyrics = async (lyrics: LyricLine[], config: TranslationCo
     });
 
     console.log(`[Translation] Backend translation ${result.success ? 'successful' : 'failed'} in ${result.processing_time_ms}ms`);
+    
+    // Check if detected language equals target language after translation
+    if (result.success && result.detected_language && result.detected_language === config.target_language) {
+      console.log(`[Translation] Detected language (${result.detected_language}) equals target language (${config.target_language}) - using original text as translation`);
+      
+      // Return modified result with original text as translated text
+      return {
+        ...result,
+        translated_lines: result.translated_lines.map(line => ({
+          ...line,
+          translatedText: line.originalText, // Use original text since languages are the same
+          translationConfidence: 1.0,
+        }))
+      };
+    }
     
     return result;
   } catch (error) {

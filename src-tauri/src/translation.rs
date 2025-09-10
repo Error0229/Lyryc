@@ -97,6 +97,7 @@ pub struct TranslationResult {
     pub detected_language: Option<String>,
     pub processing_time_ms: u64,
     pub error: Option<String>,
+    pub is_same_language: bool, // New field: LLM-determined same language flag
 }
 
 impl Default for TranslationConfig {
@@ -130,6 +131,7 @@ pub async fn translate_lyrics(
             detected_language: None,
             processing_time_ms: 0,
             error: Some("No lyrics provided".to_string()),
+            is_same_language: false,
         });
     }
 
@@ -191,6 +193,7 @@ pub async fn translate_lyrics(
                 detected_language: None,
                 processing_time_ms,
                 error: Some(e),
+                is_same_language: false,
             })
         }
     }
@@ -378,7 +381,7 @@ Approach each song as a complete artistic work with unified themes, emotions, an
     };
 
     // Parse the translation response
-    let translated_lines =
+    let (translated_lines, is_same_language) =
         parse_translation_response(response_text, lyrics, &final_detected_language)?;
 
     Ok(TranslationResult {
@@ -387,17 +390,19 @@ Approach each song as a complete artistic work with unified themes, emotions, an
         detected_language: Some(final_detected_language),
         processing_time_ms: 0, // Will be set by caller
         error: None,
+        is_same_language,
     })
 }
 
 fn build_translation_prompt(
     lyrics: &str,
-    _source_lang: &str,
+    source_lang: &str,
     target_lang: &str,
     style: &str,
     custom_prompt: Option<&str>,
 ) -> String {
     let target_lang_name = get_language_name(target_lang);
+    let source_lang_name = get_language_name(source_lang);
 
     // If custom prompt is provided, use it as-is
     if let Some(custom) = custom_prompt {
@@ -501,14 +506,70 @@ Constraints:
         ),
     };
 
+    // Special handling for Chinese variants
+    let chinese_instruction = if target_lang.starts_with("zh") {
+        format!(
+            r#"
+
+## CRITICAL CHINESE VARIANT REQUIREMENTS
+Target is {} - you MUST follow these rules:
+- If target is "zh" or "zh-cn": Use SIMPLIFIED Chinese characters (简体中文) from Mainland China
+- If target is "zh-tw": Use TRADITIONAL Chinese characters (繁體中文) from Taiwan/ROC
+- If target is "zh-hk": Use TRADITIONAL Chinese characters (繁體中文) from Hong Kong
+
+WRONG: Converting zh-tw request to Simplified Chinese (简体中文)
+CORRECT: Converting zh-tw request to Traditional Chinese (繁體中文)
+
+Character Examples:
+- Simplified: 学习, 电脑, 发生, 国家
+- Traditional: 學習, 電腦, 發生, 國家
+
+You MUST use the correct character set for {}!"#,
+            target_lang_name, target_lang_name
+        )
+    } else {
+        String::new()
+    };
+
+    let detection_instruction = format!(
+        r#"## LANGUAGE DETECTION AND TRANSLATION TASK
+Your task is to:
+
+1. **Detect Language**: First, analyze the lyrics and identify their actual language
+2. **Compare with Target**: Compare the detected language with target language ({})
+3. **Make Decision**:
+   - If detected language is {} ({}): respond exactly "SAME_LANGUAGE"
+   - If detected language is different from {}: provide translated lyrics
+
+CRITICAL RULES:
+- ALWAYS detect the actual language of the lyrics first
+- Compare DETECTED language (not source specification) with target language
+- Only translate if detected language differs from target language{}
+
+Target language: {} ({})
+Source language hint: {} (but detect the actual language yourself)"#,
+        target_lang_name, target_lang, target_lang_name, target_lang_name,
+        chinese_instruction,
+        target_lang, target_lang_name, 
+        if source_lang == "auto" { "Auto-detect".to_string() } else { format!("{} ({})", source_lang, source_lang_name) }
+    );
+
     format!(
         r#"{}
+
+{}
+
+{}
 
 Original lyrics:
 {}
 
-Translated lyrics:"#,
-        style_specific_instruction, lyrics
+Response:"#,
+        detection_instruction, style_specific_instruction, 
+        r#"## OUTPUT FORMAT
+- If same language: respond exactly "SAME_LANGUAGE"
+- If translation needed: provide ONLY the translated lyrics, one line per original line"#,
+        lyrics
     )
 }
 
@@ -516,10 +577,17 @@ fn parse_translation_response(
     response_text: &str,
     original_lyrics: &[LyricLine],
     detected_language: &str,
-) -> Result<Vec<TranslatedLyricLine>, String> {
-    // Clean the response text
+) -> Result<(Vec<TranslatedLyricLine>, bool), String> {
+    let response_text = response_text.trim();
+    
+    // Check for same language indicator
+    if response_text == "SAME_LANGUAGE" || response_text.contains("SAME_LANGUAGE") {
+        debug!("LLM detected same language, no translation needed");
+        return Ok((vec![], true)); // Empty translation list, same_language = true
+    }
+    
+    // Clean the response text for actual translation
     let cleaned_response = response_text
-        .trim()
         .lines()
         .map(|line| line.trim())
         .filter(|line| !line.is_empty())
@@ -552,7 +620,7 @@ fn parse_translation_response(
         });
     }
 
-    Ok(translated_lines)
+    Ok((translated_lines, false)) // Translation provided, same_language = false
 }
 
 /// Translate lyrics using Google Gemini API
@@ -767,7 +835,7 @@ Approach each song as a complete artistic work with unified themes, emotions, an
     };
 
     // Parse the translation response using the shared function
-    let translated_lines =
+    let (translated_lines, is_same_language) =
         parse_translation_response(response_text, lyrics, &final_detected_language)?;
 
     Ok(TranslationResult {
@@ -776,6 +844,7 @@ Approach each song as a complete artistic work with unified themes, emotions, an
         detected_language: Some(final_detected_language),
         processing_time_ms: 0, // Will be set by caller
         error: None,
+        is_same_language,
     })
 }
 
@@ -807,12 +876,22 @@ fn detect_language_fallback(lyrics: &[LyricLine]) -> String {
         return "ko".to_string();
     }
     
-    // Chinese detection: has kanji but very little or no kana
+    // Chinese detection: has CJK characters but very little or no kana
     if kanji_count > 0 {
         let kana_ratio = (hiragana_count + katakana_count) as f32 / total_chars as f32;
         let kanji_ratio = kanji_count as f32 / total_chars as f32;
-        if kanji_ratio > 0.3 && kana_ratio < 0.1 { // Mostly kanji with little kana
-            return "zh".to_string();
+        if kanji_ratio > 0.3 && kana_ratio < 0.1 { // Mostly CJK with little kana
+            // Check for Traditional Chinese specific characters
+            let has_traditional = sample_text.chars().any(|c| matches!(c, 
+                '這' | '樣' | '時' | '會' | '過' | '應' | '來' | '對' | '於' | '個' |
+                '電' | '學' | '國' | '說' | '話' | '語' | '見' | '間' | '開' | '關'
+            ));
+            
+            if has_traditional {
+                return "zh-tw".to_string(); // Default to Taiwan Traditional
+            } else {
+                return "zh".to_string(); // Default to Simplified
+            }
         }
     }
     
@@ -826,7 +905,39 @@ fn detect_language_fallback(lyrics: &[LyricLine]) -> String {
         return "ar".to_string();
     }
 
-    // Default to English for Latin scripts
+    // European language detection with common word patterns
+    let english_patterns = [" the ", " and ", " is ", " are ", " to ", " of ", " in ", " that "];
+    let spanish_patterns = [" el ", " la ", " de ", " que ", " en ", " un ", " se ", " no "];
+    let french_patterns = [" le ", " de ", " et ", " à ", " un ", " ce ", " que ", " du "];
+    let german_patterns = [" der ", " die ", " das ", " und ", " ich ", " ist ", " du ", " sie "];
+    let portuguese_patterns = [" de ", " que ", " não ", " um ", " se ", " da ", " do ", " em "];
+    let italian_patterns = [" il ", " di ", " che ", " non ", " un ", " la ", " del ", " da "];
+
+    if english_patterns.iter().any(|&pattern| sample_text.contains(pattern)) {
+        return "en".to_string();
+    }
+    
+    if spanish_patterns.iter().any(|&pattern| sample_text.contains(pattern)) {
+        return "es".to_string();
+    }
+    
+    if french_patterns.iter().any(|&pattern| sample_text.contains(pattern)) {
+        return "fr".to_string();
+    }
+    
+    if german_patterns.iter().any(|&pattern| sample_text.contains(pattern)) {
+        return "de".to_string();
+    }
+    
+    if portuguese_patterns.iter().any(|&pattern| sample_text.contains(pattern)) {
+        return "pt".to_string();
+    }
+    
+    if italian_patterns.iter().any(|&pattern| sample_text.contains(pattern)) {
+        return "it".to_string();
+    }
+
+    // Default to English for undetected Latin scripts
     debug!("Language detection fallback to English");
     "en".to_string()
 }
@@ -843,8 +954,10 @@ fn get_language_name(code: &str) -> &str {
         "ru" => "Russian",
         "ja" => "Japanese",
         "ko" => "Korean",
-        "zh" => "Chinese (Simplified)",
-        "zh-tw" => "Chinese (Traditional)",
+        "zh" => "Chinese Simplified (Mainland China - 简体中文)",
+        "zh-cn" => "Chinese Simplified (Mainland China - 简体中文)",
+        "zh-tw" => "Chinese Traditional (Taiwan - 繁體中文)",
+        "zh-hk" => "Chinese Traditional (Hong Kong - 繁體中文)",
         "ar" => "Arabic",
         "hi" => "Hindi",
         "th" => "Thai",

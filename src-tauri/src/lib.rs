@@ -16,7 +16,7 @@ mod window_management;
 
 // Import types and functions from modules
 use commands::{
-    clean_track_name_command, clean_track_name_with_config, get_current_track, get_supported_languages, set_current_track,
+    clean_track_name_command, clean_track_name_with_config, clean_artist_and_track_names_command, get_current_track, get_supported_languages, set_current_track,
     translate_lyrics_command,
 };
 use furigana::generate_furigana_command;
@@ -27,7 +27,7 @@ use websocket_commands::{
     init_extension_connection, send_playback_command,
 };
 use window_management::{
-    enable_drag_mode, initialize_window_sizing, minimize_to_tray, quit_app, restore_from_tray,
+    adjust_window_height, close_settings_window, enable_drag_mode, initialize_window_sizing, minimize_to_tray, open_settings_window, quit_app, restore_from_tray,
     toggle_window_visibility,
 };
 
@@ -154,6 +154,7 @@ pub fn run() {
             set_current_track,
             clean_track_name_command,
             clean_track_name_with_config,
+            clean_artist_and_track_names_command,
             translate_lyrics_command,
             get_supported_languages,
             fetch_lyrics,
@@ -165,6 +166,9 @@ pub fn run() {
             control_playback,
             send_playback_command,
             initialize_window_sizing,
+            adjust_window_height,
+            open_settings_window,
+            close_settings_window,
             minimize_to_tray,
             restore_from_tray,
             toggle_window_visibility,

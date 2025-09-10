@@ -124,6 +124,127 @@ pub async fn quit_app(app_handle: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub async fn adjust_window_height(
+    app_handle: tauri::AppHandle,
+    content_height: f64,
+    has_translation: bool,
+    has_furigana: bool,
+) -> Result<String, String> {
+    info!(
+        "Adjusting window height - content: {}px, translation: {}, furigana: {}",
+        content_height, has_translation, has_furigana
+    );
+
+    if let Some(window) = app_handle.get_webview_window("main") {
+        let current_size = window
+            .inner_size()
+            .map_err(|e| format!("Failed to get current size: {}", e))?;
+
+        // Calculate required height with minimal margins
+        let mut required_height = content_height;
+        
+        // Add minimal base padding for the container
+        required_height += 16.0; // 8px top + 8px bottom padding
+        
+        // Add minimal extra space for bilingual content
+        if has_translation {
+            required_height += 8.0; // Minimal spacing between lines
+        }
+        
+        // Add minimal extra space for furigana rendering
+        if has_furigana {
+            required_height += 12.0; // Minimal space for furigana above/below
+        }
+        
+        // Ensure minimum height (reduced)
+        let min_height = 40.0;
+        required_height = required_height.max(min_height);
+        
+        // Ensure maximum height (to prevent too large windows)
+        let max_height = 300.0;
+        required_height = required_height.min(max_height);
+
+        // Only resize if the height difference is significant (avoid constant micro-adjustments)
+        let current_height = current_size.height as f64;
+        let height_diff = (required_height - current_height).abs();
+        
+        if height_diff > 5.0 {
+            let new_size = PhysicalSize {
+                width: current_size.width,
+                height: required_height as u32,
+            };
+
+            window
+                .set_size(Size::Physical(new_size))
+                .map_err(|e| format!("Failed to resize window: {}", e))?;
+
+            info!(
+                "Window height adjusted from {}px to {}px (diff: {:.1}px)",
+                current_height, required_height, height_diff
+            );
+        }
+
+        Ok(format!("Window height set to {:.0}px", required_height))
+    } else {
+        Err("Main window not found".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn open_settings_window(app_handle: tauri::AppHandle) -> Result<String, String> {
+    info!("Opening settings window");
+
+    // Check if settings window already exists
+    if let Some(_) = app_handle.get_webview_window("settings") {
+        info!("Settings window already exists, focusing it");
+        if let Some(settings_window) = app_handle.get_webview_window("settings") {
+            settings_window
+                .set_focus()
+                .map_err(|e| format!("Failed to focus settings window: {}", e))?;
+            settings_window
+                .show()
+                .map_err(|e| format!("Failed to show settings window: {}", e))?;
+        }
+        return Ok("Settings window focused".to_string());
+    }
+
+    // Create new settings window
+    let _settings_window = tauri::WebviewWindowBuilder::new(
+        &app_handle,
+        "settings",
+        tauri::WebviewUrl::App("settings.html".into()),
+    )
+    .title("Lyryc Settings")
+    .inner_size(800.0, 600.0)
+    .min_inner_size(600.0, 400.0)
+    .resizable(true)
+    .center()
+    .decorations(true)
+    .always_on_top(false)
+    .skip_taskbar(false)
+    .build()
+    .map_err(|e| format!("Failed to create settings window: {}", e))?;
+
+    info!("Settings window created successfully");
+    Ok("Settings window opened".to_string())
+}
+
+#[tauri::command]
+pub async fn close_settings_window(app_handle: tauri::AppHandle) -> Result<String, String> {
+    info!("Closing settings window");
+
+    if let Some(settings_window) = app_handle.get_webview_window("settings") {
+        settings_window
+            .close()
+            .map_err(|e| format!("Failed to close settings window: {}", e))?;
+        info!("Settings window closed successfully");
+        Ok("Settings window closed".to_string())
+    } else {
+        Err("Settings window not found".to_string())
+    }
+}
+
+#[tauri::command]
 pub async fn enable_drag_mode(app_handle: tauri::AppHandle) -> Result<String, String> {
     info!("Enabling drag mode - disabling click-through");
 
