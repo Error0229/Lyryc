@@ -3,9 +3,27 @@ use crate::types::LyricLine;
 use anyhow::{anyhow, Result};
 use log::{debug, info, warn};
 use reqwest::Client;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::{task::JoinSet, time::timeout};
 use tokio_util::sync::CancellationToken;
+
+// Shared HTTP client instance for lyrics fetching
+static LYRICS_HTTP_CLIENT: OnceLock<Arc<Client>> = OnceLock::new();
+
+/// Get shared HTTP client with connection pooling for lyrics
+fn get_lyrics_http_client() -> &'static Arc<Client> {
+    LYRICS_HTTP_CLIENT.get_or_init(|| {
+        Arc::new(
+            Client::builder()
+                .timeout(Duration::from_secs(30))
+                .pool_max_idle_per_host(15)
+                .pool_idle_timeout(Duration::from_secs(90))
+                .build()
+                .expect("Failed to create lyrics HTTP client"),
+        )
+    })
+}
 
 #[derive(Clone, Debug)]
 struct LyricsCandidate {
@@ -15,7 +33,7 @@ struct LyricsCandidate {
 }
 
 async fn fetch_lyrics_from_url(
-    client: Client,
+    client: Arc<Client>,
     candidate: LyricsCandidate,
     token: CancellationToken,
     per_req_timeout: Duration,
@@ -255,9 +273,11 @@ where
 {
     // Sort by priority (high to low)
     candidates.sort_by_key(|c| std::cmp::Reverse(c.priority));
-    let top_priority = candidates.first().map(|c| c.priority).unwrap_or(0);
-
-    let client = Client::builder().build()?;
+    
+    // Limit to top 3 candidates to avoid excessive API calls
+    candidates.truncate(3);
+    
+    let client = get_lyrics_http_client().clone();
     let cancel_all = CancellationToken::new();
 
     let mut set = JoinSet::new();
@@ -273,6 +293,7 @@ where
 
     let mut best: Option<(LyricsCandidate, Vec<LyricLine>)> = None;
     let mut best_priority: u8 = 0;
+    let mut failure_count = 0;
 
     let result = timeout(overall_timeout, async {
         while let Some(joined) = set.join_next().await {
@@ -286,27 +307,27 @@ where
                             best_priority = candidate.priority;
                             best = Some((candidate.clone(), lyrics));
 
-                            // If this is the highest priority, we're done
-                            if best_priority == top_priority {
-                                break;
-                            }
-
-                            // Cancel all lower priority tasks
-                            for (pri, token) in &per_task_tokens {
-                                if *pri < best_priority {
-                                    token.cancel();
-                                }
-                            }
+                            // Cancel all remaining tasks since we found a result
+                            cancel_all.cancel();
+                            break;
                         }
                     }
                 }
                 Ok(Err(_e)) => {
-                    // HTTP/parsing error - ignore this candidate
-                    continue;
+                    // HTTP/parsing error - count as failure
+                    failure_count += 1;
+                    if failure_count >= 3 {
+                        debug!("Stopping after 3 consecutive failures");
+                        break;
+                    }
                 }
                 Err(_e) => {
-                    // Task join error - ignore this candidate
-                    continue;
+                    // Task join error - count as failure
+                    failure_count += 1;
+                    if failure_count >= 3 {
+                        debug!("Stopping after 3 consecutive failures");
+                        break;
+                    }
                 }
             }
         }

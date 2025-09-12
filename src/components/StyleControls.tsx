@@ -13,6 +13,12 @@ interface StyleControlsProps {
 
 const StyleControls: React.FC<StyleControlsProps> = ({ isOpen, onClose }) => {
   const { style, updateStyle, applyPreset, getPresets, resetToDefault } = useLyricsStyleStore();
+  
+  // Debug logging to track style updates
+  const debugUpdateStyle = (updates: any) => {
+    console.log('[StyleControls] Updating style:', updates);
+    updateStyle(updates);
+  };
   const { displayMode, updateDisplayMode, config, updateConfig } = useTranslationStore();
   const { settings: hiraganaSettings } = useHiraganaStore();
   const [activeTab, setActiveTab] = useState<'presets' | 'font' | 'colors' | 'effects' | 'layout' | 'translation' | 'hiragana'>('presets');
@@ -140,7 +146,7 @@ const StyleControls: React.FC<StyleControlsProps> = ({ isOpen, onClose }) => {
                     <label className="block text-white/80 text-sm mb-2">Font Family</label>
                     <select
                       value={style.fontFamily}
-                      onChange={(e) => updateStyle({ fontFamily: e.target.value })}
+                      onChange={(e) => debugUpdateStyle({ fontFamily: e.target.value })}
                       className="w-full p-2 bg-white/10 border border-white/20 rounded text-white text-sm focus:outline-none focus:border-blue-400"
                     >
                       {fontOptions.map((font) => (
@@ -160,7 +166,7 @@ const StyleControls: React.FC<StyleControlsProps> = ({ isOpen, onClose }) => {
                       max="5"
                       step="0.1"
                       value={style.fontSize}
-                      onChange={(e) => updateStyle({ fontSize: parseFloat(e.target.value) })}
+                      onChange={(e) => debugUpdateStyle({ fontSize: parseFloat(e.target.value) })}
                       className="w-full"
                     />
                   </div>
@@ -209,13 +215,13 @@ const StyleControls: React.FC<StyleControlsProps> = ({ isOpen, onClose }) => {
                       <input
                         type="color"
                         value={color.value}
-                        onChange={(e) => updateStyle({ [color.key]: e.target.value })}
+                        onChange={(e) => debugUpdateStyle({ [color.key]: e.target.value })}
                         className="w-12 h-8 rounded border border-white/20 bg-transparent"
                       />
                       <input
                         type="text"
                         value={color.value}
-                        onChange={(e) => updateStyle({ [color.key]: e.target.value })}
+                        onChange={(e) => debugUpdateStyle({ [color.key]: e.target.value })}
                         className="flex-1 p-1 bg-white/10 border border-white/20 rounded text-white text-sm focus:outline-none focus:border-blue-400"
                         placeholder="#ffffff"
                       />

@@ -1,8 +1,19 @@
 use crate::types::{TrackInfo, TrackState, WebSocketState};
 use crate::websocket::{create_websocket_server, TrackUpdate};
 use log::{debug, error, info, warn};
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::{Arc, OnceLock};
 use tauri::{Emitter, State};
+use tokio::sync::RwLock as TokioRwLock;
+
+// Track processing guard to prevent duplicate processing
+static PROCESSING_TRACKS: OnceLock<Arc<TokioRwLock<HashSet<String>>>> = OnceLock::new();
+
+fn get_processing_guard() -> &'static Arc<TokioRwLock<HashSet<String>>> {
+    PROCESSING_TRACKS.get_or_init(|| {
+        Arc::new(TokioRwLock::new(HashSet::new()))
+    })
+}
 
 #[tauri::command]
 pub async fn init_extension_connection(
@@ -37,29 +48,53 @@ pub async fn init_extension_connection(
             let track_info_for_check = track_info.clone();
             tokio::spawn(async move {
                 if track_update.current_time.is_none() || track_update.current_time == Some(0.0) {
-                    let mut current_track_guard = track_state_for_callback.lock().await;
-                    let should_emit = match &*current_track_guard {
-                        Some(existing_track) => {
-                            // Only emit if track title or artist changed
-                            existing_track.title != track_info_for_check.title
-                                || existing_track.artist != track_info_for_check.artist
+                    // Create unique track identifier for deduplication
+                    let track_key = format!("{}:{}", track_info_for_check.title, track_info_for_check.artist);
+                    
+                    // Prevent concurrent processing of the same track
+                    let processing_guard = get_processing_guard();
+                    {
+                        let mut processing_tracks = processing_guard.write().await;
+                        if processing_tracks.contains(&track_key) {
+                            debug!("Track already being processed, skipping: {}", track_key);
+                            return;
                         }
-                        None => true, // First track
-                    };
+                        processing_tracks.insert(track_key.clone());
+                    }
+                    
+                    let _result = async {
+                        let mut current_track_guard = track_state_for_callback.lock().await;
+                        let should_emit = match &*current_track_guard {
+                            Some(existing_track) => {
+                                // Only emit if track title or artist changed
+                                existing_track.title != track_info_for_check.title
+                                    || existing_track.artist != track_info_for_check.artist
+                            }
+                            None => true, // First track
+                        };
 
-                    if should_emit {
-                        info!(
-                            "Track changed: '{}' by '{}'",
-                            track_info_for_check.title, track_info_for_check.artist
-                        );
-                        *current_track_guard = Some(track_info_for_check.clone());
-                        if let Err(e) =
-                            app_handle_for_track.emit("track-updated", &track_info_for_check)
-                        {
-                            error!("Failed to emit track-updated event: {}", e);
+                        if should_emit {
+                            info!(
+                                "Track changed: '{}' by '{}'",
+                                track_info_for_check.title, track_info_for_check.artist
+                            );
+                            *current_track_guard = Some(track_info_for_check.clone());
+                            drop(current_track_guard); // Release lock before emit
+                            
+                            if let Err(e) =
+                                app_handle_for_track.emit("track-updated", &track_info_for_check)
+                            {
+                                error!("Failed to emit track-updated event: {}", e);
+                            }
+                        } else {
+                            debug!("Track duplicate detected, skipping emit");
                         }
-                    } else {
-                        debug!("Track duplicate detected, skipping emit");
+                    }.await;
+                    
+                    // Cleanup: Remove from processing set
+                    {
+                        let mut processing_tracks = processing_guard.write().await;
+                        processing_tracks.remove(&track_key);
                     }
                 }
             });

@@ -346,7 +346,7 @@ Approach each song as a complete artistic work with unified themes, emotions, an
             {"role": "user", "content": translation_prompt}
         ],
         "temperature": 0.3,
-        "max_tokens": 2048,
+        "max_tokens": 4096,
         "model": model_id
     });
 
@@ -548,10 +548,18 @@ CRITICAL RULES:
 
 Target language: {} ({})
 Source language hint: {} (but detect the actual language yourself)"#,
-        target_lang_name, target_lang, target_lang_name, target_lang_name,
+        target_lang_name,
+        target_lang,
+        target_lang_name,
+        target_lang_name,
         chinese_instruction,
-        target_lang, target_lang_name, 
-        if source_lang == "auto" { "Auto-detect".to_string() } else { format!("{} ({})", source_lang, source_lang_name) }
+        target_lang,
+        target_lang_name,
+        if source_lang == "auto" {
+            "Auto-detect".to_string()
+        } else {
+            format!("{} ({})", source_lang, source_lang_name)
+        }
     );
 
     format!(
@@ -565,7 +573,8 @@ Original lyrics:
 {}
 
 Response:"#,
-        detection_instruction, style_specific_instruction, 
+        detection_instruction,
+        style_specific_instruction,
         r#"## OUTPUT FORMAT
 - If same language: respond exactly "SAME_LANGUAGE"
 - If translation needed: provide ONLY the translated lyrics, one line per original line"#,
@@ -579,13 +588,17 @@ fn parse_translation_response(
     detected_language: &str,
 ) -> Result<(Vec<TranslatedLyricLine>, bool), String> {
     let response_text = response_text.trim();
-    
+
     // Check for same language indicator
     if response_text == "SAME_LANGUAGE" || response_text.contains("SAME_LANGUAGE") {
-        debug!("LLM detected same language, no translation needed");
+        debug!(
+            "LLM detected {} as same language, no translation needed",
+            detected_language
+        );
+        debug!("Response text: {}", response_text);
         return Ok((vec![], true)); // Empty translation list, same_language = true
     }
-    
+
     // Clean the response text for actual translation
     let cleaned_response = response_text
         .lines()
@@ -858,35 +871,69 @@ fn detect_language_fallback(lyrics: &[LyricLine]) -> String {
         .to_lowercase();
 
     // More accurate language detection that doesn't confuse Japanese and Chinese
-    let hiragana_count = sample_text.chars().filter(|c| matches!(c, '\u{3040}'..='\u{309f}')).count();
-    let katakana_count = sample_text.chars().filter(|c| matches!(c, '\u{30a0}'..='\u{30ff}')).count();
-    let kanji_count = sample_text.chars().filter(|c| matches!(c, '\u{4e00}'..='\u{9faf}')).count();
+    let hiragana_count = sample_text
+        .chars()
+        .filter(|c| matches!(c, '\u{3040}'..='\u{309f}'))
+        .count();
+    let katakana_count = sample_text
+        .chars()
+        .filter(|c| matches!(c, '\u{30a0}'..='\u{30ff}'))
+        .count();
+    let kanji_count = sample_text
+        .chars()
+        .filter(|c| matches!(c, '\u{4e00}'..='\u{9faf}'))
+        .count();
     let total_chars = sample_text.chars().count();
-    
+
     // Japanese detection: must have kana (hiragana or katakana)
     if hiragana_count > 0 || katakana_count > 0 {
         let kana_ratio = (hiragana_count + katakana_count) as f32 / total_chars as f32;
-        if kana_ratio > 0.1 { // At least 10% kana indicates Japanese
+        if kana_ratio > 0.1 {
+            // At least 10% kana indicates Japanese
             return "ja".to_string();
         }
     }
-    
+
     // Korean detection
-    if sample_text.chars().any(|c| matches!(c, '\u{ac00}'..='\u{d7af}')) {
+    if sample_text
+        .chars()
+        .any(|c| matches!(c, '\u{ac00}'..='\u{d7af}'))
+    {
         return "ko".to_string();
     }
-    
+
     // Chinese detection: has CJK characters but very little or no kana
     if kanji_count > 0 {
         let kana_ratio = (hiragana_count + katakana_count) as f32 / total_chars as f32;
         let kanji_ratio = kanji_count as f32 / total_chars as f32;
-        if kanji_ratio > 0.3 && kana_ratio < 0.1 { // Mostly CJK with little kana
+        if kanji_ratio > 0.3 && kana_ratio < 0.1 {
+            // Mostly CJK with little kana
             // Check for Traditional Chinese specific characters
-            let has_traditional = sample_text.chars().any(|c| matches!(c, 
-                '這' | '樣' | '時' | '會' | '過' | '應' | '來' | '對' | '於' | '個' |
-                '電' | '學' | '國' | '說' | '話' | '語' | '見' | '間' | '開' | '關'
-            ));
-            
+            let has_traditional = sample_text.chars().any(|c| {
+                matches!(
+                    c,
+                    '這' | '樣'
+                        | '時'
+                        | '會'
+                        | '過'
+                        | '應'
+                        | '來'
+                        | '對'
+                        | '於'
+                        | '個'
+                        | '電'
+                        | '學'
+                        | '國'
+                        | '說'
+                        | '話'
+                        | '語'
+                        | '見'
+                        | '間'
+                        | '開'
+                        | '關'
+                )
+            });
+
             if has_traditional {
                 return "zh-tw".to_string(); // Default to Taiwan Traditional
             } else {
@@ -894,46 +941,82 @@ fn detect_language_fallback(lyrics: &[LyricLine]) -> String {
             }
         }
     }
-    
+
     // Russian detection
-    if sample_text.chars().any(|c| matches!(c, '\u{0400}'..='\u{04ff}')) {
+    if sample_text
+        .chars()
+        .any(|c| matches!(c, '\u{0400}'..='\u{04ff}'))
+    {
         return "ru".to_string();
     }
-    
+
     // Arabic detection
-    if sample_text.chars().any(|c| matches!(c, '\u{0600}'..='\u{06ff}')) {
+    if sample_text
+        .chars()
+        .any(|c| matches!(c, '\u{0600}'..='\u{06ff}'))
+    {
         return "ar".to_string();
     }
 
     // European language detection with common word patterns
-    let english_patterns = [" the ", " and ", " is ", " are ", " to ", " of ", " in ", " that "];
-    let spanish_patterns = [" el ", " la ", " de ", " que ", " en ", " un ", " se ", " no "];
-    let french_patterns = [" le ", " de ", " et ", " à ", " un ", " ce ", " que ", " du "];
-    let german_patterns = [" der ", " die ", " das ", " und ", " ich ", " ist ", " du ", " sie "];
-    let portuguese_patterns = [" de ", " que ", " não ", " um ", " se ", " da ", " do ", " em "];
-    let italian_patterns = [" il ", " di ", " che ", " non ", " un ", " la ", " del ", " da "];
+    let english_patterns = [
+        " the ", " and ", " is ", " are ", " to ", " of ", " in ", " that ",
+    ];
+    let spanish_patterns = [
+        " el ", " la ", " de ", " que ", " en ", " un ", " se ", " no ",
+    ];
+    let french_patterns = [
+        " le ", " de ", " et ", " à ", " un ", " ce ", " que ", " du ",
+    ];
+    let german_patterns = [
+        " der ", " die ", " das ", " und ", " ich ", " ist ", " du ", " sie ",
+    ];
+    let portuguese_patterns = [
+        " de ", " que ", " não ", " um ", " se ", " da ", " do ", " em ",
+    ];
+    let italian_patterns = [
+        " il ", " di ", " che ", " non ", " un ", " la ", " del ", " da ",
+    ];
 
-    if english_patterns.iter().any(|&pattern| sample_text.contains(pattern)) {
+    if english_patterns
+        .iter()
+        .any(|&pattern| sample_text.contains(pattern))
+    {
         return "en".to_string();
     }
-    
-    if spanish_patterns.iter().any(|&pattern| sample_text.contains(pattern)) {
+
+    if spanish_patterns
+        .iter()
+        .any(|&pattern| sample_text.contains(pattern))
+    {
         return "es".to_string();
     }
-    
-    if french_patterns.iter().any(|&pattern| sample_text.contains(pattern)) {
+
+    if french_patterns
+        .iter()
+        .any(|&pattern| sample_text.contains(pattern))
+    {
         return "fr".to_string();
     }
-    
-    if german_patterns.iter().any(|&pattern| sample_text.contains(pattern)) {
+
+    if german_patterns
+        .iter()
+        .any(|&pattern| sample_text.contains(pattern))
+    {
         return "de".to_string();
     }
-    
-    if portuguese_patterns.iter().any(|&pattern| sample_text.contains(pattern)) {
+
+    if portuguese_patterns
+        .iter()
+        .any(|&pattern| sample_text.contains(pattern))
+    {
         return "pt".to_string();
     }
-    
-    if italian_patterns.iter().any(|&pattern| sample_text.contains(pattern)) {
+
+    if italian_patterns
+        .iter()
+        .any(|&pattern| sample_text.contains(pattern))
+    {
         return "it".to_string();
     }
 

@@ -3,10 +3,40 @@ use regex::Regex;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
+use tokio::sync::RwLock;
 
 // Import shared model blacklist from translation module
 use crate::translation::{blacklist_model, is_model_blacklisted};
+
+// Shared HTTP client instance
+static HTTP_CLIENT: OnceLock<Arc<Client>> = OnceLock::new();
+
+// Cache for track cleaning results to avoid duplicate API calls
+static TRACK_CLEANING_CACHE: OnceLock<Arc<RwLock<HashMap<String, String>>>> = OnceLock::new();
+
+/// Get shared cache for track cleaning results
+fn get_track_cleaning_cache() -> &'static Arc<RwLock<HashMap<String, String>>> {
+    TRACK_CLEANING_CACHE.get_or_init(|| {
+        Arc::new(RwLock::new(HashMap::new()))
+    })
+}
+
+/// Get shared HTTP client with connection pooling
+fn get_shared_http_client() -> &'static Arc<Client> {
+    HTTP_CLIENT.get_or_init(|| {
+        Arc::new(
+            Client::builder()
+                .timeout(Duration::from_secs(30))
+                .pool_max_idle_per_host(10)
+                .pool_idle_timeout(Duration::from_secs(90))
+                .build()
+                .expect("Failed to create HTTP client"),
+        )
+    })
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CleaningResult {
@@ -604,34 +634,69 @@ pub fn remove_artist_from_track(track_name: &str, artist_name: &str) -> String {
 
 /// Main track cleaning function - tries GitHub AI first, then Gemini, then regex fallback
 pub async fn clean_track_name(track_name: &str) -> String {
+    // Check cache first to avoid duplicate operations
+    let cache = get_track_cleaning_cache();
+    {
+        let cache_read = cache.read().await;
+        if let Some(cached_result) = cache_read.get(track_name) {
+            debug!("Using cached cleaning result for: {}", track_name);
+            return cached_result.clone();
+        }
+    }
+
     // Load environment variables to check token availability
     dotenv::dotenv().ok();
 
-    // Check if GitHub token is available before attempting request
-    if let Ok(github_token) = std::env::var("GITHUB_TOKEN") {
-        if !github_token.trim().is_empty() {
-            debug!("GitHub token available, trying GitHub AI models");
-            match clean_track_name_github(track_name).await {
-                Ok(cleaned) => return cleaned,
-                Err(e) => {
-                    debug!("GitHub AI cleaning failed, trying Gemini fallback: {}", e);
+    let cleaned_result = {
+        // Check if GitHub token is available before attempting request
+        if let Ok(github_token) = std::env::var("GITHUB_TOKEN") {
+            if !github_token.trim().is_empty() {
+                debug!("GitHub token available, trying GitHub AI models");
+                match clean_track_name_github(track_name).await {
+                    Ok(cleaned) => cleaned,
+                    Err(e) => {
+                        debug!("GitHub AI cleaning failed, trying Gemini fallback: {}", e);
+                        // Try Gemini fallback
+                        match clean_track_name_gemini(track_name).await {
+                            Ok(cleaned) => cleaned,
+                            Err(e) => {
+                                debug!("Gemini cleaning also failed, using regex fallback: {}", e);
+                                clean_track_name_sync(track_name)
+                            }
+                        }
+                    }
+                }
+            } else {
+                debug!("GitHub token is empty, skipping GitHub AI models");
+                // Try Gemini fallback
+                match clean_track_name_gemini(track_name).await {
+                    Ok(cleaned) => cleaned,
+                    Err(e) => {
+                        debug!("Gemini cleaning also failed, using regex fallback: {}", e);
+                        clean_track_name_sync(track_name)
+                    }
                 }
             }
         } else {
-            debug!("GitHub token is empty, skipping GitHub AI models");
+            debug!("No GitHub token found, skipping GitHub AI models");
+            // Try Gemini fallback
+            match clean_track_name_gemini(track_name).await {
+                Ok(cleaned) => cleaned,
+                Err(e) => {
+                    debug!("Gemini cleaning also failed, using regex fallback: {}", e);
+                    clean_track_name_sync(track_name)
+                }
+            }
         }
-    } else {
-        debug!("No GitHub token found, skipping GitHub AI models");
+    };
+
+    // Cache the result for future calls
+    {
+        let mut cache_write = cache.write().await;
+        cache_write.insert(track_name.to_string(), cleaned_result.clone());
     }
 
-    // Try Gemini 2.5 Flash-Lite as fallback
-    match clean_track_name_gemini(track_name).await {
-        Ok(cleaned) => cleaned,
-        Err(e) => {
-            debug!("Gemini cleaning also failed, using regex fallback: {}", e);
-            clean_track_name_sync(track_name)
-        }
-    }
+    cleaned_result
 }
 
 /// Cleans track name using GitHub AI models when token is available
@@ -741,10 +806,7 @@ async fn try_llm_cleaning(
     model_id: &str,
     github_token: &str,
 ) -> Result<String, String> {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = get_shared_http_client().clone();
 
     // Create the prompt with configuration
     let user_content = format!(
@@ -915,10 +977,7 @@ async fn try_gemini_cleaning(
     model_id: &str,
     gemini_api_key: &str,
 ) -> Result<String, String> {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = get_shared_http_client().clone();
 
     // Create a simplified prompt optimized for the lightweight Flash-Lite model
     let user_content = format!(
@@ -1336,10 +1395,7 @@ async fn try_llm_artist_track_cleaning(
     model_id: &str,
     github_token: &str,
 ) -> Result<ArtistTrackCleaningResult, String> {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = get_shared_http_client().clone();
 
     // Create the enhanced prompt for both artist and track cleaning
     let user_content = format!(
@@ -1441,7 +1497,7 @@ Use human judgment. When in doubt, prefer conservative cleaning."#;
     });
 
     let response = client
-        .post("https://models.inference.ai.azure.com/chat/completions")
+        .post("https://models.github.ai/inference/chat/completions")
         .header("Authorization", format!("Bearer {}", github_token))
         .header("Content-Type", "application/json")
         .json(&payload)
@@ -1518,7 +1574,7 @@ fn parse_artist_track_cleaning_response(
                     .as_str()
                     .ok_or("Missing cleaned_title in track")?
                     .to_string(),
-                cleaned_artist: None, // Not used for track cleaning
+                cleaned_artist: None,    // Not used for track cleaning
                 cleaned_artists: vec![], // Empty for tracks
                 kept_markers: track_obj["kept_markers"]
                     .as_array()
@@ -1578,10 +1634,7 @@ async fn try_gemini_artist_track_cleaning(
     model_id: &str,
     gemini_api_key: &str,
 ) -> Result<ArtistTrackCleaningResult, String> {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = get_shared_http_client().clone();
 
     let prompt = format!(
         r#"Clean this artist name and track title into canonical forms:
