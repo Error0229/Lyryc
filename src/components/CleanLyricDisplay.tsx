@@ -24,17 +24,20 @@ const CleanLyricDisplay: React.FC<CleanLyricDisplayProps> = ({
   fontFamily, // Keep for backward compatibility, but will be overridden by style store
   viewMode = 'highlighted'
 }) => {
-  const { style } = useLyricsStyleStore();
+  const style = useLyricsStyleStore((state) => state.style);
   const { enabled, displayMode, showLanguageIndicator } = useTranslationStore();
   const { settings: hiraganaSettings } = useHiraganaStore();
   
   // Debug logging to check if style updates are received
-  console.log('[CleanLyricDisplay] Current style:', {
-    fontFamily: style.fontFamily,
-    fontSize: style.fontSize,
-    textColor: style.textColor,
-    fontWeight: style.fontWeight
-  });
+  useEffect(() => {
+    console.log('[CleanLyricDisplay] Style updated:', {
+      fontFamily: style.fontFamily,
+      fontSize: style.fontSize,
+      textColor: style.textColor,
+      fontWeight: style.fontWeight,
+      timestamp: new Date().toLocaleTimeString()
+    });
+  }, [style]);
   
   // State for hiragana conversion
   const [hiraganaText, setHiraganaText] = useState<string>('');

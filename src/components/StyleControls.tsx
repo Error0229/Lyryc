@@ -178,7 +178,7 @@ const StyleControls: React.FC<StyleControlsProps> = ({ isOpen, onClose }) => {
                       {(['normal', 'medium', 'semibold', 'bold'] as const).map((weight) => (
                         <button
                           key={weight}
-                          onClick={() => updateStyle({ fontWeight: weight })}
+                          onClick={() => debugUpdateStyle({ fontWeight: weight })}
                           className={`
                             p-2 rounded text-sm transition-colors capitalize
                             ${style.fontWeight === weight 
@@ -235,7 +235,7 @@ const StyleControls: React.FC<StyleControlsProps> = ({ isOpen, onClose }) => {
                       min="0"
                       max="100"
                       value={style.backgroundOpacity}
-                      onChange={(e) => updateStyle({ backgroundOpacity: parseInt(e.target.value) })}
+                      onChange={(e) => debugUpdateStyle({ backgroundOpacity: parseInt(e.target.value) })}
                       className="w-full"
                     />
                   </div>
@@ -254,7 +254,7 @@ const StyleControls: React.FC<StyleControlsProps> = ({ isOpen, onClose }) => {
                   <div className="flex items-center justify-between">
                     <span className="text-white/80 text-sm">Text Shadow</span>
                     <button
-                      onClick={() => updateStyle({ textShadow: !style.textShadow })}
+                      onClick={() => debugUpdateStyle({ textShadow: !style.textShadow })}
                       className={`
                         px-3 py-1 rounded text-sm transition-colors
                         ${style.textShadow 
@@ -276,7 +276,7 @@ const StyleControls: React.FC<StyleControlsProps> = ({ isOpen, onClose }) => {
                           min="0"
                           max="50"
                           value={style.textShadowBlur}
-                          onChange={(e) => updateStyle({ textShadowBlur: parseInt(e.target.value) })}
+                          onChange={(e) => debugUpdateStyle({ textShadowBlur: parseInt(e.target.value) })}
                           className="w-full"
                         />
                       </div>
@@ -285,7 +285,7 @@ const StyleControls: React.FC<StyleControlsProps> = ({ isOpen, onClose }) => {
                         <input
                           type="color"
                           value={style.textShadowColor}
-                          onChange={(e) => updateStyle({ textShadowColor: e.target.value })}
+                          onChange={(e) => debugUpdateStyle({ textShadowColor: e.target.value })}
                           className="w-8 h-6 rounded border border-white/20 bg-transparent"
                         />
                       </div>
@@ -296,7 +296,7 @@ const StyleControls: React.FC<StyleControlsProps> = ({ isOpen, onClose }) => {
                   <div className="flex items-center justify-between">
                     <span className="text-white/80 text-sm">Text Glow</span>
                     <button
-                      onClick={() => updateStyle({ textGlow: !style.textGlow })}
+                      onClick={() => debugUpdateStyle({ textGlow: !style.textGlow })}
                       className={`
                         px-3 py-1 rounded text-sm transition-colors
                         ${style.textGlow 
@@ -315,7 +315,7 @@ const StyleControls: React.FC<StyleControlsProps> = ({ isOpen, onClose }) => {
                       <input
                         type="color"
                         value={style.textGlowColor}
-                        onChange={(e) => updateStyle({ textGlowColor: e.target.value })}
+                        onChange={(e) => debugUpdateStyle({ textGlowColor: e.target.value })}
                         className="w-8 h-6 rounded border border-white/20 bg-transparent"
                       />
                     </div>
@@ -329,7 +329,7 @@ const StyleControls: React.FC<StyleControlsProps> = ({ isOpen, onClose }) => {
                       min="0"
                       max="20"
                       value={style.backgroundBlur}
-                      onChange={(e) => updateStyle({ backgroundBlur: parseInt(e.target.value) })}
+                      onChange={(e) => debugUpdateStyle({ backgroundBlur: parseInt(e.target.value) })}
                       className="w-full"
                     />
                   </div>
@@ -342,7 +342,7 @@ const StyleControls: React.FC<StyleControlsProps> = ({ isOpen, onClose }) => {
                       min="0"
                       max="100"
                       value={style.animationIntensity}
-                      onChange={(e) => updateStyle({ animationIntensity: parseInt(e.target.value) })}
+                      onChange={(e) => debugUpdateStyle({ animationIntensity: parseInt(e.target.value) })}
                       className="w-full"
                     />
                   </div>
@@ -364,7 +364,7 @@ const StyleControls: React.FC<StyleControlsProps> = ({ isOpen, onClose }) => {
                       {(['left', 'center', 'right'] as const).map((align) => (
                         <button
                           key={align}
-                          onClick={() => updateStyle({ textAlign: align })}
+                          onClick={() => debugUpdateStyle({ textAlign: align })}
                           className={`
                             p-2 rounded text-sm transition-colors capitalize
                             ${style.textAlign === align 
@@ -388,7 +388,7 @@ const StyleControls: React.FC<StyleControlsProps> = ({ isOpen, onClose }) => {
                       max="3.0"
                       step="0.1"
                       value={style.lineHeight}
-                      onChange={(e) => updateStyle({ lineHeight: parseFloat(e.target.value) })}
+                      onChange={(e) => debugUpdateStyle({ lineHeight: parseFloat(e.target.value) })}
                       className="w-full"
                     />
                   </div>
@@ -402,7 +402,7 @@ const StyleControls: React.FC<StyleControlsProps> = ({ isOpen, onClose }) => {
                       max="0.5"
                       step="0.01"
                       value={style.letterSpacing}
-                      onChange={(e) => updateStyle({ letterSpacing: parseFloat(e.target.value) })}
+                      onChange={(e) => debugUpdateStyle({ letterSpacing: parseFloat(e.target.value) })}
                       className="w-full"
                     />
                   </div>

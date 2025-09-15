@@ -286,9 +286,11 @@ export const useThemeStore = create<ThemeState>()(
         const theme = get().themes.find(t => t.id === themeId);
         if (theme) {
           set({ currentTheme: theme });
-          
-          // Apply theme to document
-          applyThemeToDocument(theme);
+
+          // Apply theme to document immediately
+          if (typeof window !== 'undefined') {
+            applyThemeToDocument(theme);
+          }
         }
       },
 
@@ -302,7 +304,7 @@ export const useThemeStore = create<ThemeState>()(
           custom: true,
         } as Theme;
 
-        set({ 
+        set({
           customTheme: newCustomTheme,
           currentTheme: newCustomTheme,
           themes: [
@@ -311,17 +313,22 @@ export const useThemeStore = create<ThemeState>()(
           ]
         });
 
-        applyThemeToDocument(newCustomTheme);
+        if (typeof window !== 'undefined') {
+          applyThemeToDocument(newCustomTheme);
+        }
       },
 
       resetToDefault: () => {
         const defaultTheme = defaultThemes[1]; // Dark theme
-        set({ 
+        set({
           currentTheme: defaultTheme,
           customTheme: null,
           themes: defaultThemes
         });
-        applyThemeToDocument(defaultTheme);
+
+        if (typeof window !== 'undefined') {
+          applyThemeToDocument(defaultTheme);
+        }
       },
 
       exportTheme: (themeId) => {
@@ -353,7 +360,9 @@ export const useThemeStore = create<ThemeState>()(
             currentTheme: importedTheme
           });
 
-          applyThemeToDocument(importedTheme);
+          if (typeof window !== 'undefined') {
+            applyThemeToDocument(importedTheme);
+          }
           return true;
         } catch (error) {
           console.error('Failed to import theme:', error);

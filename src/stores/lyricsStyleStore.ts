@@ -182,9 +182,12 @@ export const useLyricsStyleStore = create<LyricsStyleState>()(
       style: defaultStyle,
       
       updateStyle: (updates) => {
-        set(state => ({
-          style: { ...state.style, ...updates }
-        }));
+        console.log('[LyricsStyleStore] updateStyle called with:', updates);
+        set(state => {
+          const newStyle = { ...state.style, ...updates };
+          console.log('[LyricsStyleStore] new style set:', newStyle);
+          return { style: newStyle };
+        });
       },
       
       resetToDefault: () => {

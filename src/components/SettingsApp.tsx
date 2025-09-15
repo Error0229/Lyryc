@@ -9,6 +9,12 @@ import { invoke } from '@tauri-apps/api/core';
 
 const SettingsApp: React.FC = () => {
   const { style, updateStyle, applyPreset, getPresets, resetToDefault } = useLyricsStyleStore();
+
+  // Debug logging to track style updates
+  const debugUpdateStyle = (updates: any) => {
+    console.log('[SettingsApp] Updating style:', updates);
+    updateStyle(updates);
+  };
   const { displayMode, updateDisplayMode, config, updateConfig } = useTranslationStore();
   const { settings: hiraganaSettings } = useHiraganaStore();
   const [activeTab, setActiveTab] = useState<'presets' | 'font' | 'colors' | 'effects' | 'layout' | 'translation' | 'hiragana'>('presets');
@@ -138,7 +144,7 @@ const SettingsApp: React.FC = () => {
                     <label className="block text-white/80 text-sm font-medium mb-3">Font Family</label>
                     <select
                       value={style.fontFamily}
-                      onChange={(e) => updateStyle({ fontFamily: e.target.value })}
+                      onChange={(e) => debugUpdateStyle({ fontFamily: e.target.value })}
                       className="w-full p-3 bg-white/10 border border-white/20 rounded-xl text-white focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-400/20"
                     >
                       {fontOptions.map((font) => (
@@ -160,7 +166,7 @@ const SettingsApp: React.FC = () => {
                       max="5"
                       step="0.1"
                       value={style.fontSize}
-                      onChange={(e) => updateStyle({ fontSize: parseFloat(e.target.value) })}
+                      onChange={(e) => debugUpdateStyle({ fontSize: parseFloat(e.target.value) })}
                       className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer slider"
                     />
                   </div>
@@ -172,7 +178,7 @@ const SettingsApp: React.FC = () => {
                       {(['normal', 'medium', 'semibold', 'bold'] as const).map((weight) => (
                         <button
                           key={weight}
-                          onClick={() => updateStyle({ fontWeight: weight })}
+                          onClick={() => debugUpdateStyle({ fontWeight: weight })}
                           className={`
                             p-3 rounded-xl transition-all duration-200 capitalize font-medium
                             ${style.fontWeight === weight 
@@ -211,13 +217,13 @@ const SettingsApp: React.FC = () => {
                       <input
                         type="color"
                         value={color.value}
-                        onChange={(e) => updateStyle({ [color.key]: e.target.value })}
+                        onChange={(e) => debugUpdateStyle({ [color.key]: e.target.value })}
                         className="w-12 h-12 rounded-lg border-2 border-white/20 bg-transparent cursor-pointer"
                       />
                       <input
                         type="text"
                         value={color.value}
-                        onChange={(e) => updateStyle({ [color.key]: e.target.value })}
+                        onChange={(e) => debugUpdateStyle({ [color.key]: e.target.value })}
                         className="flex-1 p-3 bg-white/10 border border-white/20 rounded-xl text-white focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-400/20"
                         placeholder="#ffffff"
                       />
@@ -233,7 +239,7 @@ const SettingsApp: React.FC = () => {
                       min="0"
                       max="100"
                       value={style.backgroundOpacity}
-                      onChange={(e) => updateStyle({ backgroundOpacity: parseInt(e.target.value) })}
+                      onChange={(e) => debugUpdateStyle({ backgroundOpacity: parseInt(e.target.value) })}
                       className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer slider"
                     />
                   </div>
@@ -254,7 +260,7 @@ const SettingsApp: React.FC = () => {
                   <div className="flex items-center justify-between p-4 bg-white/5 rounded-xl border border-white/10">
                     <span className="text-white/80 font-medium">Text Shadow</span>
                     <button
-                      onClick={() => updateStyle({ textShadow: !style.textShadow })}
+                      onClick={() => debugUpdateStyle({ textShadow: !style.textShadow })}
                       className={`
                         px-4 py-2 rounded-lg font-medium transition-all duration-200
                         ${style.textShadow 
@@ -278,7 +284,7 @@ const SettingsApp: React.FC = () => {
                           min="0"
                           max="50"
                           value={style.textShadowBlur}
-                          onChange={(e) => updateStyle({ textShadowBlur: parseInt(e.target.value) })}
+                          onChange={(e) => debugUpdateStyle({ textShadowBlur: parseInt(e.target.value) })}
                           className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer slider"
                         />
                       </div>
@@ -287,7 +293,7 @@ const SettingsApp: React.FC = () => {
                         <input
                           type="color"
                           value={style.textShadowColor}
-                          onChange={(e) => updateStyle({ textShadowColor: e.target.value })}
+                          onChange={(e) => debugUpdateStyle({ textShadowColor: e.target.value })}
                           className="w-10 h-10 rounded-lg border border-white/20 bg-transparent cursor-pointer"
                         />
                       </div>
@@ -298,7 +304,7 @@ const SettingsApp: React.FC = () => {
                   <div className="flex items-center justify-between p-4 bg-white/5 rounded-xl border border-white/10">
                     <span className="text-white/80 font-medium">Text Glow</span>
                     <button
-                      onClick={() => updateStyle({ textGlow: !style.textGlow })}
+                      onClick={() => debugUpdateStyle({ textGlow: !style.textGlow })}
                       className={`
                         px-4 py-2 rounded-lg font-medium transition-all duration-200
                         ${style.textGlow 
@@ -317,7 +323,7 @@ const SettingsApp: React.FC = () => {
                       <input
                         type="color"
                         value={style.textGlowColor}
-                        onChange={(e) => updateStyle({ textGlowColor: e.target.value })}
+                        onChange={(e) => debugUpdateStyle({ textGlowColor: e.target.value })}
                         className="w-10 h-10 rounded-lg border border-white/20 bg-transparent cursor-pointer"
                       />
                     </div>
@@ -333,7 +339,7 @@ const SettingsApp: React.FC = () => {
                       min="0"
                       max="20"
                       value={style.backgroundBlur}
-                      onChange={(e) => updateStyle({ backgroundBlur: parseInt(e.target.value) })}
+                      onChange={(e) => debugUpdateStyle({ backgroundBlur: parseInt(e.target.value) })}
                       className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer slider"
                     />
                   </div>
@@ -348,7 +354,7 @@ const SettingsApp: React.FC = () => {
                       min="0"
                       max="100"
                       value={style.animationIntensity}
-                      onChange={(e) => updateStyle({ animationIntensity: parseInt(e.target.value) })}
+                      onChange={(e) => debugUpdateStyle({ animationIntensity: parseInt(e.target.value) })}
                       className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer slider"
                     />
                   </div>
@@ -372,11 +378,11 @@ const SettingsApp: React.FC = () => {
                       {(['left', 'center', 'right'] as const).map((align) => (
                         <button
                           key={align}
-                          onClick={() => updateStyle({ textAlign: align })}
+                          onClick={() => debugUpdateStyle({ textAlign: align })}
                           className={`
                             p-3 rounded-xl transition-all duration-200 capitalize font-medium
-                            ${style.textAlign === align 
-                              ? 'bg-blue-500/30 text-blue-200 border border-blue-400/50 shadow-lg' 
+                            ${style.textAlign === align
+                              ? 'bg-blue-500/30 text-blue-200 border border-blue-400/50 shadow-lg'
                               : 'bg-white/5 text-white/70 border border-white/10 hover:bg-white/10'
                             }
                           `}
@@ -398,7 +404,7 @@ const SettingsApp: React.FC = () => {
                       max="3.0"
                       step="0.1"
                       value={style.lineHeight}
-                      onChange={(e) => updateStyle({ lineHeight: parseFloat(e.target.value) })}
+                      onChange={(e) => debugUpdateStyle({ lineHeight: parseFloat(e.target.value) })}
                       className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer slider"
                     />
                   </div>
@@ -414,7 +420,7 @@ const SettingsApp: React.FC = () => {
                       max="0.5"
                       step="0.01"
                       value={style.letterSpacing}
-                      onChange={(e) => updateStyle({ letterSpacing: parseFloat(e.target.value) })}
+                      onChange={(e) => debugUpdateStyle({ letterSpacing: parseFloat(e.target.value) })}
                       className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer slider"
                     />
                   </div>
@@ -756,7 +762,7 @@ const SettingsApp: React.FC = () => {
         </div>
       </div>
 
-      <style jsx>{`
+      <style>{`
         .slider {
           background: linear-gradient(90deg, #3b82f6 0%, #6366f1 100%);
           border-radius: 10px;
