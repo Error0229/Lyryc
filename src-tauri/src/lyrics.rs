@@ -131,52 +131,7 @@ pub async fn fetch_lyrics(
     // Build candidates with priority (higher = more likely to succeed)
     let mut candidates = Vec::new();
 
-    // Priority 10: Wildcard searches (often most effective)
-    if !track_name.trim().is_empty() && !search_artist.trim().is_empty() {
-        candidates.push(LyricsCandidate {
-            priority: 10,
-            url: format!(
-                "https://lrclib.net/api/search?q={}",
-                urlencoding::encode(&format!("{} {}", track_name, search_artist))
-            ),
-            description: format!("wildcard: '{}' '{}'", track_name, search_artist),
-        });
-    }
-
-    if !track_name.trim().is_empty() {
-        candidates.push(LyricsCandidate {
-            priority: 9,
-            url: format!(
-                "https://lrclib.net/api/search?q={}",
-                urlencoding::encode(&track_name)
-            ),
-            description: format!("wildcard: '{}'", track_name),
-        });
-    }
-
-    if !cleaned_track.trim().is_empty() && !search_artist.trim().is_empty() {
-        candidates.push(LyricsCandidate {
-            priority: 8,
-            url: format!(
-                "https://lrclib.net/api/search?q={}",
-                urlencoding::encode(&format!("{} {}", cleaned_track, search_artist))
-            ),
-            description: format!("wildcard cleaned: '{}' '{}'", cleaned_track, search_artist),
-        });
-    }
-
-    if !cleaned_track.trim().is_empty() {
-        candidates.push(LyricsCandidate {
-            priority: 7,
-            url: format!(
-                "https://lrclib.net/api/search?q={}",
-                urlencoding::encode(&cleaned_track)
-            ),
-            description: format!("wildcard cleaned: '{}'", cleaned_track),
-        });
-    }
-
-    // Priority 6-3: Exact searches
+    // Priority 10: Exact searches (most precise)
     if !track_name.trim().is_empty() && !search_artist.trim().is_empty() {
         let mut url = format!(
             "https://lrclib.net/api/search?track_name={}",
@@ -187,28 +142,13 @@ pub async fn fetch_lyrics(
             urlencoding::encode(&search_artist)
         ));
         candidates.push(LyricsCandidate {
-            priority: 6,
+            priority: 10,
             url,
             description: format!("exact: '{}' by '{}'", track_name, search_artist),
         });
     }
 
-    if !track_without_artist.trim().is_empty() && !search_artist.trim().is_empty() {
-        let mut url = format!(
-            "https://lrclib.net/api/search?track_name={}",
-            urlencoding::encode(&track_without_artist)
-        );
-        url.push_str(&format!(
-            "&artist_name={}",
-            urlencoding::encode(&search_artist)
-        ));
-        candidates.push(LyricsCandidate {
-            priority: 5,
-            url,
-            description: format!("exact without artist: '{}' by '{}'", track_without_artist, search_artist),
-        });
-    }
-
+    // Priority 9: Exact cleaned searches
     if !cleaned_track.trim().is_empty() && !search_artist.trim().is_empty() {
         let mut url = format!(
             "https://lrclib.net/api/search?track_name={}",
@@ -219,9 +159,50 @@ pub async fn fetch_lyrics(
             urlencoding::encode(&search_artist)
         ));
         candidates.push(LyricsCandidate {
-            priority: 4,
+            priority: 9,
             url,
             description: format!("exact cleaned: '{}' by '{}'", cleaned_track, search_artist),
+        });
+    }
+
+    // Priority 8: Wildcard with artist name
+    if !track_name.trim().is_empty() && !search_artist.trim().is_empty() {
+        candidates.push(LyricsCandidate {
+            priority: 8,
+            url: format!(
+                "https://lrclib.net/api/search?q={}",
+                urlencoding::encode(&format!("{} {}", track_name, search_artist))
+            ),
+            description: format!("wildcard: '{}' '{}'", track_name, search_artist),
+        });
+    }
+
+    // Priority 7: Wildcard cleaned with artist name
+    if !cleaned_track.trim().is_empty() && !search_artist.trim().is_empty() {
+        candidates.push(LyricsCandidate {
+            priority: 7,
+            url: format!(
+                "https://lrclib.net/api/search?q={}",
+                urlencoding::encode(&format!("{} {}", cleaned_track, search_artist))
+            ),
+            description: format!("wildcard cleaned: '{}' '{}'", cleaned_track, search_artist),
+        });
+    }
+
+    // Priority 6-3: Lower priority exact searches and wildcards
+    if !track_without_artist.trim().is_empty() && !search_artist.trim().is_empty() {
+        let mut url = format!(
+            "https://lrclib.net/api/search?track_name={}",
+            urlencoding::encode(&track_without_artist)
+        );
+        url.push_str(&format!(
+            "&artist_name={}",
+            urlencoding::encode(&search_artist)
+        ));
+        candidates.push(LyricsCandidate {
+            priority: 6,
+            url,
+            description: format!("exact without artist: '{}' by '{}'", track_without_artist, search_artist),
         });
     }
 
@@ -235,9 +216,31 @@ pub async fn fetch_lyrics(
             urlencoding::encode(&search_artist)
         ));
         candidates.push(LyricsCandidate {
-            priority: 3,
+            priority: 5,
             url,
             description: format!("exact cleaned without artist: '{}' by '{}'", cleaned_track_without_artist, search_artist),
+        });
+    }
+
+    if !cleaned_track.trim().is_empty() {
+        candidates.push(LyricsCandidate {
+            priority: 4,
+            url: format!(
+                "https://lrclib.net/api/search?q={}",
+                urlencoding::encode(&cleaned_track)
+            ),
+            description: format!("wildcard cleaned: '{}'", cleaned_track),
+        });
+    }
+
+    if !track_name.trim().is_empty() {
+        candidates.push(LyricsCandidate {
+            priority: 3,
+            url: format!(
+                "https://lrclib.net/api/search?q={}",
+                urlencoding::encode(&track_name)
+            ),
+            description: format!("wildcard: '{}'", track_name),
         });
     }
 

@@ -531,6 +531,7 @@ You MUST use the correct character set for {}!"#,
         String::new()
     };
 
+    let target_native_name = get_native_language_name(target_lang);
     let detection_instruction = format!(
         r#"## LANGUAGE DETECTION AND TRANSLATION TASK
 Your task is to:
@@ -545,9 +546,20 @@ CRITICAL RULES:
 - ALWAYS detect the actual language of the lyrics first
 - Compare DETECTED language code (not source specification) with target language code {}
 - Only translate if detected language differs from target language{}
-- Be PRECISE: Japanese (ja) ≠ Chinese (zh-tw), Korean (ko) ≠ Chinese (zh-tw), etc.
 
-Target language code: {} ({})
+IMPORTANT LANGUAGE DISTINCTIONS (with native names):
+- 日本語 (ja) ≠ 繁體中文 (zh-tw) → MUST TRANSLATE
+- 日本語 (ja) ≠ 简体中文 (zh-cn) → MUST TRANSLATE
+- 한국어 (ko) ≠ 繁體中文 (zh-tw) → MUST TRANSLATE
+- English (en) ≠ 繁體中文 (zh-tw) → MUST TRANSLATE
+- 繁體中文 (zh-tw) = 繁體中文 (zh-tw) → SAME_LANGUAGE
+- 简体中文 (zh-cn) ≠ 繁體中文 (zh-tw) → MUST TRANSLATE
+
+DOUBLE CHECK: Is the detected language code EXACTLY "{}"?
+- If YES: respond "SAME_LANGUAGE"
+- If NO: translate to {} ({} / {})
+
+Target language: {} ({} / {})
 Source language hint: {} (but detect the actual language yourself)"#,
         target_lang_name,
         target_lang,
@@ -557,7 +569,12 @@ Source language hint: {} (but detect the actual language yourself)"#,
         target_lang,
         chinese_instruction,
         target_lang,
+        target_lang,
         target_lang_name,
+        target_native_name,
+        target_lang,
+        target_lang_name,
+        target_native_name,
         if source_lang == "auto" {
             "Auto-detect".to_string()
         } else {
@@ -579,8 +596,16 @@ Response:"#,
         detection_instruction,
         style_specific_instruction,
         r#"## OUTPUT FORMAT
-- If same language: respond exactly "SAME_LANGUAGE"
-- If translation needed: provide ONLY the translated lyrics, one line per original line"#,
+ONLY respond with ONE of these:
+1. If detected language code EXACTLY matches target language code: respond exactly "SAME_LANGUAGE"
+2. If detected language code is DIFFERENT from target language code: provide translated lyrics only
+
+Examples with native names:
+- Detected: 日本語 (ja), Target: 繁體中文 (zh-tw) → TRANSLATE (different languages)
+- Detected: English (en), Target: 繁體中文 (zh-tw) → TRANSLATE (different languages)
+- Detected: 繁體中文 (zh-tw), Target: 繁體中文 (zh-tw) → "SAME_LANGUAGE" (identical)
+- Detected: 한국어 (ko), Target: 繁體中文 (zh-tw) → TRANSLATE (different languages)
+- Detected: 简体中文 (zh-cn), Target: 繁體中文 (zh-tw) → TRANSLATE (different Chinese variants)"#,
         lyrics
     )
 }
@@ -1032,22 +1057,45 @@ fn get_language_name(code: &str) -> &str {
     match code {
         "auto" => "Auto-detect",
         "en" => "English",
-        "es" => "Spanish",
-        "fr" => "French",
-        "de" => "German",
-        "it" => "Italian",
-        "pt" => "Portuguese",
-        "ru" => "Russian",
-        "ja" => "Japanese",
-        "ko" => "Korean",
-        "zh" => "Chinese Simplified (Mainland China - 简体中文)",
-        "zh-cn" => "Chinese Simplified (Mainland China - 简体中文)",
-        "zh-tw" => "Chinese Traditional (Taiwan - 繁體中文)",
-        "zh-hk" => "Chinese Traditional (Hong Kong - 繁體中文)",
-        "ar" => "Arabic",
-        "hi" => "Hindi",
-        "th" => "Thai",
+        "es" => "Español (Spanish)",
+        "fr" => "Français (French)",
+        "de" => "Deutsch (German)",
+        "it" => "Italiano (Italian)",
+        "pt" => "Português (Portuguese)",
+        "ru" => "Русский (Russian)",
+        "ja" => "日本語 (Japanese)",
+        "ko" => "한국어 (Korean)",
+        "zh" => "简体中文 (Chinese Simplified)",
+        "zh-cn" => "简体中文 (Chinese Simplified)",
+        "zh-tw" => "繁體中文 (Chinese Traditional - Taiwan)",
+        "zh-hk" => "繁體中文 (Chinese Traditional - Hong Kong)",
+        "ar" => "العربية (Arabic)",
+        "hi" => "हिन्दी (Hindi)",
+        "th" => "ไทย (Thai)",
         _ => "Unknown Language",
+    }
+}
+
+fn get_native_language_name(code: &str) -> &str {
+    match code {
+        "auto" => "Auto-detect",
+        "en" => "English",
+        "es" => "Español",
+        "fr" => "Français",
+        "de" => "Deutsch",
+        "it" => "Italiano",
+        "pt" => "Português",
+        "ru" => "Русский",
+        "ja" => "日本語",
+        "ko" => "한국어",
+        "zh" => "简体中文",
+        "zh-cn" => "简体中文",
+        "zh-tw" => "繁體中文",
+        "zh-hk" => "繁體中文",
+        "ar" => "العربية",
+        "hi" => "हिन्दी",
+        "th" => "ไทย",
+        _ => "Unknown",
     }
 }
 
