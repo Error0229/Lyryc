@@ -180,27 +180,22 @@ export const useLyricsStyleStore = create<LyricsStyleState>()(
   persist(
     (set, get) => ({
       style: defaultStyle,
-      
+
       updateStyle: (updates) => {
-        console.log('[LyricsStyleStore] updateStyle called with:', updates);
-        set(state => {
-          const newStyle = { ...state.style, ...updates };
-          console.log('[LyricsStyleStore] new style set:', newStyle);
-          return { style: newStyle };
-        });
+        set(state => ({ style: { ...state.style, ...updates } }));
       },
-      
+
       resetToDefault: () => {
         set({ style: defaultStyle });
       },
-      
+
       applyPreset: (presetName) => {
         const preset = stylePresets.find(p => p.name === presetName);
         if (preset) {
           set({ style: preset.style });
         }
       },
-      
+
       getPresets: () => stylePresets,
     }),
     {
@@ -209,3 +204,19 @@ export const useLyricsStyleStore = create<LyricsStyleState>()(
     }
   )
 );
+
+// Add storage event listener for real-time cross-window synchronization
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    if (e.key === 'lyryc-lyrics-style-store' && e.newValue) {
+      try {
+        const data = JSON.parse(e.newValue);
+        if (data.state?.style) {
+          useLyricsStyleStore.setState({ style: data.state.style });
+        }
+      } catch (error) {
+        console.error('[LyricsStyleStore] Failed to parse storage event:', error);
+      }
+    }
+  });
+}

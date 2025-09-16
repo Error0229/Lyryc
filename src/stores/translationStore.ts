@@ -153,14 +153,14 @@ export const useTranslationStore = create<TranslationState>()(
   persist(
     (set, get) => ({
       ...defaultSettings,
-      
+
       // Runtime state
       isTranslating: false,
       translationError: null,
       lastTranslationTime: null,
 
       // Actions
-      setEnabled: (enabled) => 
+      setEnabled: (enabled) =>
         set((state) => ({
           enabled,
           config: { ...state.config, enabled }
@@ -178,13 +178,13 @@ export const useTranslationStore = create<TranslationState>()(
           displayMode: { ...state.displayMode, ...modeUpdate }
         })),
 
-      setPreferredSourceLanguages: (languages) => 
+      setPreferredSourceLanguages: (languages) =>
         set({ preferredSourceLanguages: languages }),
 
-      setExcludedSourceLanguages: (languages) => 
+      setExcludedSourceLanguages: (languages) =>
         set({ excludedSourceLanguages: languages }),
 
-      setFallbackTargetLanguage: (language) => 
+      setFallbackTargetLanguage: (language) =>
         set({ fallbackTargetLanguage: language }),
 
       setIsTranslating: (translating) => set({ isTranslating: translating }),
@@ -215,10 +215,27 @@ export const useTranslationStore = create<TranslationState>()(
         showLanguageIndicator: state.showLanguageIndicator,
         showTranslationToggle: state.showTranslationToggle,
         showConfidenceScore: state.showConfidenceScore
-      })
+      }),
     }
   )
 );
+
+// Add storage event listener for real-time cross-window synchronization
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    if (e.key === 'lyryc-translation-settings' && e.newValue) {
+      try {
+        const data = JSON.parse(e.newValue);
+        if (data.state) {
+          const { isTranslating, translationError, lastTranslationTime, ...persistedState } = data.state;
+          useTranslationStore.setState(persistedState);
+        }
+      } catch (error) {
+        console.error('[TranslationStore] Failed to parse storage event:', error);
+      }
+    }
+  });
+}
 
 // Utility hooks
 export const useTranslationConfig = () => {

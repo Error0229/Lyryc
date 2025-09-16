@@ -538,20 +538,23 @@ Your task is to:
 1. **Detect Language**: First, analyze the lyrics and identify their actual language
 2. **Compare with Target**: Compare the detected language with target language ({})
 3. **Make Decision**:
-   - If detected language is {} ({}): respond exactly "SAME_LANGUAGE"
-   - If detected language is different from {}: provide translated lyrics
+   - If detected language is EXACTLY {} ({}): respond exactly "SAME_LANGUAGE"
+   - If detected language is different from {} ({}): provide translated lyrics
 
 CRITICAL RULES:
 - ALWAYS detect the actual language of the lyrics first
-- Compare DETECTED language (not source specification) with target language
+- Compare DETECTED language code (not source specification) with target language code {}
 - Only translate if detected language differs from target language{}
+- Be PRECISE: Japanese (ja) ≠ Chinese (zh-tw), Korean (ko) ≠ Chinese (zh-tw), etc.
 
-Target language: {} ({})
+Target language code: {} ({})
 Source language hint: {} (but detect the actual language yourself)"#,
         target_lang_name,
         target_lang,
         target_lang_name,
+        target_lang,
         target_lang_name,
+        target_lang,
         chinese_instruction,
         target_lang,
         target_lang_name,

@@ -32,22 +32,39 @@ export const useHiraganaStore = create<HiraganaStore>()(
   persist(
     (set) => ({
       settings: defaultSettings,
-      
+
       updateSettings: (newSettings) =>
         set((state) => ({
           settings: { ...state.settings, ...newSettings },
         })),
-        
+
       toggleEnabled: () =>
         set((state) => ({
           settings: { ...state.settings, enabled: !state.settings.enabled },
         })),
-        
+
       resetToDefaults: () =>
         set({ settings: defaultSettings }),
     }),
     {
       name: 'hiragana-settings',
+      version: 1,
     }
   )
 );
+
+// Add storage event listener for real-time cross-window synchronization
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    if (e.key === 'hiragana-settings' && e.newValue) {
+      try {
+        const data = JSON.parse(e.newValue);
+        if (data.state?.settings) {
+          useHiraganaStore.setState({ settings: data.state.settings });
+        }
+      } catch (error) {
+        console.error('[HiraganaStore] Failed to parse storage event:', error);
+      }
+    }
+  });
+}
