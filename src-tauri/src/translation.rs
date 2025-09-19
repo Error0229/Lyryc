@@ -6,6 +6,32 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+// Line count mismatch resolution structures
+#[derive(Debug, Clone)]
+pub enum MismatchType {
+    LinesShort,   // LLM returned fewer lines than expected
+    LinesExtra,   // LLM returned more lines than expected
+    LinesSame,    // Count matches, no issue
+}
+
+#[derive(Debug, Clone)]
+pub struct MismatchResolution {
+    pub strategy_used: String,
+    pub confidence: f64,
+    pub original_count: usize,
+    pub translated_count: usize,
+    pub alignment_map: Vec<(usize, usize)>, // (original_index, translated_index)
+    pub success: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum TranslationStrategy {
+    Combined,       // Translate all lines together (default)
+    Chunked(usize), // Translate in chunks of N lines
+    LineByLine,     // Translate each line individually
+    AlignmentFix,   // Use LLM to fix alignment mismatch
+}
+
 // Global model blacklist to track rate-limited models
 lazy_static::lazy_static! {
     static ref MODEL_BLACKLIST: Arc<Mutex<HashMap<String, u64>>> = Arc::new(Mutex::new(HashMap::new()));
@@ -117,7 +143,7 @@ impl Default for TranslationConfig {
     }
 }
 
-/// Main translation function - uses LLM with fallback support
+/// Main translation function - uses LLM with enhanced mismatch resolution and fallback support
 pub async fn translate_lyrics(
     lyrics: Vec<LyricLine>,
     config: TranslationConfig,
@@ -136,44 +162,20 @@ pub async fn translate_lyrics(
     }
 
     info!(
-        "Starting translation for {} lines from {} to {}",
+        "Starting enhanced translation for {} lines from {} to {}",
         lyrics.len(),
         config.source_language,
         config.target_language
     );
 
-    let result = match config.provider.as_str() {
-        "gemini" => {
-            // Check if Gemini API key is available before attempting request
-            if config
-                .gemini_api_key
-                .as_ref()
-                .map_or(false, |key| !key.trim().is_empty())
-                || std::env::var("GEMINI_API_KEY").is_ok()
-            {
-                debug!("Gemini API key available, attempting translation");
-                translate_lyrics_gemini(&lyrics, &config).await
-            } else {
-                debug!("No Gemini API key available, skipping Gemini translation");
-                Err("No Gemini API key available".to_string())
-            }
-        }
-        "github" | _ => {
-            // Check if GitHub token is available before attempting request
-            if config
-                .github_api_key
-                .as_ref()
-                .map_or(false, |key| !key.trim().is_empty())
-                || std::env::var("GITHUB_TOKEN").is_ok()
-            {
-                debug!("GitHub token available, attempting translation");
-                translate_lyrics_github(&lyrics, &config).await
-            } else {
-                debug!("No GitHub token available, skipping GitHub translation");
-                Err("No GitHub token available".to_string())
-            }
-        }
-    };
+    // Define progressive translation strategies
+    let strategies = vec![
+        TranslationStrategy::Combined,       // Try normal translation first
+        TranslationStrategy::Chunked(5),     // If that fails, try smaller chunks
+        TranslationStrategy::LineByLine,     // Last resort: line-by-line
+    ];
+
+    let result = translate_with_strategies(&lyrics, &config, &strategies).await;
 
     match result {
         Ok(mut translation_result) => {
@@ -187,6 +189,62 @@ pub async fn translate_lyrics(
         Err(e) => {
             let processing_time_ms = start_time.elapsed().as_millis() as u64;
             error!("Translation failed after {}ms: {}", processing_time_ms, e);
+            Ok(TranslationResult {
+                success: false,
+                translated_lines: vec![],
+                detected_language: None,
+                processing_time_ms,
+                error: Some(e),
+                is_same_language: false,
+            })
+        }
+    }
+}
+
+/// Enhanced translation function with explicit retry strategies
+pub async fn translate_lyrics_with_retry_strategies(
+    lyrics: Vec<LyricLine>,
+    config: TranslationConfig,
+    strategies: Vec<TranslationStrategy>,
+) -> Result<TranslationResult, String> {
+    let start_time = std::time::Instant::now();
+
+    if lyrics.is_empty() {
+        return Ok(TranslationResult {
+            success: false,
+            translated_lines: vec![],
+            detected_language: None,
+            processing_time_ms: 0,
+            error: Some("No lyrics provided".to_string()),
+            is_same_language: false,
+        });
+    }
+
+    info!(
+        "Starting translation with {} strategies for {} lines from {} to {}",
+        strategies.len(),
+        lyrics.len(),
+        config.source_language,
+        config.target_language
+    );
+
+    let result = translate_with_strategies(&lyrics, &config, &strategies).await;
+
+    match result {
+        Ok(mut translation_result) => {
+            translation_result.processing_time_ms = start_time.elapsed().as_millis() as u64;
+            info!(
+                "Translation with strategies completed successfully in {}ms",
+                translation_result.processing_time_ms
+            );
+            Ok(translation_result)
+        }
+        Err(e) => {
+            let processing_time_ms = start_time.elapsed().as_millis() as u64;
+            error!(
+                "Translation with strategies failed after {}ms: {}",
+                processing_time_ms, e
+            );
             Ok(TranslationResult {
                 success: false,
                 translated_lines: vec![],
@@ -327,12 +385,18 @@ Approach each song as a complete artistic work with unified themes, emotions, an
 - Keep verb tenses coherent across the song's timeline
 - Create smooth semantic bridges between ideas
 
-## Output Requirements
-- Return EXACTLY one translated line per input line
-- Maintain the same total number of lines as input
+## CRITICAL OUTPUT REQUIREMENTS
+- Return EXACTLY one translated line per input line - COUNT MUST MATCH
+- Maintain the same total number of lines as input - NO EXCEPTIONS
+- If input has 10 lines, output MUST have exactly 10 lines
 - No line numbers, timestamps, or formatting
 - No explanations, commentary, or footnotes
 - Raw translated text only
+
+## LINE COUNT VERIFICATION
+- Before sending response, COUNT YOUR OUTPUT LINES
+- Compare with input line count - THEY MUST BE IDENTICAL
+- If counts don't match, fix by splitting long lines or merging short translations
 
 ## Quality Standards
 - Sound natural and idiomatic in the target language
@@ -380,9 +444,9 @@ Approach each song as a complete artistic work with unified themes, emotions, an
         source_language.to_string()
     };
 
-    // Parse the translation response
+    // Parse the translation response with enhanced mismatch resolution
     let (translated_lines, is_same_language) =
-        parse_translation_response(response_text, lyrics, &final_detected_language)?;
+        parse_translation_response(response_text, lyrics, &final_detected_language, Some(config)).await?;
 
     Ok(TranslationResult {
         success: true,
@@ -610,10 +674,11 @@ Examples with native names:
     )
 }
 
-fn parse_translation_response(
+async fn parse_translation_response(
     response_text: &str,
     original_lyrics: &[LyricLine],
     detected_language: &str,
+    config: Option<&TranslationConfig>,
 ) -> Result<(Vec<TranslatedLyricLine>, bool), String> {
     let response_text = response_text.trim();
 
@@ -634,21 +699,28 @@ fn parse_translation_response(
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>();
 
+    // Enhanced line count mismatch detection and resolution
     if cleaned_response.len() != original_lyrics.len() {
-        debug!(
-            "Line count mismatch: original {} vs translated {}",
+        warn!(
+            "Line count mismatch detected: original {} vs translated {}",
             original_lyrics.len(),
             cleaned_response.len()
         );
+
+        // Attempt to resolve the mismatch using multiple strategies
+        return resolve_line_count_mismatch(
+            &cleaned_response,
+            original_lyrics,
+            detected_language,
+            config,
+        ).await;
     }
 
+    // Perfect match - proceed normally
     let mut translated_lines = Vec::new();
 
     for (i, original_line) in original_lyrics.iter().enumerate() {
-        let translated_text = cleaned_response
-            .get(i)
-            .unwrap_or(&original_line.text.as_str())
-            .to_string();
+        let translated_text = cleaned_response[i].to_string();
 
         translated_lines.push(TranslatedLyricLine {
             time: original_line.time,
@@ -656,12 +728,602 @@ fn parse_translation_response(
             duration: original_line.duration,
             original_text: original_line.text.clone(),
             translated_text,
-            translation_confidence: Some(0.85), // Placeholder confidence
+            translation_confidence: Some(0.95), // High confidence for perfect match
             detected_language: Some(detected_language.to_string()),
         });
     }
 
     Ok((translated_lines, false)) // Translation provided, same_language = false
+}
+
+/// Comprehensive line count mismatch resolution system
+async fn resolve_line_count_mismatch(
+    translated_lines: &[&str],
+    original_lyrics: &[LyricLine],
+    detected_language: &str,
+    config: Option<&TranslationConfig>,
+) -> Result<(Vec<TranslatedLyricLine>, bool), String> {
+    let mismatch_type = classify_mismatch(translated_lines.len(), original_lyrics.len());
+
+    info!(
+        "Resolving {:?} mismatch: {} translated vs {} original lines",
+        mismatch_type, translated_lines.len(), original_lyrics.len()
+    );
+
+    // Strategy 1: LLM-based alignment resolution (if config available)
+    if let Some(config) = config {
+        if let Ok((resolved_lines, is_same)) = resolve_alignment_with_llm(
+            translated_lines,
+            original_lyrics,
+            detected_language,
+            config,
+        ).await {
+            info!("LLM-based alignment resolution successful");
+            return Ok((resolved_lines, is_same));
+        } else {
+            debug!("LLM-based alignment failed, trying other strategies");
+        }
+    }
+
+    // Strategy 2: Smart alignment mapping for reasonable mismatches
+    if let Ok(alignment) = create_smart_alignment(translated_lines, original_lyrics) {
+        if alignment.confidence > 0.7 {
+            info!(
+                "Smart alignment successful with confidence {:.2}",
+                alignment.confidence
+            );
+            return apply_alignment_mapping(
+                translated_lines,
+                original_lyrics,
+                detected_language,
+                &alignment,
+            );
+        }
+    }
+
+    // Strategy 3: Intelligent merging/splitting for close mismatches
+    match mismatch_type {
+        MismatchType::LinesShort => {
+            // LLM merged some lines - try intelligent splitting
+            if let Ok(resolved) = resolve_by_intelligent_splitting(
+                translated_lines,
+                original_lyrics,
+                detected_language,
+            ) {
+                return Ok(resolved);
+            }
+        }
+        MismatchType::LinesExtra => {
+            // LLM split some lines - try intelligent merging
+            if let Ok(resolved) = resolve_by_intelligent_merging(
+                translated_lines,
+                original_lyrics,
+                detected_language,
+            ) {
+                return Ok(resolved);
+            }
+        }
+        MismatchType::LinesSame => unreachable!(),
+    }
+
+    // Strategy 4: Conservative fallback - preserve original structure
+    warn!("Using conservative fallback due to alignment failure");
+    Ok(create_conservative_fallback(
+        translated_lines,
+        original_lyrics,
+        detected_language,
+    ))
+}
+
+fn classify_mismatch(translated_count: usize, original_count: usize) -> MismatchType {
+    match translated_count.cmp(&original_count) {
+        std::cmp::Ordering::Less => MismatchType::LinesShort,
+        std::cmp::Ordering::Greater => MismatchType::LinesExtra,
+        std::cmp::Ordering::Equal => MismatchType::LinesSame,
+    }
+}
+
+/// Create smart alignment mapping between original and translated lines
+fn create_smart_alignment(
+    translated_lines: &[&str],
+    original_lyrics: &[LyricLine],
+) -> Result<MismatchResolution, String> {
+    let original_count = original_lyrics.len();
+    let translated_count = translated_lines.len();
+
+    // Calculate alignment confidence based on line count ratio
+    let ratio = if original_count > translated_count {
+        translated_count as f64 / original_count as f64
+    } else {
+        original_count as f64 / translated_count as f64
+    };
+
+    // High confidence for small mismatches, lower for large ones
+    let base_confidence = if ratio > 0.8 { 0.8 } else if ratio > 0.5 { 0.6 } else { 0.3 };
+
+    let mut alignment_map = Vec::new();
+
+    // Simple proportional alignment for now
+    for i in 0..original_count {
+        let translated_index = (i as f64 * translated_count as f64 / original_count as f64) as usize;
+        let mapped_index = translated_index.min(translated_count.saturating_sub(1));
+        alignment_map.push((i, mapped_index));
+    }
+
+    Ok(MismatchResolution {
+        strategy_used: "smart_alignment".to_string(),
+        confidence: base_confidence,
+        original_count,
+        translated_count,
+        alignment_map,
+        success: true,
+    })
+}
+
+fn apply_alignment_mapping(
+    translated_lines: &[&str],
+    original_lyrics: &[LyricLine],
+    detected_language: &str,
+    alignment: &MismatchResolution,
+) -> Result<(Vec<TranslatedLyricLine>, bool), String> {
+    let mut result_lines = Vec::new();
+
+    for (original_idx, translated_idx) in &alignment.alignment_map {
+        let original_line = &original_lyrics[*original_idx];
+        let translated_text = translated_lines
+            .get(*translated_idx)
+            .unwrap_or(&original_line.text.as_str())
+            .to_string();
+
+        result_lines.push(TranslatedLyricLine {
+            time: original_line.time,
+            text: translated_text.clone(),
+            duration: original_line.duration,
+            original_text: original_line.text.clone(),
+            translated_text,
+            translation_confidence: Some(alignment.confidence),
+            detected_language: Some(detected_language.to_string()),
+        });
+    }
+
+    Ok((result_lines, false))
+}
+
+fn resolve_by_intelligent_splitting(
+    translated_lines: &[&str],
+    original_lyrics: &[LyricLine],
+    detected_language: &str,
+) -> Result<(Vec<TranslatedLyricLine>, bool), String> {
+    debug!("Attempting intelligent splitting to resolve line shortage");
+
+    // Simple strategy: duplicate last translation for missing lines
+    let mut result_lines = Vec::new();
+
+    for (i, original_line) in original_lyrics.iter().enumerate() {
+        let translated_text = if i < translated_lines.len() {
+            translated_lines[i].to_string()
+        } else {
+            // For missing lines, use the last available translation or original text
+            translated_lines
+                .last()
+                .unwrap_or(&original_line.text.as_str())
+                .to_string()
+        };
+
+        result_lines.push(TranslatedLyricLine {
+            time: original_line.time,
+            text: translated_text.clone(),
+            duration: original_line.duration,
+            original_text: original_line.text.clone(),
+            translated_text,
+            translation_confidence: Some(0.6), // Lower confidence due to approximation
+            detected_language: Some(detected_language.to_string()),
+        });
+    }
+
+    Ok((result_lines, false))
+}
+
+fn resolve_by_intelligent_merging(
+    translated_lines: &[&str],
+    original_lyrics: &[LyricLine],
+    detected_language: &str,
+) -> Result<(Vec<TranslatedLyricLine>, bool), String> {
+    debug!("Attempting intelligent merging to resolve line excess");
+
+    // Simple strategy: merge consecutive translations for original lines
+    let mut result_lines = Vec::new();
+    let excess_ratio = translated_lines.len() as f64 / original_lyrics.len() as f64;
+
+    for (i, original_line) in original_lyrics.iter().enumerate() {
+        let start_idx = (i as f64 * excess_ratio) as usize;
+        let end_idx = ((i + 1) as f64 * excess_ratio) as usize;
+
+        // Merge translations in this range
+        let merged_translation = translated_lines[start_idx..end_idx.min(translated_lines.len())]
+            .join(" ")
+            .trim()
+            .to_string();
+
+        let final_translation = if merged_translation.is_empty() {
+            original_line.text.clone()
+        } else {
+            merged_translation
+        };
+
+        result_lines.push(TranslatedLyricLine {
+            time: original_line.time,
+            text: final_translation.clone(),
+            duration: original_line.duration,
+            original_text: original_line.text.clone(),
+            translated_text: final_translation,
+            translation_confidence: Some(0.6), // Lower confidence due to approximation
+            detected_language: Some(detected_language.to_string()),
+        });
+    }
+
+    Ok((result_lines, false))
+}
+
+fn create_conservative_fallback(
+    translated_lines: &[&str],
+    original_lyrics: &[LyricLine],
+    detected_language: &str,
+) -> (Vec<TranslatedLyricLine>, bool) {
+    let mut result_lines = Vec::new();
+
+    for (i, original_line) in original_lyrics.iter().enumerate() {
+        let translated_text = translated_lines
+            .get(i)
+            .unwrap_or(&original_line.text.as_str())
+            .to_string();
+
+        result_lines.push(TranslatedLyricLine {
+            time: original_line.time,
+            text: translated_text.clone(),
+            duration: original_line.duration,
+            original_text: original_line.text.clone(),
+            translated_text,
+            translation_confidence: Some(0.4), // Low confidence for fallback
+            detected_language: Some(detected_language.to_string()),
+        });
+    }
+
+    (result_lines, false)
+}
+
+/// LLM-based alignment resolution - uses AI to create proper line mappings
+async fn resolve_alignment_with_llm(
+    translated_lines: &[&str],
+    original_lyrics: &[LyricLine],
+    detected_language: &str,
+    config: &TranslationConfig,
+) -> Result<(Vec<TranslatedLyricLine>, bool), String> {
+    info!(
+        "Attempting LLM-based alignment resolution for {} -> {} line mismatch",
+        original_lyrics.len(),
+        translated_lines.len()
+    );
+
+    // Build alignment prompt
+    let original_text: Vec<String> = original_lyrics.iter().map(|l| l.text.clone()).collect();
+    let translated_text = translated_lines.join("\n");
+
+    let alignment_prompt = format!(
+        r#"**TASK**: Fix line count mismatch in translation alignment
+
+**ORIGINAL LYRICS** ({} lines):
+{}
+
+**TRANSLATED LYRICS** ({} lines):
+{}
+
+**PROBLEM**: The translation has a different number of lines than the original.
+
+**YOUR JOB**: Create a corrected translation that has EXACTLY {} lines to match the original.
+
+**RULES**:
+1. Output EXACTLY {} lines - one for each original line
+2. Use the existing translations as much as possible
+3. If translation is too short: split longer translations or repeat similar content
+4. If translation is too long: merge related translations intelligently
+5. Maintain meaning and flow
+6. Keep timing alignment (line 1 matches line 1, etc.)
+
+**OUTPUT FORMAT**:
+Return ONLY the corrected translation lines, one per line, NO numbering, NO explanations.
+
+**CORRECTED TRANSLATION**:"#,
+        original_lyrics.len(),
+        original_text.join("\n"),
+        translated_lines.len(),
+        translated_text,
+        original_lyrics.len(),
+        original_lyrics.len()
+    );
+
+    // Try to get alignment using available LLM provider
+    let alignment_result = match config.provider.as_str() {
+        "gemini" => {
+            if let Some(api_key) = &config.gemini_api_key {
+                try_gemini_alignment(&alignment_prompt, api_key).await
+            } else if let Ok(env_key) = std::env::var("GEMINI_API_KEY") {
+                try_gemini_alignment(&alignment_prompt, &env_key).await
+            } else {
+                Err("No Gemini API key available for alignment".to_string())
+            }
+        }
+        "github" | _ => {
+            if let Some(api_key) = &config.github_api_key {
+                try_github_alignment(&alignment_prompt, api_key).await
+            } else if let Ok(env_key) = std::env::var("GITHUB_TOKEN") {
+                try_github_alignment(&alignment_prompt, &env_key).await
+            } else {
+                Err("No GitHub token available for alignment".to_string())
+            }
+        }
+    };
+
+    match alignment_result {
+        Ok(corrected_lines) => {
+            info!(
+                "LLM alignment successful: {} corrected lines",
+                corrected_lines.len()
+            );
+
+            // Verify the correction worked
+            if corrected_lines.len() == original_lyrics.len() {
+                let mut result_lines = Vec::new();
+
+                for (i, original_line) in original_lyrics.iter().enumerate() {
+                    let translated_text = corrected_lines
+                        .get(i)
+                        .unwrap_or(&original_line.text)
+                        .clone();
+
+                    result_lines.push(TranslatedLyricLine {
+                        time: original_line.time,
+                        text: translated_text.clone(),
+                        duration: original_line.duration,
+                        original_text: original_line.text.clone(),
+                        translated_text,
+                        translation_confidence: Some(0.8), // Good confidence for LLM-corrected
+                        detected_language: Some(detected_language.to_string()),
+                    });
+                }
+
+                Ok((result_lines, false))
+            } else {
+                warn!(
+                    "LLM alignment failed: expected {} lines, got {}",
+                    original_lyrics.len(),
+                    corrected_lines.len()
+                );
+                Err("LLM alignment returned incorrect line count".to_string())
+            }
+        }
+        Err(e) => {
+            warn!("LLM alignment failed: {}", e);
+            Err(e)
+        }
+    }
+}
+
+async fn try_gemini_alignment(prompt: &str, api_key: &str) -> Result<Vec<String>, String> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let payload = json!({
+        "contents": [{
+            "parts": [{
+                "text": prompt
+            }]
+        }],
+        "generationConfig": {
+            "temperature": 0.1,
+            "maxOutputTokens": 4096,
+            "topP": 0.8,
+            "topK": 10
+        }
+    });
+
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={}",
+        api_key
+    );
+
+    let response = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        return Err(format!("Gemini alignment request failed: {}", response.status()));
+    }
+
+    let result: Value = response.json().await.map_err(|e| e.to_string())?;
+    let response_text = result["candidates"][0]["content"]["parts"][0]["text"]
+        .as_str()
+        .ok_or("No text in Gemini alignment response")?;
+
+    Ok(response_text
+        .lines()
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect())
+}
+
+async fn try_github_alignment(prompt: &str, github_token: &str) -> Result<Vec<String>, String> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let payload = json!({
+        "messages": [
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.1,
+        "max_tokens": 4096,
+        "model": "openai/gpt-4o-mini"
+    });
+
+    let response = client
+        .post("https://models.github.ai/inference/chat/completions")
+        .header("Content-Type", "application/json")
+        .header("Authorization", format!("Bearer {}", github_token))
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        return Err(format!("GitHub alignment request failed: {}", response.status()));
+    }
+
+    let result: Value = response.json().await.map_err(|e| e.to_string())?;
+    let response_text = result["choices"][0]["message"]["content"]
+        .as_str()
+        .ok_or("No content in GitHub alignment response")?;
+
+    Ok(response_text
+        .lines()
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect())
+}
+
+/// Enhanced translation with retry strategies
+async fn translate_with_strategies(
+    lyrics: &[LyricLine],
+    config: &TranslationConfig,
+    strategies: &[TranslationStrategy],
+) -> Result<TranslationResult, String> {
+    for (i, strategy) in strategies.iter().enumerate() {
+        debug!("Trying translation strategy {}: {:?}", i + 1, strategy);
+
+        let result = match strategy {
+            TranslationStrategy::Combined => {
+                // Use existing combined translation
+                translate_lyrics_with_config(lyrics, config).await
+            }
+            TranslationStrategy::Chunked(chunk_size) => {
+                translate_lyrics_chunked(lyrics, config, *chunk_size).await
+            }
+            TranslationStrategy::LineByLine => {
+                translate_lyrics_line_by_line(lyrics, config).await
+            }
+            TranslationStrategy::AlignmentFix => {
+                // This strategy is used within other strategies, not standalone
+                Err("AlignmentFix strategy must be used with another strategy".to_string())
+            }
+        };
+
+        match result {
+            Ok(translation_result) => {
+                if translation_result.success {
+                    info!("Translation successful with strategy: {:?}", strategy);
+                    return Ok(translation_result);
+                } else {
+                    debug!("Strategy {:?} succeeded but with errors", strategy);
+                }
+            }
+            Err(e) => {
+                debug!("Strategy {:?} failed: {}", strategy, e);
+            }
+        }
+    }
+
+    Err("All translation strategies failed".to_string())
+}
+
+async fn translate_lyrics_with_config(
+    lyrics: &[LyricLine],
+    config: &TranslationConfig,
+) -> Result<TranslationResult, String> {
+    // Use existing translation logic
+    match config.provider.as_str() {
+        "gemini" => translate_lyrics_gemini(lyrics, config).await,
+        "github" | _ => translate_lyrics_github(lyrics, config).await,
+    }
+}
+
+async fn translate_lyrics_chunked(
+    lyrics: &[LyricLine],
+    config: &TranslationConfig,
+    chunk_size: usize,
+) -> Result<TranslationResult, String> {
+    let start_time = std::time::Instant::now();
+    let mut all_translated_lines = Vec::new();
+    let mut detected_language = None;
+
+    for chunk in lyrics.chunks(chunk_size) {
+        let chunk_result = translate_lyrics_with_config(chunk, config).await?;
+
+        if !chunk_result.success {
+            return Err("Chunk translation failed".to_string());
+        }
+
+        all_translated_lines.extend(chunk_result.translated_lines);
+        if detected_language.is_none() {
+            detected_language = chunk_result.detected_language;
+        }
+    }
+
+    Ok(TranslationResult {
+        success: true,
+        translated_lines: all_translated_lines,
+        detected_language,
+        processing_time_ms: start_time.elapsed().as_millis() as u64,
+        error: None,
+        is_same_language: false,
+    })
+}
+
+async fn translate_lyrics_line_by_line(
+    lyrics: &[LyricLine],
+    config: &TranslationConfig,
+) -> Result<TranslationResult, String> {
+    let start_time = std::time::Instant::now();
+    let mut all_translated_lines = Vec::new();
+    let mut detected_language = None;
+
+    for line in lyrics {
+        let single_line = vec![line.clone()];
+        let line_result = translate_lyrics_with_config(&single_line, config).await?;
+
+        if !line_result.success || line_result.translated_lines.is_empty() {
+            // Fallback to original text for failed lines
+            all_translated_lines.push(TranslatedLyricLine {
+                time: line.time,
+                text: line.text.clone(),
+                duration: line.duration,
+                original_text: line.text.clone(),
+                translated_text: line.text.clone(),
+                translation_confidence: Some(0.0), // No translation confidence
+                detected_language: detected_language.clone(),
+            });
+        } else {
+            all_translated_lines.extend(line_result.translated_lines);
+            if detected_language.is_none() {
+                detected_language = line_result.detected_language;
+            }
+        }
+    }
+
+    Ok(TranslationResult {
+        success: true,
+        translated_lines: all_translated_lines,
+        detected_language,
+        processing_time_ms: start_time.elapsed().as_millis() as u64,
+        error: None,
+        is_same_language: false,
+    })
 }
 
 /// Translate lyrics using Google Gemini API
@@ -763,12 +1425,18 @@ Approach each song as a complete artistic work with unified themes, emotions, an
 - Keep verb tenses coherent across the song's timeline
 - Create smooth semantic bridges between ideas
 
-## Output Requirements
-- Return EXACTLY one translated line per input line
-- Maintain the same total number of lines as input
+## CRITICAL OUTPUT REQUIREMENTS
+- Return EXACTLY one translated line per input line - COUNT MUST MATCH
+- Maintain the same total number of lines as input - NO EXCEPTIONS
+- If input has 10 lines, output MUST have exactly 10 lines
 - No line numbers, timestamps, or formatting
 - No explanations, commentary, or footnotes
 - Raw translated text only
+
+## LINE COUNT VERIFICATION
+- Before sending response, COUNT YOUR OUTPUT LINES
+- Compare with input line count - THEY MUST BE IDENTICAL
+- If counts don't match, fix by splitting long lines or merging short translations
 
 ## Quality Standards
 - Sound natural and idiomatic in the target language
@@ -875,9 +1543,9 @@ Approach each song as a complete artistic work with unified themes, emotions, an
         source_language.to_string()
     };
 
-    // Parse the translation response using the shared function
+    // Parse the translation response using the shared function with enhanced mismatch resolution
     let (translated_lines, is_same_language) =
-        parse_translation_response(response_text, lyrics, &final_detected_language)?;
+        parse_translation_response(response_text, lyrics, &final_detected_language, Some(config)).await?;
 
     Ok(TranslationResult {
         success: true,

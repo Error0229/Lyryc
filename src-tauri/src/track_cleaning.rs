@@ -859,7 +859,7 @@ Your task: **read each original track title carefully and decide the correct "cl
    * If `true`, keep canonical "(feat. X)" with consistent casing.
    * If `false`, remove it from the title (featuring remains discoverable by metadata, not title).
 
-6. **Language & transliteration.** Do **not translate**. Preserve the script/language used in the title unless the item itself presents an official bilingual title; in that case, keep the **main song title portion** that best matches common usage.
+6. **Language & transliteration.** Do **not translate**. Preserve the script/language used in the title. When both original language and translation are present (e.g., "火星人 - Martian"), **always prefer the original language** (e.g., "火星人") over the translation. Only use English if no original language text is available.
 
 7. **Albums/episodes/track #**. If the string contains album/series scaffolding like "| album | track 1", keep only the **song title segment**, unless configuration requires preserving sequence markers.
 
@@ -990,13 +990,13 @@ Rules:
 - Keep: song title, version markers (Acoustic, Remix, Live), artist collaborations if part of title
 - If "Artist - Title" format, return just the title part
 - Remove brackets/parentheses containing promotional text
-- Keep Japanese/other language titles as-is
+- Keep Japanese/other language titles as-is. When both original and translation are present, prefer the original language (e.g., "火星人 - Martian" becomes "火星人")
 
 Return only the cleaned title, nothing else:"#,
         track_name
     );
 
-    let system_instruction = r#"You are a music metadata cleaner. Clean track titles by removing promotional/platform content while preserving the actual song title. Be concise and accurate. Return only the cleaned title with no explanations or formatting."#;
+    let system_instruction = r#"You are a music metadata cleaner. Clean track titles by removing promotional/platform content while preserving the actual song title. IMPORTANT: When both original language and English translation are present, always prefer the original language. Be concise and accurate. Return only the cleaned title with no explanations or formatting."#;
 
     let payload = json!({
         "contents": [{
@@ -1442,6 +1442,8 @@ IMPORTANT: Output must be parseable as raw JSON. Do not use markdown, code block
 5. **Language preservation**: Don't translate artist names, preserve original script
 6. **Remove metadata**: Remove record labels, years, album info from artist field
 7. **CRITICAL - Multiple Artists**: Return ALL artists as separate entries in cleaned_artists array
+8. **Multi-language collaborations**: Recognize separators in different languages (和, と, 와, &, feat., vs, with, and, y, et)
+9. **Output format**: Separate multiple artists with either space or comma in cleaned_artists array
 
 ## Track Title Cleaning Principles:
 1. **Keep identity-bearing content**: Version markers like "Acoustic", "Live", "Remix" when part of release identity
@@ -1473,10 +1475,21 @@ Return ONE JSON object with this exact structure:
 
 ## Artist Separation Examples:
 - "Artist A feat. Artist B" → cleaned_artists: ["Artist A", "Artist B"]
-- "Artist A & Artist B" → cleaned_artists: ["Artist A", "Artist B"] 
+- "Artist A & Artist B" → cleaned_artists: ["Artist A", "Artist B"]
 - "Artist A, Artist B, Artist C" → cleaned_artists: ["Artist A", "Artist B", "Artist C"]
 - "Artist A / Artist B" → cleaned_artists: ["Artist A", "Artist B"]
 - "Artist A x Artist B" → cleaned_artists: ["Artist A", "Artist B"]
+- "Thomas Reid 和 Rxseboy" → cleaned_artists: ["Thomas Reid", "Rxseboy"]
+- "Artist A vs Artist B" → cleaned_artists: ["Artist A", "Artist B"]
+- "艺术家A, Artist B & 아티스트C" → cleaned_artists: ["艺术家A", "Artist B", "아티스트C"]
+- "Artist A with Artist B" → cleaned_artists: ["Artist A", "Artist B"]
+- "Artist A and Artist B" → cleaned_artists: ["Artist A", "Artist B"]
+
+## Multi-Language Collaboration Rules:
+- Recognize mixed-language separators: "和" (Chinese), "와" (Korean), "と" (Japanese), "et" (French), "y" (Spanish)
+- Always preserve original language/script for each artist name
+- Use space or comma separation in output: "Artist1, Artist2" or "Artist1 Artist2"
+- Remove collaboration indicators but keep all artist names
 
 Use human judgment. When in doubt, prefer conservative cleaning."#;
 
@@ -1661,7 +1674,13 @@ Return ONE JSON object with this exact structure:
 }}
 
 Remove: platform names, "Official", "MV", record labels, years, marketing text.
-Keep: artist identity, meaningful version markers, original language."#,
+Keep: artist identity, meaningful version markers, original language.
+
+Multi-artist handling:
+- Separate collaborations: "Thomas Reid 和 Rxseboy" → two separate artists
+- Recognize all separators: 和, と, 와, &, feat., vs, with, and, y, et
+- Preserve original language for each artist name
+- Output multiple artists in cleaned_artists array"#,
         artist_name, track_name
     );
 
