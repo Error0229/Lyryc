@@ -89,6 +89,11 @@ pub fn run() {
                                                 return;
                                             }
 
+                                            // Shadow visible when selectable (click-through OFF), hidden when pass-through (click-through ON)
+                                            if let Err(e) = window.set_shadow(!current_state) {
+                                                error!("Failed to set shadow to {}: {}", !current_state, e);
+                                            }
+
                                             // Emit event to frontend with new state
                                             let event_name = if current_state { "click-through-enabled" } else { "click-through-disabled" };
                                             if let Err(e) = app_handle.emit(event_name, current_state) {

@@ -347,18 +347,41 @@ async fn try_llm_translation(
     model_id: &str,
     github_token: &str,
 ) -> Result<TranslationResult, String> {
+    // Detect language locally first if auto-detect mode
+    let detected_language = if source_language == "auto" {
+        detect_language_fallback(lyrics)
+    } else {
+        source_language.to_string()
+    };
+
+    // Check if detected language matches target - skip translation if same
+    if detected_language == config.target_language {
+        debug!(
+            "Detected language {} matches target {}, skipping translation",
+            detected_language, config.target_language
+        );
+        return Ok(TranslationResult {
+            success: true,
+            translated_lines: vec![],
+            detected_language: Some(detected_language),
+            processing_time_ms: 0,
+            error: None,
+            is_same_language: true,
+        });
+    }
+
     let client = Client::builder()
         .timeout(Duration::from_secs(45))
         .build()
         .map_err(|e| e.to_string())?;
 
-    // Create the translation prompt
+    // Create the translation prompt - simplified since detection already happened
     let lyrics_text: Vec<String> = lyrics.iter().map(|line| line.text.clone()).collect();
     let lyrics_input = lyrics_text.join("\n");
 
     let translation_prompt = build_translation_prompt(
         &lyrics_input,
-        source_language,
+        &detected_language,
         &config.target_language,
         &config.style,
         config.custom_prompt.as_deref(),
@@ -437,24 +460,18 @@ Approach each song as a complete artistic work with unified themes, emotions, an
         .as_str()
         .ok_or("No content in response".to_string())?;
 
-    // For auto-detection, use fallback detection or "unknown"
-    let final_detected_language = if source_language == "auto" {
-        detect_language_fallback(lyrics)
-    } else {
-        source_language.to_string()
-    };
-
     // Parse the translation response with enhanced mismatch resolution
-    let (translated_lines, is_same_language) =
-        parse_translation_response(response_text, lyrics, &final_detected_language, Some(config)).await?;
+    // Note: is_same_language will always be false here since we already checked that above
+    let (translated_lines, _is_same_language) =
+        parse_translation_response(response_text, lyrics, &detected_language, Some(config)).await?;
 
     Ok(TranslationResult {
         success: true,
         translated_lines,
-        detected_language: Some(final_detected_language),
+        detected_language: Some(detected_language),
         processing_time_ms: 0, // Will be set by caller
         error: None,
-        is_same_language,
+        is_same_language: false, // Always false here - same language is handled earlier
     })
 }
 
@@ -473,11 +490,11 @@ fn build_translation_prompt(
         return format!(
             r#"{}
 
-Original lyrics:
+Original lyrics ({}):
 {}
 
-Translated lyrics:"#,
-            custom, lyrics
+Translate to {}:"#,
+            custom, source_lang_name, lyrics, target_lang_name
         );
     }
 
@@ -595,82 +612,27 @@ You MUST use the correct character set for {}!"#,
         String::new()
     };
 
-    let target_native_name = get_native_language_name(target_lang);
-    let detection_instruction = format!(
-        r#"## LANGUAGE DETECTION AND TRANSLATION TASK
-Your task is to:
-
-1. **Detect Language**: First, analyze the lyrics and identify their actual language
-2. **Compare with Target**: Compare the detected language with target language ({})
-3. **Make Decision**:
-   - If detected language is EXACTLY {} ({}): respond exactly "SAME_LANGUAGE"
-   - If detected language is different from {} ({}): provide translated lyrics
-
-CRITICAL RULES:
-- ALWAYS detect the actual language of the lyrics first
-- Compare DETECTED language code (not source specification) with target language code {}
-- Only translate if detected language differs from target language{}
-
-IMPORTANT LANGUAGE DISTINCTIONS (with native names):
-- 日本語 (ja) ≠ 繁體中文 (zh-tw) → MUST TRANSLATE
-- 日本語 (ja) ≠ 简体中文 (zh-cn) → MUST TRANSLATE
-- 한국어 (ko) ≠ 繁體中文 (zh-tw) → MUST TRANSLATE
-- English (en) ≠ 繁體中文 (zh-tw) → MUST TRANSLATE
-- 繁體中文 (zh-tw) = 繁體中文 (zh-tw) → SAME_LANGUAGE
-- 简体中文 (zh-cn) ≠ 繁體中文 (zh-tw) → MUST TRANSLATE
-
-DOUBLE CHECK: Is the detected language code EXACTLY "{}"?
-- If YES: respond "SAME_LANGUAGE"
-- If NO: translate to {} ({} / {})
-
-Target language: {} ({} / {})
-Source language hint: {} (but detect the actual language yourself)"#,
-        target_lang_name,
-        target_lang,
-        target_lang_name,
-        target_lang,
-        target_lang_name,
-        target_lang,
-        chinese_instruction,
-        target_lang,
-        target_lang,
-        target_lang_name,
-        target_native_name,
-        target_lang,
-        target_lang_name,
-        target_native_name,
-        if source_lang == "auto" {
-            "Auto-detect".to_string()
-        } else {
-            format!("{} ({})", source_lang, source_lang_name)
-        }
-    );
-
     format!(
-        r#"{}
+        r#"## TRANSLATION TASK
+Translate the following lyrics from {} to {}.{}
 
 {}
 
+Original lyrics ({}):
 {}
 
-Original lyrics:
-{}
+## OUTPUT FORMAT
+Provide ONLY the translated lyrics, one line per original line.
+No line numbers, timestamps, explanations, or commentary.
 
-Response:"#,
-        detection_instruction,
+Translated lyrics ({}):"#,
+        source_lang_name,
+        target_lang_name,
+        chinese_instruction,
         style_specific_instruction,
-        r#"## OUTPUT FORMAT
-ONLY respond with ONE of these:
-1. If detected language code EXACTLY matches target language code: respond exactly "SAME_LANGUAGE"
-2. If detected language code is DIFFERENT from target language code: provide translated lyrics only
-
-Examples with native names:
-- Detected: 日本語 (ja), Target: 繁體中文 (zh-tw) → TRANSLATE (different languages)
-- Detected: English (en), Target: 繁體中文 (zh-tw) → TRANSLATE (different languages)
-- Detected: 繁體中文 (zh-tw), Target: 繁體中文 (zh-tw) → "SAME_LANGUAGE" (identical)
-- Detected: 한국어 (ko), Target: 繁體中文 (zh-tw) → TRANSLATE (different languages)
-- Detected: 简体中文 (zh-cn), Target: 繁體中文 (zh-tw) → TRANSLATE (different Chinese variants)"#,
-        lyrics
+        source_lang_name,
+        lyrics,
+        target_lang_name
     )
 }
 
@@ -682,17 +644,7 @@ async fn parse_translation_response(
 ) -> Result<(Vec<TranslatedLyricLine>, bool), String> {
     let response_text = response_text.trim();
 
-    // Check for same language indicator
-    if response_text == "SAME_LANGUAGE" || response_text.contains("SAME_LANGUAGE") {
-        debug!(
-            "LLM detected {} as same language, no translation needed",
-            detected_language
-        );
-        debug!("Response text: {}", response_text);
-        return Ok((vec![], true)); // Empty translation list, same_language = true
-    }
-
-    // Clean the response text for actual translation
+    // Clean the response text
     let cleaned_response = response_text
         .lines()
         .map(|line| line.trim())
@@ -1387,18 +1339,41 @@ async fn try_gemini_translation(
     model_id: &str,
     gemini_api_key: &str,
 ) -> Result<TranslationResult, String> {
+    // Detect language locally first if auto-detect mode
+    let detected_language = if source_language == "auto" {
+        detect_language_fallback(lyrics)
+    } else {
+        source_language.to_string()
+    };
+
+    // Check if detected language matches target - skip translation if same
+    if detected_language == config.target_language {
+        debug!(
+            "Detected language {} matches target {}, skipping translation",
+            detected_language, config.target_language
+        );
+        return Ok(TranslationResult {
+            success: true,
+            translated_lines: vec![],
+            detected_language: Some(detected_language),
+            processing_time_ms: 0,
+            error: None,
+            is_same_language: true,
+        });
+    }
+
     let client = Client::builder()
         .timeout(Duration::from_secs(45))
         .build()
         .map_err(|e| e.to_string())?;
 
-    // Create the translation prompt
+    // Create the translation prompt - simplified since detection already happened
     let lyrics_text: Vec<String> = lyrics.iter().map(|line| line.text.clone()).collect();
     let lyrics_input = lyrics_text.join("\n");
 
     let translation_prompt = build_translation_prompt(
         &lyrics_input,
-        source_language,
+        &detected_language,
         &config.target_language,
         &config.style,
         config.custom_prompt.as_deref(),
@@ -1536,24 +1511,18 @@ Approach each song as a complete artistic work with unified themes, emotions, an
             )
         })?;
 
-    // For auto-detection, use fallback detection or "unknown"
-    let final_detected_language = if source_language == "auto" {
-        detect_language_fallback(lyrics)
-    } else {
-        source_language.to_string()
-    };
-
     // Parse the translation response using the shared function with enhanced mismatch resolution
-    let (translated_lines, is_same_language) =
-        parse_translation_response(response_text, lyrics, &final_detected_language, Some(config)).await?;
+    // Note: is_same_language will always be false here since we already checked that above
+    let (translated_lines, _is_same_language) =
+        parse_translation_response(response_text, lyrics, &detected_language, Some(config)).await?;
 
     Ok(TranslationResult {
         success: true,
         translated_lines,
-        detected_language: Some(final_detected_language),
+        detected_language: Some(detected_language),
         processing_time_ms: 0, // Will be set by caller
         error: None,
-        is_same_language,
+        is_same_language: false, // Always false here - same language is handled earlier
     })
 }
 

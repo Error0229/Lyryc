@@ -20,6 +20,7 @@
         "decorations": false,
         "transparent": true,
         "alwaysOnTop": true,
+        "shadow": true,
         "resizable": true,
         "skipTaskbar": true,
         "center": false,
@@ -32,7 +33,9 @@
       "capabilities": [
         {
           "identifier": "draggable-window",
-          "windows": ["main"],
+          "windows": [
+            "main"
+          ],
           "permissions": [
             "core:default",
             "core:window:allow-start-dragging",
@@ -49,6 +52,7 @@
             "core:window:allow-set-skip-taskbar",
             "core:window:allow-close",
             "core:window:allow-set-focus",
+            "core:window:allow-set-shadow",
             "core:webview:allow-create-webview-window",
             "opener:default",
             "global-shortcut:default"
@@ -56,7 +60,9 @@
         },
         {
           "identifier": "settings-window",
-          "windows": ["settings"],
+          "windows": [
+            "settings"
+          ],
           "permissions": [
             "core:default",
             "core:window:allow-close",
