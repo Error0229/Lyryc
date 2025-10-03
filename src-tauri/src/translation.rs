@@ -6,6 +6,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+// Translation output format separator - makes line alignment explicit
+const TRANSLATION_SEPARATOR: &str = " |||SEP||| ";
+
 // Line count mismatch resolution structures
 #[derive(Debug, Clone)]
 pub enum MismatchType {
@@ -409,16 +412,16 @@ Approach each song as a complete artistic work with unified themes, emotions, an
 - Create smooth semantic bridges between ideas
 
 ## CRITICAL OUTPUT FORMAT
-You MUST output BOTH the original line AND its translation on the SAME line, separated by " ||| ".
+You MUST output BOTH the original line AND its translation on the SAME line, separated by " |||SEP||| ".
 
-Format: [Original Text] ||| [Translated Text]
+Format: [Original Text] |||SEP||| [Translated Text]
 
 Example:
-こんにちは世界 ||| Hello world
-今日はいい天気ですね ||| It's nice weather today
+こんにちは世界 |||SEP||| Hello world
+今日はいい天気ですね |||SEP||| It's nice weather today
 
 ## ABSOLUTE REQUIREMENTS
-- EVERY line must contain EXACTLY ONE " ||| " separator
+- EVERY line must contain EXACTLY ONE " |||SEP||| " separator
 - LEFT side: copy original text EXACTLY as provided
 - RIGHT side: your translation of that line
 - Output EXACTLY the same number of lines as input
@@ -428,7 +431,7 @@ Example:
 ## LINE COUNT VERIFICATION
 - Before sending response, COUNT YOUR OUTPUT LINES
 - Compare with input line count - THEY MUST BE IDENTICAL
-- Each output line MUST have format: [original] ||| [translation]
+- Each output line MUST have format: [original] |||SEP||| [translation]
 
 ## Quality Standards
 - Sound natural and idiomatic in the target language
@@ -632,9 +635,9 @@ Original lyrics ({}):
 
 ## OUTPUT FORMAT
 Provide BOTH original and translated lyrics together using this EXACT format:
-[Original Line] ||| [Translated Line]
+[Original Line] |||SEP||| [Translated Line]
 
-Each line MUST contain the separator " ||| " with original on left, translation on right.
+Each line MUST contain the separator " |||SEP||| " with original on left, translation on right.
 No line numbers, timestamps, explanations, or commentary.
 
 Output ({}):"#,
@@ -666,15 +669,15 @@ async fn parse_translation_response(
     // Enhanced parsing: handle new format with " ||| " separator
     let mut translated_lines = Vec::new();
 
-    // Check if the response uses the new format (original ||| translated)
-    let uses_new_format = cleaned_response.iter().any(|line| line.contains(" ||| "));
+    // Check if the response uses the new format (original |||SEP||| translated)
+    let uses_new_format = cleaned_response.iter().any(|line| line.contains(TRANSLATION_SEPARATOR));
 
     if uses_new_format {
-        info!("Parsing new format with ' ||| ' separator");
+        info!("Parsing paired format with separator: '{}'", TRANSLATION_SEPARATOR);
 
         for (i, original_line) in original_lyrics.iter().enumerate() {
             if i >= cleaned_response.len() {
-                warn!("Missing translation for line {}, using fallback", i);
+                warn!("[Parse Path: NEW_FORMAT_MISSING] Line {}: Missing translation, using fallback", i);
                 // Fallback to original text if translation is missing
                 translated_lines.push(TranslatedLyricLine {
                     time: original_line.time,
@@ -690,18 +693,18 @@ async fn parse_translation_response(
 
             let response_line = cleaned_response[i];
 
-            // Split by " ||| " separator
-            if let Some(separator_pos) = response_line.find(" ||| ") {
+            // Split by TRANSLATION_SEPARATOR
+            if let Some(separator_pos) = response_line.find(TRANSLATION_SEPARATOR) {
                 let original_part = response_line[..separator_pos].trim();
-                let translated_part = response_line[separator_pos + 5..].trim(); // 5 = length of " ||| "
+                let translated_part = response_line[separator_pos + TRANSLATION_SEPARATOR.len()..].trim();
 
                 // Verify original text matches (with some tolerance for whitespace)
-                let original_matches = original_part.trim() == original_line.text.trim();
+                let original_matches = original_part == original_line.text.trim();
                 let confidence = if original_matches { 0.98 } else { 0.85 };
 
                 if !original_matches {
                     debug!(
-                        "Original text mismatch at line {}: expected '{}', got '{}'",
+                        "[Parse Path: NEW_FORMAT_MISMATCH] Line {}: Original text mismatch - expected '{}', got '{}'",
                         i, original_line.text, original_part
                     );
                 }
@@ -716,7 +719,7 @@ async fn parse_translation_response(
                     detected_language: Some(detected_language.to_string()),
                 });
             } else {
-                warn!("Line {} missing ' ||| ' separator: '{}'", i, response_line);
+                warn!("[Parse Path: NEW_FORMAT_NO_SEP] Line {}: Missing separator '{}' in: '{}'", i, TRANSLATION_SEPARATOR, response_line);
                 // Fallback: treat entire line as translation
                 translated_lines.push(TranslatedLyricLine {
                     time: original_line.time,
@@ -732,11 +735,11 @@ async fn parse_translation_response(
 
         // Perfect line count match with new format
         if translated_lines.len() == original_lyrics.len() {
-            info!("New format parsing successful: {} lines matched", translated_lines.len());
+            info!("[Parse Path: NEW_FORMAT_SUCCESS] Paired format parsing successful: {} lines matched", translated_lines.len());
             return Ok((translated_lines, false));
         } else {
             warn!(
-                "Line count mismatch after new format parsing: {} vs {}",
+                "[Parse Path: NEW_FORMAT_COUNT_MISMATCH] Line count mismatch after paired format parsing: {} vs {}",
                 translated_lines.len(),
                 original_lyrics.len()
             );
@@ -744,10 +747,12 @@ async fn parse_translation_response(
     }
 
     // OLD FORMAT FALLBACK: Handle legacy format without separator
+    info!("[Parse Path: LEGACY_FORMAT] Falling back to legacy translation-only format");
+
     // Enhanced line count mismatch detection and resolution
     if cleaned_response.len() != original_lyrics.len() {
         warn!(
-            "Line count mismatch detected: original {} vs translated {}",
+            "[Parse Path: LEGACY_MISMATCH] Line count mismatch detected: original {} vs translated {}",
             original_lyrics.len(),
             cleaned_response.len()
         );
@@ -762,6 +767,7 @@ async fn parse_translation_response(
     }
 
     // Perfect match - proceed normally with old format
+    info!("[Parse Path: LEGACY_SUCCESS] Legacy format parsing successful: {} lines matched", cleaned_response.len());
     let mut legacy_translated_lines = Vec::new();
 
     for (i, original_line) in original_lyrics.iter().enumerate() {
@@ -1494,16 +1500,16 @@ Approach each song as a complete artistic work with unified themes, emotions, an
 - Create smooth semantic bridges between ideas
 
 ## CRITICAL OUTPUT FORMAT
-You MUST output BOTH the original line AND its translation on the SAME line, separated by " ||| ".
+You MUST output BOTH the original line AND its translation on the SAME line, separated by " |||SEP||| ".
 
-Format: [Original Text] ||| [Translated Text]
+Format: [Original Text] |||SEP||| [Translated Text]
 
 Example:
-こんにちは世界 ||| Hello world
-今日はいい天気ですね ||| It's nice weather today
+こんにちは世界 |||SEP||| Hello world
+今日はいい天気ですね |||SEP||| It's nice weather today
 
 ## ABSOLUTE REQUIREMENTS
-- EVERY line must contain EXACTLY ONE " ||| " separator
+- EVERY line must contain EXACTLY ONE " |||SEP||| " separator
 - LEFT side: copy original text EXACTLY as provided
 - RIGHT side: your translation of that line
 - Output EXACTLY the same number of lines as input
@@ -1513,7 +1519,7 @@ Example:
 ## LINE COUNT VERIFICATION
 - Before sending response, COUNT YOUR OUTPUT LINES
 - Compare with input line count - THEY MUST BE IDENTICAL
-- Each output line MUST have format: [original] ||| [translation]
+- Each output line MUST have format: [original] |||SEP||| [translation]
 
 ## Quality Standards
 - Sound natural and idiomatic in the target language
@@ -1868,6 +1874,159 @@ mod tests {
         assert_eq!(config.target_language, "en");
         assert_eq!(config.style, "natural");
         assert!(config.preserve_meaning);
+    }
+
+    #[tokio::test]
+    async fn test_parse_paired_format_normal() {
+        let original_lyrics = vec![
+            LyricLine {
+                time: 0.0,
+                text: "こんにちは".to_string(),
+                duration: Some(2.0),
+            },
+            LyricLine {
+                time: 2.0,
+                text: "世界".to_string(),
+                duration: Some(2.0),
+            },
+        ];
+
+        let response_text = format!(
+            "こんにちは{}Hello\n世界{}World",
+            TRANSLATION_SEPARATOR, TRANSLATION_SEPARATOR
+        );
+
+        let result = parse_translation_response(
+            &response_text,
+            &original_lyrics,
+            "ja",
+            None,
+        ).await;
+
+        assert!(result.is_ok());
+        let (translated_lines, _) = result.unwrap();
+        assert_eq!(translated_lines.len(), 2);
+        assert_eq!(translated_lines[0].translated_text, "Hello");
+        assert_eq!(translated_lines[1].translated_text, "World");
+        assert_eq!(translated_lines[0].translation_confidence, Some(0.98));
+    }
+
+    #[tokio::test]
+    async fn test_parse_paired_format_missing_separator() {
+        let original_lyrics = vec![
+            LyricLine {
+                time: 0.0,
+                text: "Hello".to_string(),
+                duration: Some(2.0),
+            },
+        ];
+
+        // Response missing separator - should fallback to treating as translation
+        let response_text = "Hola";
+
+        let result = parse_translation_response(
+            &response_text,
+            &original_lyrics,
+            "en",
+            None,
+        ).await;
+
+        assert!(result.is_ok());
+        let (translated_lines, _) = result.unwrap();
+        assert_eq!(translated_lines.len(), 1);
+        assert_eq!(translated_lines[0].translated_text, "Hola");
+        // Lower confidence due to missing separator
+        assert_eq!(translated_lines[0].translation_confidence, Some(0.95));
+    }
+
+    #[tokio::test]
+    async fn test_parse_paired_format_original_mismatch() {
+        let original_lyrics = vec![
+            LyricLine {
+                time: 0.0,
+                text: "こんにちは".to_string(),
+                duration: Some(2.0),
+            },
+        ];
+
+        // Original part doesn't match exactly
+        let response_text = format!("こんにちわ{}Hello", TRANSLATION_SEPARATOR);
+
+        let result = parse_translation_response(
+            &response_text,
+            &original_lyrics,
+            "ja",
+            None,
+        ).await;
+
+        assert!(result.is_ok());
+        let (translated_lines, _) = result.unwrap();
+        assert_eq!(translated_lines.len(), 1);
+        assert_eq!(translated_lines[0].translated_text, "Hello");
+        // Lower confidence due to mismatch
+        assert_eq!(translated_lines[0].translation_confidence, Some(0.85));
+    }
+
+    #[tokio::test]
+    async fn test_parse_paired_format_with_whitespace() {
+        let original_lyrics = vec![
+            LyricLine {
+                time: 0.0,
+                text: "Test".to_string(),
+                duration: Some(2.0),
+            },
+        ];
+
+        // Translation with extra whitespace
+        let response_text = format!("Test{}  Translated  ", TRANSLATION_SEPARATOR);
+
+        let result = parse_translation_response(
+            &response_text,
+            &original_lyrics,
+            "en",
+            None,
+        ).await;
+
+        assert!(result.is_ok());
+        let (translated_lines, _) = result.unwrap();
+        assert_eq!(translated_lines.len(), 1);
+        // Should be trimmed
+        assert_eq!(translated_lines[0].translated_text, "Translated");
+    }
+
+    #[tokio::test]
+    async fn test_parse_legacy_format_fallback() {
+        let original_lyrics = vec![
+            LyricLine {
+                time: 0.0,
+                text: "Original".to_string(),
+                duration: Some(2.0),
+            },
+        ];
+
+        // Legacy format: just translation, no separator
+        let response_text = "Translation";
+
+        let result = parse_translation_response(
+            &response_text,
+            &original_lyrics,
+            "en",
+            None,
+        ).await;
+
+        assert!(result.is_ok());
+        let (translated_lines, _) = result.unwrap();
+        assert_eq!(translated_lines.len(), 1);
+        assert_eq!(translated_lines[0].translated_text, "Translation");
+        assert_eq!(translated_lines[0].translation_confidence, Some(0.95));
+    }
+
+    #[test]
+    fn test_separator_constant() {
+        // Verify the separator is unique enough
+        assert_eq!(TRANSLATION_SEPARATOR, " |||SEP||| ");
+        assert!(TRANSLATION_SEPARATOR.len() > 5);
+        assert!(TRANSLATION_SEPARATOR.contains("SEP"));
     }
 
     #[tokio::test]
