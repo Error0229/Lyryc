@@ -395,7 +395,7 @@ Approach each song as a complete artistic work with unified themes, emotions, an
 ## Translation Approach
 - **Holistic Analysis**: Consider the entire song's context before translating any individual line
 - **Inter-line Fluency**: Ensure smooth transitions between consecutive lyrics lines - avoid abrupt tone changes or grammatical inconsistencies
-- **Natural Flow**: Prioritize idiomatic expressions over literal word-for-word translation  
+- **Natural Flow**: Prioritize idiomatic expressions over literal word-for-word translation
 - **Progressive Coherence**: Build meaning gradually across lines, maintaining consistent pronouns, tenses, and narrative perspective
 - **Cultural Sensitivity**: Adapt cultural references appropriately while preserving meaning
 - **Musical Awareness**: Consider how consecutive lines will sound when sung together
@@ -408,18 +408,27 @@ Approach each song as a complete artistic work with unified themes, emotions, an
 - Keep verb tenses coherent across the song's timeline
 - Create smooth semantic bridges between ideas
 
-## CRITICAL OUTPUT REQUIREMENTS
-- Return EXACTLY one translated line per input line - COUNT MUST MATCH
-- Maintain the same total number of lines as input - NO EXCEPTIONS
-- If input has 10 lines, output MUST have exactly 10 lines
-- No line numbers, timestamps, or formatting
-- No explanations, commentary, or footnotes
-- Raw translated text only
+## CRITICAL OUTPUT FORMAT
+You MUST output BOTH the original line AND its translation on the SAME line, separated by " ||| ".
+
+Format: [Original Text] ||| [Translated Text]
+
+Example:
+こんにちは世界 ||| Hello world
+今日はいい天気ですね ||| It's nice weather today
+
+## ABSOLUTE REQUIREMENTS
+- EVERY line must contain EXACTLY ONE " ||| " separator
+- LEFT side: copy original text EXACTLY as provided
+- RIGHT side: your translation of that line
+- Output EXACTLY the same number of lines as input
+- NO line numbers, timestamps, explanations, or commentary
+- NO additional formatting or markdown
 
 ## LINE COUNT VERIFICATION
 - Before sending response, COUNT YOUR OUTPUT LINES
 - Compare with input line count - THEY MUST BE IDENTICAL
-- If counts don't match, fix by splitting long lines or merging short translations
+- Each output line MUST have format: [original] ||| [translation]
 
 ## Quality Standards
 - Sound natural and idiomatic in the target language
@@ -622,10 +631,13 @@ Original lyrics ({}):
 {}
 
 ## OUTPUT FORMAT
-Provide ONLY the translated lyrics, one line per original line.
+Provide BOTH original and translated lyrics together using this EXACT format:
+[Original Line] ||| [Translated Line]
+
+Each line MUST contain the separator " ||| " with original on left, translation on right.
 No line numbers, timestamps, explanations, or commentary.
 
-Translated lyrics ({}):"#,
+Output ({}):"#,
         source_lang_name,
         target_lang_name,
         chinese_instruction,
@@ -644,13 +656,94 @@ async fn parse_translation_response(
 ) -> Result<(Vec<TranslatedLyricLine>, bool), String> {
     let response_text = response_text.trim();
 
-    // Clean the response text
+    // Clean the response text - split by lines and filter empty
     let cleaned_response = response_text
         .lines()
         .map(|line| line.trim())
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>();
 
+    // Enhanced parsing: handle new format with " ||| " separator
+    let mut translated_lines = Vec::new();
+
+    // Check if the response uses the new format (original ||| translated)
+    let uses_new_format = cleaned_response.iter().any(|line| line.contains(" ||| "));
+
+    if uses_new_format {
+        info!("Parsing new format with ' ||| ' separator");
+
+        for (i, original_line) in original_lyrics.iter().enumerate() {
+            if i >= cleaned_response.len() {
+                warn!("Missing translation for line {}, using fallback", i);
+                // Fallback to original text if translation is missing
+                translated_lines.push(TranslatedLyricLine {
+                    time: original_line.time,
+                    text: original_line.text.clone(),
+                    duration: original_line.duration,
+                    original_text: original_line.text.clone(),
+                    translated_text: original_line.text.clone(),
+                    translation_confidence: Some(0.0),
+                    detected_language: Some(detected_language.to_string()),
+                });
+                continue;
+            }
+
+            let response_line = cleaned_response[i];
+
+            // Split by " ||| " separator
+            if let Some(separator_pos) = response_line.find(" ||| ") {
+                let original_part = response_line[..separator_pos].trim();
+                let translated_part = response_line[separator_pos + 5..].trim(); // 5 = length of " ||| "
+
+                // Verify original text matches (with some tolerance for whitespace)
+                let original_matches = original_part.trim() == original_line.text.trim();
+                let confidence = if original_matches { 0.98 } else { 0.85 };
+
+                if !original_matches {
+                    debug!(
+                        "Original text mismatch at line {}: expected '{}', got '{}'",
+                        i, original_line.text, original_part
+                    );
+                }
+
+                translated_lines.push(TranslatedLyricLine {
+                    time: original_line.time,
+                    text: translated_part.to_string(),
+                    duration: original_line.duration,
+                    original_text: original_line.text.clone(),
+                    translated_text: translated_part.to_string(),
+                    translation_confidence: Some(confidence),
+                    detected_language: Some(detected_language.to_string()),
+                });
+            } else {
+                warn!("Line {} missing ' ||| ' separator: '{}'", i, response_line);
+                // Fallback: treat entire line as translation
+                translated_lines.push(TranslatedLyricLine {
+                    time: original_line.time,
+                    text: response_line.to_string(),
+                    duration: original_line.duration,
+                    original_text: original_line.text.clone(),
+                    translated_text: response_line.to_string(),
+                    translation_confidence: Some(0.7), // Lower confidence due to format issue
+                    detected_language: Some(detected_language.to_string()),
+                });
+            }
+        }
+
+        // Perfect line count match with new format
+        if translated_lines.len() == original_lyrics.len() {
+            info!("New format parsing successful: {} lines matched", translated_lines.len());
+            return Ok((translated_lines, false));
+        } else {
+            warn!(
+                "Line count mismatch after new format parsing: {} vs {}",
+                translated_lines.len(),
+                original_lyrics.len()
+            );
+        }
+    }
+
+    // OLD FORMAT FALLBACK: Handle legacy format without separator
     // Enhanced line count mismatch detection and resolution
     if cleaned_response.len() != original_lyrics.len() {
         warn!(
@@ -668,13 +761,13 @@ async fn parse_translation_response(
         ).await;
     }
 
-    // Perfect match - proceed normally
-    let mut translated_lines = Vec::new();
+    // Perfect match - proceed normally with old format
+    let mut legacy_translated_lines = Vec::new();
 
     for (i, original_line) in original_lyrics.iter().enumerate() {
         let translated_text = cleaned_response[i].to_string();
 
-        translated_lines.push(TranslatedLyricLine {
+        legacy_translated_lines.push(TranslatedLyricLine {
             time: original_line.time,
             text: translated_text.clone(),
             duration: original_line.duration,
@@ -685,7 +778,7 @@ async fn parse_translation_response(
         });
     }
 
-    Ok((translated_lines, false)) // Translation provided, same_language = false
+    Ok((legacy_translated_lines, false)) // Translation provided, same_language = false
 }
 
 /// Comprehensive line count mismatch resolution system
@@ -1387,7 +1480,7 @@ Approach each song as a complete artistic work with unified themes, emotions, an
 ## Translation Approach
 - **Holistic Analysis**: Consider the entire song's context before translating any individual line
 - **Inter-line Fluency**: Ensure smooth transitions between consecutive lyrics lines - avoid abrupt tone changes or grammatical inconsistencies
-- **Natural Flow**: Prioritize idiomatic expressions over literal word-for-word translation  
+- **Natural Flow**: Prioritize idiomatic expressions over literal word-for-word translation
 - **Progressive Coherence**: Build meaning gradually across lines, maintaining consistent pronouns, tenses, and narrative perspective
 - **Cultural Sensitivity**: Adapt cultural references appropriately while preserving meaning
 - **Musical Awareness**: Consider how consecutive lines will sound when sung together
@@ -1400,18 +1493,27 @@ Approach each song as a complete artistic work with unified themes, emotions, an
 - Keep verb tenses coherent across the song's timeline
 - Create smooth semantic bridges between ideas
 
-## CRITICAL OUTPUT REQUIREMENTS
-- Return EXACTLY one translated line per input line - COUNT MUST MATCH
-- Maintain the same total number of lines as input - NO EXCEPTIONS
-- If input has 10 lines, output MUST have exactly 10 lines
-- No line numbers, timestamps, or formatting
-- No explanations, commentary, or footnotes
-- Raw translated text only
+## CRITICAL OUTPUT FORMAT
+You MUST output BOTH the original line AND its translation on the SAME line, separated by " ||| ".
+
+Format: [Original Text] ||| [Translated Text]
+
+Example:
+こんにちは世界 ||| Hello world
+今日はいい天気ですね ||| It's nice weather today
+
+## ABSOLUTE REQUIREMENTS
+- EVERY line must contain EXACTLY ONE " ||| " separator
+- LEFT side: copy original text EXACTLY as provided
+- RIGHT side: your translation of that line
+- Output EXACTLY the same number of lines as input
+- NO line numbers, timestamps, explanations, or commentary
+- NO additional formatting or markdown
 
 ## LINE COUNT VERIFICATION
 - Before sending response, COUNT YOUR OUTPUT LINES
 - Compare with input line count - THEY MUST BE IDENTICAL
-- If counts don't match, fix by splitting long lines or merging short translations
+- Each output line MUST have format: [original] ||| [translation]
 
 ## Quality Standards
 - Sound natural and idiomatic in the target language
