@@ -1,7 +1,7 @@
-use crate::track_cleaning::{
-    clean_track_name, clean_track_name_gemini_with_key, clean_track_name_github_with_key, 
-    clean_artist_and_track_names, ArtistTrackCleaningResult,
+use crate::cleaning::providers::{
+    clean_track_name_gemini_with_key, clean_track_name_github_with_key,
 };
+use crate::cleaning::{clean_artist_and_track_names, clean_track_name, ArtistTrackCleaningResult};
 use crate::translation::{translate_lyrics, LyricLine, TranslationConfig, TranslationResult};
 use crate::types::{TrackInfo, TrackState};
 use tauri::State;
@@ -107,10 +107,22 @@ pub async fn get_supported_languages() -> Result<Vec<(String, String)>, String> 
         ("ru".to_string(), "Russian".to_string()),
         ("ja".to_string(), "Japanese".to_string()),
         ("ko".to_string(), "Korean".to_string()),
-        ("zh".to_string(), "Chinese Simplified (简体中文)".to_string()),
-        ("zh-cn".to_string(), "Chinese Simplified - Mainland (简体中文)".to_string()),
-        ("zh-tw".to_string(), "Chinese Traditional - Taiwan (繁體中文)".to_string()),
-        ("zh-hk".to_string(), "Chinese Traditional - Hong Kong (繁體中文)".to_string()),
+        (
+            "zh".to_string(),
+            "Chinese Simplified (简体中文)".to_string(),
+        ),
+        (
+            "zh-cn".to_string(),
+            "Chinese Simplified - Mainland (简体中文)".to_string(),
+        ),
+        (
+            "zh-tw".to_string(),
+            "Chinese Traditional - Taiwan (繁體中文)".to_string(),
+        ),
+        (
+            "zh-hk".to_string(),
+            "Chinese Traditional - Hong Kong (繁體中文)".to_string(),
+        ),
         ("ar".to_string(), "Arabic".to_string()),
         ("hi".to_string(), "Hindi".to_string()),
         ("th".to_string(), "Thai".to_string()),
@@ -126,4 +138,3 @@ pub async fn get_supported_languages() -> Result<Vec<(String, String)>, String> 
         ("el".to_string(), "Greek".to_string()),
     ])
 }
-

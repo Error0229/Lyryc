@@ -4,11 +4,11 @@ use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
 
 // Module declarations
+mod cleaning;
 mod commands;
 mod furigana;
 mod lyrics;
 mod musicbrainz;
-mod track_cleaning;
 mod translation;
 mod types;
 mod websocket;
@@ -17,8 +17,8 @@ mod window_management;
 
 // Import types and functions from modules
 use commands::{
-    clean_track_name_command, clean_track_name_with_config, clean_artist_and_track_names_command, get_current_track, get_supported_languages, set_current_track,
-    translate_lyrics_command,
+    clean_artist_and_track_names_command, clean_track_name_command, clean_track_name_with_config,
+    get_current_track, get_supported_languages, set_current_track, translate_lyrics_command,
 };
 use furigana::generate_furigana_command;
 use lyrics::{fetch_lrclib_raw, fetch_lyrics};
@@ -28,8 +28,8 @@ use websocket_commands::{
     init_extension_connection, send_playback_command,
 };
 use window_management::{
-    adjust_window_height, close_settings_window, enable_drag_mode, initialize_window_sizing, minimize_to_tray, open_settings_window, quit_app, restore_from_tray,
-    toggle_window_visibility,
+    adjust_window_height, close_settings_window, enable_drag_mode, initialize_window_sizing,
+    minimize_to_tray, open_settings_window, quit_app, restore_from_tray, toggle_window_visibility,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

@@ -10,9 +10,7 @@ use tokio::sync::RwLock as TokioRwLock;
 static PROCESSING_TRACKS: OnceLock<Arc<TokioRwLock<HashSet<String>>>> = OnceLock::new();
 
 fn get_processing_guard() -> &'static Arc<TokioRwLock<HashSet<String>>> {
-    PROCESSING_TRACKS.get_or_init(|| {
-        Arc::new(TokioRwLock::new(HashSet::new()))
-    })
+    PROCESSING_TRACKS.get_or_init(|| Arc::new(TokioRwLock::new(HashSet::new())))
 }
 
 #[tauri::command]
@@ -49,8 +47,11 @@ pub async fn init_extension_connection(
             tokio::spawn(async move {
                 if track_update.current_time.is_none() || track_update.current_time == Some(0.0) {
                     // Create unique track identifier for deduplication
-                    let track_key = format!("{}:{}", track_info_for_check.title, track_info_for_check.artist);
-                    
+                    let track_key = format!(
+                        "{}:{}",
+                        track_info_for_check.title, track_info_for_check.artist
+                    );
+
                     // Prevent concurrent processing of the same track
                     let processing_guard = get_processing_guard();
                     {
@@ -61,7 +62,7 @@ pub async fn init_extension_connection(
                         }
                         processing_tracks.insert(track_key.clone());
                     }
-                    
+
                     let _result = async {
                         let mut current_track_guard = track_state_for_callback.lock().await;
                         let should_emit = match &*current_track_guard {
@@ -80,7 +81,7 @@ pub async fn init_extension_connection(
                             );
                             *current_track_guard = Some(track_info_for_check.clone());
                             drop(current_track_guard); // Release lock before emit
-                            
+
                             if let Err(e) =
                                 app_handle_for_track.emit("track-updated", &track_info_for_check)
                             {
@@ -89,8 +90,9 @@ pub async fn init_extension_connection(
                         } else {
                             debug!("Track duplicate detected, skipping emit");
                         }
-                    }.await;
-                    
+                    }
+                    .await;
+
                     // Cleanup: Remove from processing set
                     {
                         let mut processing_tracks = processing_guard.write().await;

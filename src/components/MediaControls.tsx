@@ -1,9 +1,7 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
-import { useLyricsStore } from '../stores/lyricsStore';
-import { useOffsetStore } from '../stores/offsetStore';
-import { useViewModeStore } from '../stores/viewModeStore';
+import { useAppState, useConfigStore, useOffsetConfig } from '../stores';
 import AlignmentTester from './AlignmentTester';
 import TranslationSettings from './TranslationSettings';
 import HiraganaToggle from './HiraganaToggle';
@@ -25,16 +23,19 @@ const MediaControls: React.FC<MediaControlsProps> = ({
   onSeek,
   onOpenStyleControls
 }) => {
-  const { currentTrack } = useLyricsStore();
-  const { viewMode, setViewMode } = useViewModeStore();
-  const { 
-    getTrackOffset, 
-    setTrackOffset, 
-    globalOffset, 
+  const { currentTrack } = useAppState();
+  const viewMode = useConfigStore((s) => s.viewMode);
+  const setViewMode = useConfigStore((s) => s.setViewMode);
+  const {
+    getTrackOffset,
+    setTrackOffset,
+    globalOffset,
     setGlobalOffset,
     getTotalOffset,
-    clearTrackOffset
-  } = useOffsetStore();
+  } = useOffsetConfig();
+
+  // Clear track offset helper
+  const clearTrackOffset = (artist: string, title: string) => setTrackOffset(artist, title, 0);
 
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [isDragging, setIsDragging] = useState(false);

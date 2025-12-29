@@ -1,5 +1,5 @@
+use crate::cleaning::{clean_artist_and_track_names, clean_track_name, remove_artist_from_track};
 use crate::musicbrainz::lookup_artist_variants;
-use crate::track_cleaning::{clean_track_name, remove_artist_from_track, clean_artist_and_track_names};
 use crate::types::LyricLine;
 use anyhow::{anyhow, Result};
 use log::{debug, info, warn};
@@ -10,14 +10,14 @@ use tokio::{task::JoinSet, time::timeout};
 use tokio_util::sync::CancellationToken;
 
 // Priority constants for clear hierarchy - CLEANED names should have HIGHER priority
-const PRIORITY_EXACT_CLEANED: u8 = 10;          // Highest - cleaned track + cleaned artist
-const PRIORITY_EXACT_ORIGINAL: u8 = 9;          // Original track + cleaned artist
-const PRIORITY_WILDCARD_CLEANED_WITH_ARTIST: u8 = 8;   // Wildcard cleaned + artist
-const PRIORITY_WILDCARD_WITH_ARTIST: u8 = 7;           // Wildcard original + artist
-const PRIORITY_EXACT_CLEANED_WITHOUT_ARTIST: u8 = 6;   // Cleaned without artist prefix
-const PRIORITY_EXACT_WITHOUT_ARTIST: u8 = 5;           // Original without artist prefix
-const PRIORITY_WILDCARD_CLEANED_ONLY: u8 = 4;          // Wildcard cleaned only
-const PRIORITY_WILDCARD_ORIGINAL_ONLY: u8 = 3;         // Wildcard original only
+const PRIORITY_EXACT_CLEANED: u8 = 10; // Highest - cleaned track + cleaned artist
+const PRIORITY_EXACT_ORIGINAL: u8 = 9; // Original track + cleaned artist
+const PRIORITY_WILDCARD_CLEANED_WITH_ARTIST: u8 = 8; // Wildcard cleaned + artist
+const PRIORITY_WILDCARD_WITH_ARTIST: u8 = 7; // Wildcard original + artist
+const PRIORITY_EXACT_CLEANED_WITHOUT_ARTIST: u8 = 6; // Cleaned without artist prefix
+const PRIORITY_EXACT_WITHOUT_ARTIST: u8 = 5; // Original without artist prefix
+const PRIORITY_WILDCARD_CLEANED_ONLY: u8 = 4; // Wildcard cleaned only
+const PRIORITY_WILDCARD_ORIGINAL_ONLY: u8 = 3; // Wildcard original only
 
 // Configuration constants
 const MAX_CANDIDATES_PER_STAGE: usize = 4;
@@ -65,11 +65,11 @@ impl SearchParameters {
         Self {
             track_name: track_name.clone(),
             artist_name: artist_name.clone(),
-            artist_variants: Vec::new(), // Will be filled async
-            cleaned_track: String::new(), // Will be filled async
-            cleaned_artist: String::new(), // Will be filled async
+            artist_variants: Vec::new(),           // Will be filled async
+            cleaned_track: String::new(),          // Will be filled async
+            cleaned_artist: String::new(),         // Will be filled async
             cleaned_artist_primary: String::new(), // Will be filled async
-            track_without_artist: String::new(), // Will be filled async
+            track_without_artist: String::new(),   // Will be filled async
             cleaned_track_without_artist: String::new(), // Will be filled async
         }
     }
@@ -86,7 +86,9 @@ impl SearchParameters {
             Ok(result) => {
                 self.cleaned_artist = result.artist.cleaned_title.clone();
                 // Use the primary artist (first in array) for search
-                self.cleaned_artist_primary = result.artist.cleaned_artists
+                self.cleaned_artist_primary = result
+                    .artist
+                    .cleaned_artists
                     .first()
                     .cloned()
                     .unwrap_or_else(|| result.artist.cleaned_title.clone());
@@ -110,7 +112,8 @@ impl SearchParameters {
 
                 // 3. Add primary cleaned artist
                 if !self.artist_variants.contains(&self.cleaned_artist_primary) {
-                    self.artist_variants.push(self.cleaned_artist_primary.clone());
+                    self.artist_variants
+                        .push(self.cleaned_artist_primary.clone());
                 }
 
                 // 4. Add original artist name as final fallback
@@ -137,13 +140,19 @@ impl SearchParameters {
                     self.cleaned_track = clean_track_name(&self.track_name).await;
                     debug!(
                         "Track-only fallback: '{}' -> '{}', artist: '{}' -> {} variants {:?}",
-                        self.track_name, self.cleaned_track,
-                        self.artist_name, self.artist_variants.len(), self.artist_variants
+                        self.track_name,
+                        self.cleaned_track,
+                        self.artist_name,
+                        self.artist_variants.len(),
+                        self.artist_variants
                     );
                 }
             }
             Err(e) => {
-                warn!("Failed to clean artist/track with LLM: {}, using MusicBrainz + original", e);
+                warn!(
+                    "Failed to clean artist/track with LLM: {}, using MusicBrainz + original",
+                    e
+                );
 
                 // Build artist variants from MusicBrainz only
                 self.artist_variants = mb_variants;
@@ -154,7 +163,9 @@ impl SearchParameters {
                 // Fallback to separate cleaning for track
                 self.cleaned_track = clean_track_name(&self.track_name).await;
                 self.cleaned_artist = self.artist_name.clone();
-                self.cleaned_artist_primary = self.artist_variants.first()
+                self.cleaned_artist_primary = self
+                    .artist_variants
+                    .first()
                     .cloned()
                     .unwrap_or_else(|| self.artist_name.clone());
 
@@ -324,7 +335,10 @@ fn build_search_candidates(params: &SearchParameters) -> Result<Vec<LyricsCandid
             &params.cleaned_track,
             artist_variant,
             PRIORITY_EXACT_CLEANED,
-            &format!("exact cleaned track + {} artist '{}'", variant_desc, artist_variant),
+            &format!(
+                "exact cleaned track + {} artist '{}'",
+                variant_desc, artist_variant
+            ),
         );
 
         add_exact_search_candidate(
@@ -341,7 +355,10 @@ fn build_search_candidates(params: &SearchParameters) -> Result<Vec<LyricsCandid
             &params.cleaned_track,
             artist_variant,
             PRIORITY_WILDCARD_CLEANED_WITH_ARTIST,
-            &format!("wildcard cleaned track + {} artist '{}'", variant_desc, artist_variant),
+            &format!(
+                "wildcard cleaned track + {} artist '{}'",
+                variant_desc, artist_variant
+            ),
         );
 
         add_wildcard_search_candidate(
@@ -349,7 +366,10 @@ fn build_search_candidates(params: &SearchParameters) -> Result<Vec<LyricsCandid
             &params.track_name,
             artist_variant,
             PRIORITY_WILDCARD_WITH_ARTIST,
-            &format!("wildcard track + {} artist '{}'", variant_desc, artist_variant),
+            &format!(
+                "wildcard track + {} artist '{}'",
+                variant_desc, artist_variant
+            ),
         );
 
         // Stage 3: Exact without artist prefix (Priority 5-6)
@@ -358,7 +378,10 @@ fn build_search_candidates(params: &SearchParameters) -> Result<Vec<LyricsCandid
             &params.cleaned_track_without_artist,
             artist_variant,
             PRIORITY_EXACT_CLEANED_WITHOUT_ARTIST,
-            &format!("exact cleaned without prefix + {} artist '{}'", variant_desc, artist_variant),
+            &format!(
+                "exact cleaned without prefix + {} artist '{}'",
+                variant_desc, artist_variant
+            ),
         );
 
         add_exact_search_candidate(
@@ -366,7 +389,10 @@ fn build_search_candidates(params: &SearchParameters) -> Result<Vec<LyricsCandid
             &params.track_without_artist,
             artist_variant,
             PRIORITY_EXACT_WITHOUT_ARTIST,
-            &format!("exact without prefix + {} artist '{}'", variant_desc, artist_variant),
+            &format!(
+                "exact without prefix + {} artist '{}'",
+                variant_desc, artist_variant
+            ),
         );
     }
 

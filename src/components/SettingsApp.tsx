@@ -1,17 +1,25 @@
 import React, { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useLyricsStyleStore } from '../stores/lyricsStyleStore';
-import { useTranslationStore } from '../stores/translationStore';
-import { useHiraganaStore } from '../stores/hiraganaStore';
+import { useConfigStore, useLyricsStyle, useTranslationConfig, useHiraganaConfig } from '../stores';
 import { validateApiKey, getApiKeyLinks } from '../utils/apiKeyValidation';
 import HiraganaSettings from './HiraganaSettings';
-import { invoke } from '@tauri-apps/api/core';
+import { WindowBridge } from '../services/ipc/tauri-bridge';
+
+// Style presets with preview info
+const STYLE_PRESETS = [
+  { name: 'Clean & Simple', style: { fontSize: 2.0, fontWeight: 'normal', fontFamily: 'Inter, system-ui' } },
+  { name: 'Bold & Dynamic', style: { fontSize: 3.0, fontWeight: 'bold', fontFamily: 'Inter, system-ui' } },
+  { name: 'Karaoke Style', style: { fontSize: 2.8, fontWeight: 'semibold', fontFamily: 'Inter, system-ui' } },
+  { name: 'Neon Glow', style: { fontSize: 2.2, fontWeight: 'medium', fontFamily: 'Orbitron, monospace' } },
+  { name: 'Minimal Focus', style: { fontSize: 1.8, fontWeight: 'normal', fontFamily: 'Inter, system-ui' } },
+  { name: 'Ultra Compact', style: { fontSize: 0.8, fontWeight: 'normal', fontFamily: 'Inter, system-ui' } },
+];
 
 const SettingsApp: React.FC = () => {
-  const { style, updateStyle, applyPreset, getPresets, resetToDefault } = useLyricsStyleStore();
-
-  const { displayMode, updateDisplayMode, config, updateConfig } = useTranslationStore();
-  const { settings: hiraganaSettings } = useHiraganaStore();
+  const { style, updateStyle, applyPreset } = useLyricsStyle();
+  const resetToDefault = useConfigStore((s) => s.resetAll);
+  const { display: displayMode, updateDisplay: updateDisplayMode, config, updateConfig } = useTranslationConfig();
+  const { settings: hiraganaSettings } = useHiraganaConfig();
   const [activeTab, setActiveTab] = useState<'presets' | 'font' | 'colors' | 'effects' | 'layout' | 'translation' | 'hiragana'>('presets');
   
   // Validate current API key
@@ -19,7 +27,7 @@ const SettingsApp: React.FC = () => {
   const apiKeyValidation = useMemo(() => validateApiKey(config.provider, currentApiKey), [config.provider, currentApiKey]);
   const apiKeyLinks = useMemo(() => getApiKeyLinks(config.provider), [config.provider]);
   
-  const presets = getPresets();
+  const presets = STYLE_PRESETS;
   
   const tabs = [
     { id: 'presets', label: '🎨 Presets', icon: '🎨' },
@@ -43,7 +51,8 @@ const SettingsApp: React.FC = () => {
 
   const handleClose = async () => {
     try {
-      await invoke('close_settings_window');
+      // Use window.close() since settings window is a separate window
+      window.close();
     } catch (error) {
       console.error('Failed to close settings window:', error);
     }

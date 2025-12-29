@@ -1,11 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { LyricLine, WordTiming } from '../stores/lyricsStore';
-import { useLyricsStyleStore } from '../stores/lyricsStyleStore';
-import { TranslatedLyricLine } from '../stores/translationStore';
-import { useTranslationStore } from '../stores/translationStore';
-import { useHiraganaStore } from '../stores/hiraganaStore';
-import { invoke } from '@tauri-apps/api/core';
+import {
+  type LyricLine,
+  type WordTiming,
+  type TranslatedLyricLine,
+  useLyricsStyle,
+  useTranslationConfig,
+  useHiraganaConfig,
+} from '../stores';
+import { FuriganaBridge } from '../services/ipc/tauri-bridge';
 import { isJapanese, hasKanji, isLikelyJapanese } from '../utils/japaneseDetection';
 import '../styles/ruby.css';
 
@@ -24,9 +27,9 @@ const CleanLyricDisplay: React.FC<CleanLyricDisplayProps> = ({
   fontFamily, // Keep for backward compatibility, but will be overridden by style store
   viewMode = 'highlighted'
 }) => {
-  const style = useLyricsStyleStore((state) => state.style);
-  const { enabled, displayMode, showLanguageIndicator } = useTranslationStore();
-  const { settings: hiraganaSettings } = useHiraganaStore();
+  const { style } = useLyricsStyle();
+  const { enabled, display: displayMode } = useTranslationConfig();
+  const { settings: hiraganaSettings } = useHiraganaConfig();
   
   // Debug logging to check if style updates are received
   useEffect(() => {
@@ -71,7 +74,7 @@ const CleanLyricDisplay: React.FC<CleanLyricDisplayProps> = ({
       
       try {
         // Convert full text
-        const furiganaResult = await invoke<{segments: Array<{text: string, reading?: string}>, html: string}>('generate_furigana_command', { text: textToConvert });
+        const furiganaResult = await FuriganaBridge.generate(textToConvert);
         const fullHiragana = furiganaResult.segments.map(segment => segment.reading || segment.text).join('');
         setHiraganaText(fullHiragana);
 
@@ -88,7 +91,7 @@ const CleanLyricDisplay: React.FC<CleanLyricDisplayProps> = ({
           for (let i = 0; i < line.words.length; i++) {
             const word = line.words[i];
             if (isLikelyJapanese(word.word) && hasKanji(word.word)) {
-              const wordResult = await invoke<{segments: Array<{text: string, reading?: string}>, html: string}>('generate_furigana_command', { text: word.word });
+              const wordResult = await FuriganaBridge.generate(word.word);
               wordHiraganaMap[i] = wordResult.segments.map(segment => segment.reading || segment.text).join('');
               
               if (hiraganaSettings.displayMode === 'ruby') {

@@ -142,24 +142,24 @@ pub async fn adjust_window_height(
 
         // Calculate required height with minimal margins
         let mut required_height = content_height;
-        
+
         // Add minimal base padding for the container
         required_height += 16.0; // 8px top + 8px bottom padding
-        
+
         // Add minimal extra space for bilingual content
         if has_translation {
             required_height += 8.0; // Minimal spacing between lines
         }
-        
+
         // Add minimal extra space for furigana rendering
         if has_furigana {
             required_height += 12.0; // Minimal space for furigana above/below
         }
-        
+
         // Ensure minimum height (reduced)
         let min_height = 40.0;
         required_height = required_height.max(min_height);
-        
+
         // Ensure maximum height (to prevent too large windows)
         let max_height = 300.0;
         required_height = required_height.min(max_height);
@@ -167,7 +167,7 @@ pub async fn adjust_window_height(
         // Only resize if the height difference is significant (avoid constant micro-adjustments)
         let current_height = current_size.height as f64;
         let height_diff = (required_height - current_height).abs();
-        
+
         if height_diff > 5.0 {
             let new_size = PhysicalSize {
                 width: current_size.width,

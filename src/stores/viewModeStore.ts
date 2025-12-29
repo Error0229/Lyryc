@@ -1,22 +1,14 @@
-import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+/**
+ * LEGACY COMPATIBILITY FILE
+ */
 
-export type ViewMode = 'highlighted' | 'plain';
+import { useConfigStore } from './configStore';
+import type { ViewMode } from './types';
 
-interface ViewModeState {
-  viewMode: ViewMode;
-  setViewMode: (mode: ViewMode) => void;
-}
+export type { ViewMode };
 
-export const useViewModeStore = create<ViewModeState>()(
-  persist(
-    (set) => ({
-      viewMode: 'highlighted',
-      
-      setViewMode: (mode) => set({ viewMode: mode }),
-    }),
-    {
-      name: 'lyryc-view-mode-store',
-    }
-  )
-);
+export const useViewModeStore = () => {
+  const viewMode = useConfigStore((s) => s.viewMode);
+  const setViewMode = useConfigStore((s) => s.setViewMode);
+  return { viewMode, setViewMode };
+};

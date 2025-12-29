@@ -30,17 +30,17 @@ pub async fn generate_furigana_for_text(text: &str) -> Result<FuriganaResult> {
 
     // Create annotator with integrated dictionary
     let annotator = annotate::Annotator::new_with_integrated_dictionary();
-    
+
     // Annotate the text with furigana
     let annotated = annotator.annotate(text);
-    
+
     // Generate HTML output using the correct formatter
     let html_result = annotated.render(&select::heuristic::All, &format::Html);
-    
+
     // For now, parse the HTML to create segments
     // In a real implementation, we'd access the annotation data directly
     let segments = parse_html_to_segments(&html_result, text);
-    
+
     Ok(FuriganaResult {
         segments,
         html: html_result,
@@ -50,17 +50,18 @@ pub async fn generate_furigana_for_text(text: &str) -> Result<FuriganaResult> {
 /// Parse HTML ruby tags to create segments
 fn parse_html_to_segments(html: &str, original_text: &str) -> Vec<FuriganaSegment> {
     let mut segments = Vec::new();
-    
+
     // Simple regex to match ruby tags: <ruby>text<rp>(</rp><rt>reading</rt><rp>)</rp></ruby>
-    let ruby_regex = regex::Regex::new(r"<ruby>([^<]+)<rp>\(</rp><rt>([^<]+)</rt><rp>\)</rp></ruby>").unwrap();
-    
+    let ruby_regex =
+        regex::Regex::new(r"<ruby>([^<]+)<rp>\(</rp><rt>([^<]+)</rt><rp>\)</rp></ruby>").unwrap();
+
     let mut last_end = 0;
-    
+
     for mat in ruby_regex.find_iter(html) {
         let match_str = mat.as_str();
         let start = mat.start();
         let end = mat.end();
-        
+
         // Add any text before this ruby tag
         if start > last_end {
             let before_text = &html[last_end..start];
@@ -71,21 +72,21 @@ fn parse_html_to_segments(html: &str, original_text: &str) -> Vec<FuriganaSegmen
                 });
             }
         }
-        
+
         // Extract text and reading from ruby tag
         if let Some(caps) = ruby_regex.captures(match_str) {
             let text = caps.get(1).map(|m| m.as_str()).unwrap_or("");
             let reading = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-            
+
             segments.push(FuriganaSegment {
                 text: text.to_string(),
                 reading: Some(reading.to_string()),
             });
         }
-        
+
         last_end = end;
     }
-    
+
     // Add any remaining text
     if last_end < html.len() {
         let remaining = &html[last_end..];
@@ -96,7 +97,7 @@ fn parse_html_to_segments(html: &str, original_text: &str) -> Vec<FuriganaSegmen
             });
         }
     }
-    
+
     // If no ruby tags found, return original text as single segment
     if segments.is_empty() {
         segments.push(FuriganaSegment {
@@ -104,7 +105,7 @@ fn parse_html_to_segments(html: &str, original_text: &str) -> Vec<FuriganaSegmen
             reading: None,
         });
     }
-    
+
     segments
 }
 
@@ -137,7 +138,7 @@ mod tests {
     async fn test_furigana_generation() {
         let test_cases = vec![
             ("今日", "today"),
-            ("学生", "student"), 
+            ("学生", "student"),
             ("こんにちは", "hello - hiragana only"),
             ("Hello", "english text"),
         ];

@@ -1,54 +1,9 @@
-import { create } from 'zustand';
+/**
+ * LEGACY COMPATIBILITY FILE
+ *
+ * This file re-exports from the new store architecture.
+ * TODO: Update all imports to use '@/stores' directly, then delete this file.
+ */
 
-export interface TrackInfo {
-  title: string;
-  originalTitle?: string;
-  artist: string;
-  duration?: number;
-  thumbnail?: string;
-}
-
-export interface WordTiming {
-  start: number; // seconds
-  end: number; // seconds
-  word: string;
-}
-
-export interface LyricLine {
-  time: number; // seconds (matches backend and extension)
-  text: string;
-  duration?: number; // seconds
-  words?: WordTiming[]; // For word-level synchronization
-}
-
-interface LyricsState {
-  currentTrack: TrackInfo | null;
-  lyrics: LyricLine[];
-  currentTime: number;
-  isPlaying: boolean;
-  
-  // Actions
-  setCurrentTrack: (track: TrackInfo | null) => void;
-  setLyrics: (lyrics: LyricLine[]) => void;
-  setCurrentTime: (time: number) => void;
-  setIsPlaying: (playing: boolean) => void;
-  clearAll: () => void;
-}
-
-export const useLyricsStore = create<LyricsState>((set) => ({
-  currentTrack: null,
-  lyrics: [],
-  currentTime: 0,
-  isPlaying: false,
-
-  setCurrentTrack: (track) => set({ currentTrack: track }),
-  setLyrics: (lyrics) => set({ lyrics }),
-  setCurrentTime: (time) => set({ currentTime: time }),
-  setIsPlaying: (playing) => set({ isPlaying: playing }),
-  clearAll: () => set({ 
-    currentTrack: null, 
-    lyrics: [], 
-    currentTime: 0, 
-    isPlaying: false 
-  }),
-}));
+export type { TrackInfo, WordTiming, LyricLine } from './types';
+export { useAppState as useLyricsStore } from './appState';
