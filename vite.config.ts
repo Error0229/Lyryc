@@ -6,10 +6,14 @@ import { resolve } from "path";
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
 
+// Read port from environment or use default
+const port = parseInt(process.env.VITE_PORT || '5274', 10);
+const hmrPort = port + 1; // HMR port is always dev port + 1
+
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
   plugins: [react()],
-  
+
   build: {
     rollupOptions: {
       input: {
@@ -25,15 +29,15 @@ export default defineConfig(async () => ({
   clearScreen: false,
   // 2. tauri expects a fixed port, fail if that port is not available
   server: {
-    port: 5174,
+    port,
     strictPort: true,
     host: host || false,
     hmr: host
       ? {
-          protocol: "ws",
-          host,
-          port: 5175,
-        }
+        protocol: "ws",
+        host,
+        port: hmrPort,
+      }
       : undefined,
     watch: {
       // 3. tell vite to ignore watching `src-tauri`

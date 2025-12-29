@@ -1,3 +1,4 @@
+use crate::musicbrainz::lookup_artist_variants;
 use crate::track_cleaning::{clean_track_name, remove_artist_from_track, clean_artist_and_track_names};
 use crate::types::LyricLine;
 use anyhow::{anyhow, Result};
@@ -51,6 +52,7 @@ struct LyricsCandidate {
 struct SearchParameters {
     track_name: String,
     artist_name: String,
+    artist_variants: Vec<String>, // All artist name variants from MusicBrainz + cleaned names
     cleaned_track: String,
     cleaned_artist: String,
     cleaned_artist_primary: String, // First artist from cleaned_artists array
@@ -63,6 +65,7 @@ impl SearchParameters {
         Self {
             track_name: track_name.clone(),
             artist_name: artist_name.clone(),
+            artist_variants: Vec::new(), // Will be filled async
             cleaned_track: String::new(), // Will be filled async
             cleaned_artist: String::new(), // Will be filled async
             cleaned_artist_primary: String::new(), // Will be filled async
@@ -72,15 +75,48 @@ impl SearchParameters {
     }
 
     async fn populate_cleaned_variants(&mut self) {
-        // Clean both artist and track simultaneously
-        match clean_artist_and_track_names(&self.artist_name, &self.track_name).await {
+        // Fetch artist variants from MusicBrainz in parallel with LLM cleaning
+        let mb_lookup = lookup_artist_variants(&self.artist_name);
+        let llm_cleaning = clean_artist_and_track_names(&self.artist_name, &self.track_name);
+
+        let (mb_variants, cleaning_result) = tokio::join!(mb_lookup, llm_cleaning);
+
+        // Process LLM cleaning result
+        match cleaning_result {
             Ok(result) => {
                 self.cleaned_artist = result.artist.cleaned_title.clone();
                 // Use the primary artist (first in array) for search
                 self.cleaned_artist_primary = result.artist.cleaned_artists
                     .first()
                     .cloned()
-                    .unwrap_or_else(|| result.artist.cleaned_title);
+                    .unwrap_or_else(|| result.artist.cleaned_title.clone());
+
+                // Build comprehensive artist variants list
+                self.artist_variants = Vec::new();
+
+                // 1. Add MusicBrainz variants first (most reliable)
+                for variant in mb_variants {
+                    if !self.artist_variants.contains(&variant) {
+                        self.artist_variants.push(variant);
+                    }
+                }
+
+                // 2. Add LLM cleaned artists
+                for artist in &result.artist.cleaned_artists {
+                    if !self.artist_variants.contains(artist) {
+                        self.artist_variants.push(artist.clone());
+                    }
+                }
+
+                // 3. Add primary cleaned artist
+                if !self.artist_variants.contains(&self.cleaned_artist_primary) {
+                    self.artist_variants.push(self.cleaned_artist_primary.clone());
+                }
+
+                // 4. Add original artist name as final fallback
+                if !self.artist_variants.contains(&self.artist_name) {
+                    self.artist_variants.push(self.artist_name.clone());
+                }
 
                 // Check if track cleaning actually worked in combined cleaning
                 let combined_cleaned_track = result.track.cleaned_title.clone();
@@ -88,8 +124,8 @@ impl SearchParameters {
                     // Combined cleaning worked for track
                     self.cleaned_track = combined_cleaned_track;
                     debug!(
-                        "Combined artist/track cleaning successful: '{}' -> '{}' (primary: '{}'), '{}' -> '{}'",
-                        self.artist_name, self.cleaned_artist, self.cleaned_artist_primary,
+                        "Combined artist/track cleaning successful: '{}' -> {} variants {:?}, '{}' -> '{}'",
+                        self.artist_name, self.artist_variants.len(), self.artist_variants,
                         self.track_name, self.cleaned_track
                     );
                 } else {
@@ -100,22 +136,32 @@ impl SearchParameters {
                     );
                     self.cleaned_track = clean_track_name(&self.track_name).await;
                     debug!(
-                        "Track-only fallback: '{}' -> '{}', artist: '{}' -> '{}' (primary: '{}')",
+                        "Track-only fallback: '{}' -> '{}', artist: '{}' -> {} variants {:?}",
                         self.track_name, self.cleaned_track,
-                        self.artist_name, self.cleaned_artist, self.cleaned_artist_primary
+                        self.artist_name, self.artist_variants.len(), self.artist_variants
                     );
                 }
             }
             Err(e) => {
-                warn!("Failed to clean artist/track with LLM: {}, falling back to separate cleaning", e);
-                // Fallback to separate cleaning
+                warn!("Failed to clean artist/track with LLM: {}, using MusicBrainz + original", e);
+
+                // Build artist variants from MusicBrainz only
+                self.artist_variants = mb_variants;
+                if !self.artist_variants.contains(&self.artist_name) {
+                    self.artist_variants.push(self.artist_name.clone());
+                }
+
+                // Fallback to separate cleaning for track
                 self.cleaned_track = clean_track_name(&self.track_name).await;
                 self.cleaned_artist = self.artist_name.clone();
-                self.cleaned_artist_primary = self.artist_name.clone();
+                self.cleaned_artist_primary = self.artist_variants.first()
+                    .cloned()
+                    .unwrap_or_else(|| self.artist_name.clone());
 
                 debug!(
-                    "Using separate cleaning fallback: artist '{}' (unchanged), track '{}' -> '{}'",
-                    self.artist_name, self.track_name, self.cleaned_track
+                    "Using MusicBrainz + original fallback: artist '{}' -> {} variants {:?}, track '{}' -> '{}'",
+                    self.artist_name, self.artist_variants.len(), self.artist_variants,
+                    self.track_name, self.cleaned_track
                 );
             }
         }
@@ -261,58 +307,70 @@ pub async fn fetch_lyrics(
 fn build_search_candidates(params: &SearchParameters) -> Result<Vec<LyricsCandidate>, String> {
     let mut candidates = Vec::new();
 
-    // Stage 1: Exact searches (Priority 9-10) - Most precise, use cleaned artist names
-    add_exact_search_candidate(
-        &mut candidates,
-        &params.cleaned_track,
-        &params.cleaned_artist_primary,
-        PRIORITY_EXACT_CLEANED,
-        "exact cleaned track + primary artist",
-    );
+    // Try all artist variants at each priority level
+    // Priority order: MusicBrainz variants > LLM cleaned > Original
+    for (variant_idx, artist_variant) in params.artist_variants.iter().enumerate() {
+        let variant_desc = if variant_idx == 0 {
+            "MusicBrainz/primary"
+        } else if variant_idx < params.artist_variants.len() - 1 {
+            "variant"
+        } else {
+            "original"
+        };
 
-    add_exact_search_candidate(
-        &mut candidates,
-        &params.track_name,
-        &params.cleaned_artist_primary,
-        PRIORITY_EXACT_ORIGINAL,
-        "exact track + cleaned artist",
-    );
+        // Stage 1: Exact searches (Priority 9-10) - Most precise
+        add_exact_search_candidate(
+            &mut candidates,
+            &params.cleaned_track,
+            artist_variant,
+            PRIORITY_EXACT_CLEANED,
+            &format!("exact cleaned track + {} artist '{}'", variant_desc, artist_variant),
+        );
 
-    // Stage 2: Wildcard with cleaned artist (Priority 7-8) - Good balance
-    add_wildcard_search_candidate(
-        &mut candidates,
-        &params.cleaned_track,
-        &params.cleaned_artist_primary,
-        PRIORITY_WILDCARD_CLEANED_WITH_ARTIST,
-        "wildcard cleaned track + primary artist",
-    );
+        add_exact_search_candidate(
+            &mut candidates,
+            &params.track_name,
+            artist_variant,
+            PRIORITY_EXACT_ORIGINAL,
+            &format!("exact track + {} artist '{}'", variant_desc, artist_variant),
+        );
 
-    add_wildcard_search_candidate(
-        &mut candidates,
-        &params.track_name,
-        &params.cleaned_artist_primary,
-        PRIORITY_WILDCARD_WITH_ARTIST,
-        "wildcard track + cleaned artist",
-    );
+        // Stage 2: Wildcard with artist (Priority 7-8) - Good balance
+        add_wildcard_search_candidate(
+            &mut candidates,
+            &params.cleaned_track,
+            artist_variant,
+            PRIORITY_WILDCARD_CLEANED_WITH_ARTIST,
+            &format!("wildcard cleaned track + {} artist '{}'", variant_desc, artist_variant),
+        );
 
-    // Stage 3: Exact without artist prefix (Priority 5-6) - Handle artist prefix removal
-    add_exact_search_candidate(
-        &mut candidates,
-        &params.cleaned_track_without_artist,
-        &params.cleaned_artist_primary,
-        PRIORITY_EXACT_CLEANED_WITHOUT_ARTIST,
-        "exact cleaned without artist prefix + primary artist",
-    );
+        add_wildcard_search_candidate(
+            &mut candidates,
+            &params.track_name,
+            artist_variant,
+            PRIORITY_WILDCARD_WITH_ARTIST,
+            &format!("wildcard track + {} artist '{}'", variant_desc, artist_variant),
+        );
 
-    add_exact_search_candidate(
-        &mut candidates,
-        &params.track_without_artist,
-        &params.cleaned_artist_primary,
-        PRIORITY_EXACT_WITHOUT_ARTIST,
-        "exact without artist prefix + cleaned artist",
-    );
+        // Stage 3: Exact without artist prefix (Priority 5-6)
+        add_exact_search_candidate(
+            &mut candidates,
+            &params.cleaned_track_without_artist,
+            artist_variant,
+            PRIORITY_EXACT_CLEANED_WITHOUT_ARTIST,
+            &format!("exact cleaned without prefix + {} artist '{}'", variant_desc, artist_variant),
+        );
 
-    // Stage 4: Wildcard only track (Priority 3-4) - Last resort
+        add_exact_search_candidate(
+            &mut candidates,
+            &params.track_without_artist,
+            artist_variant,
+            PRIORITY_EXACT_WITHOUT_ARTIST,
+            &format!("exact without prefix + {} artist '{}'", variant_desc, artist_variant),
+        );
+    }
+
+    // Stage 4: Wildcard only track (Priority 3-4) - Last resort, no artist filter
     add_wildcard_only_candidate(
         &mut candidates,
         &params.cleaned_track,

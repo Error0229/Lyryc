@@ -2,7 +2,7 @@ use log::{debug, error, info, warn};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -12,9 +12,9 @@ const TRANSLATION_SEPARATOR: &str = " |||SEP||| ";
 // Line count mismatch resolution structures
 #[derive(Debug, Clone)]
 pub enum MismatchType {
-    LinesShort,   // LLM returned fewer lines than expected
-    LinesExtra,   // LLM returned more lines than expected
-    LinesSame,    // Count matches, no issue
+    LinesShort, // LLM returned fewer lines than expected
+    LinesExtra, // LLM returned more lines than expected
+    LinesSame,  // Count matches, no issue
 }
 
 #[derive(Debug, Clone)]
@@ -173,9 +173,9 @@ pub async fn translate_lyrics(
 
     // Define progressive translation strategies
     let strategies = vec![
-        TranslationStrategy::Combined,       // Try normal translation first
-        TranslationStrategy::Chunked(5),     // If that fails, try smaller chunks
-        TranslationStrategy::LineByLine,     // Last resort: line-by-line
+        TranslationStrategy::Combined,   // Try normal translation first
+        TranslationStrategy::Chunked(5), // If that fails, try smaller chunks
+        TranslationStrategy::LineByLine, // Last resort: line-by-line
     ];
 
     let result = translate_with_strategies(&lyrics, &config, &strategies).await;
@@ -670,15 +670,94 @@ async fn parse_translation_response(
     let mut translated_lines = Vec::new();
 
     // Check if the response uses the new format (original |||SEP||| translated)
-    let uses_new_format = cleaned_response.iter().any(|line| line.contains(TRANSLATION_SEPARATOR));
+    let uses_new_format = cleaned_response
+        .iter()
+        .any(|line| line.contains(TRANSLATION_SEPARATOR));
 
     if uses_new_format {
-        info!("Parsing paired format with separator: '{}'", TRANSLATION_SEPARATOR);
+        info!(
+            "Parsing paired format with separator: '{}'",
+            TRANSLATION_SEPARATOR
+        );
 
-        for (i, original_line) in original_lyrics.iter().enumerate() {
-            if i >= cleaned_response.len() {
-                warn!("[Parse Path: NEW_FORMAT_MISSING] Line {}: Missing translation, using fallback", i);
-                // Fallback to original text if translation is missing
+        // Build a map of original text -> (response_index, translated_text)
+        let mut response_map: HashMap<String, Vec<(usize, String)>> = HashMap::new();
+
+        for (resp_idx, response_line) in cleaned_response.iter().enumerate() {
+            if let Some(separator_pos) = response_line.find(TRANSLATION_SEPARATOR) {
+                let original_part = response_line[..separator_pos].trim().to_string();
+                let translated_part = response_line[separator_pos + TRANSLATION_SEPARATOR.len()..].trim().to_string();
+
+                response_map.entry(original_part)
+                    .or_insert_with(Vec::new)
+                    .push((resp_idx, translated_part));
+            }
+        }
+
+        let mut mismatch_count = 0;
+        let mut used_response_indices = HashSet::new();
+
+        for (orig_idx, original_line) in original_lyrics.iter().enumerate() {
+            let original_text_trimmed = original_line.text.trim();
+
+            // Try exact match first
+            if let Some(matches) = response_map.get(original_text_trimmed) {
+                // Find the first unused match
+                if let Some((resp_idx, translated_text)) = matches.iter()
+                    .find(|(idx, _)| !used_response_indices.contains(idx))
+                {
+                    used_response_indices.insert(*resp_idx);
+
+                    translated_lines.push(TranslatedLyricLine {
+                        time: original_line.time,
+                        text: translated_text.clone(),
+                        duration: original_line.duration,
+                        original_text: original_line.text.clone(),
+                        translated_text: translated_text.clone(),
+                        translation_confidence: Some(0.98),
+                        detected_language: Some(detected_language.to_string()),
+                    });
+                    continue;
+                }
+            }
+
+            // No exact match found - this is a real mismatch
+            mismatch_count += 1;
+
+            // Try to find the best match from unused response lines
+            let best_match = cleaned_response.iter().enumerate()
+                .filter(|(idx, _)| !used_response_indices.contains(idx))
+                .filter_map(|(idx, line)| {
+                    line.find(TRANSLATION_SEPARATOR).map(|sep_pos| {
+                        let orig_part = line[..sep_pos].trim();
+                        let trans_part = line[sep_pos + TRANSLATION_SEPARATOR.len()..].trim();
+                        (idx, orig_part, trans_part)
+                    })
+                })
+                .next(); // Just take the first unused line as fallback
+
+            if let Some((resp_idx, _orig_part, trans_part)) = best_match {
+                warn!(
+                    "[Parse Path: NEW_FORMAT_MISMATCH] Line {}: Original '{}' not found, using fallback translation from response line {}",
+                    orig_idx, original_text_trimmed, resp_idx
+                );
+                used_response_indices.insert(resp_idx);
+
+                translated_lines.push(TranslatedLyricLine {
+                    time: original_line.time,
+                    text: trans_part.to_string(),
+                    duration: original_line.duration,
+                    original_text: original_line.text.clone(),
+                    translated_text: trans_part.to_string(),
+                    translation_confidence: Some(0.5), // Low confidence due to mismatch
+                    detected_language: Some(detected_language.to_string()),
+                });
+            } else {
+                warn!(
+                    "[Parse Path: NEW_FORMAT_MISSING] Line {}: No translation found, using original",
+                    orig_idx
+                );
+                // Absolute fallback: use original text
                 translated_lines.push(TranslatedLyricLine {
                     time: original_line.time,
                     text: original_line.text.clone(),
@@ -688,61 +767,28 @@ async fn parse_translation_response(
                     translation_confidence: Some(0.0),
                     detected_language: Some(detected_language.to_string()),
                 });
-                continue;
-            }
-
-            let response_line = cleaned_response[i];
-
-            // Split by TRANSLATION_SEPARATOR
-            if let Some(separator_pos) = response_line.find(TRANSLATION_SEPARATOR) {
-                let original_part = response_line[..separator_pos].trim();
-                let translated_part = response_line[separator_pos + TRANSLATION_SEPARATOR.len()..].trim();
-
-                // Verify original text matches (with some tolerance for whitespace)
-                let original_matches = original_part == original_line.text.trim();
-                let confidence = if original_matches { 0.98 } else { 0.85 };
-
-                if !original_matches {
-                    debug!(
-                        "[Parse Path: NEW_FORMAT_MISMATCH] Line {}: Original text mismatch - expected '{}', got '{}'",
-                        i, original_line.text, original_part
-                    );
-                }
-
-                translated_lines.push(TranslatedLyricLine {
-                    time: original_line.time,
-                    text: translated_part.to_string(),
-                    duration: original_line.duration,
-                    original_text: original_line.text.clone(),
-                    translated_text: translated_part.to_string(),
-                    translation_confidence: Some(confidence),
-                    detected_language: Some(detected_language.to_string()),
-                });
-            } else {
-                warn!("[Parse Path: NEW_FORMAT_NO_SEP] Line {}: Missing separator '{}' in: '{}'", i, TRANSLATION_SEPARATOR, response_line);
-                // Fallback: treat entire line as translation
-                translated_lines.push(TranslatedLyricLine {
-                    time: original_line.time,
-                    text: response_line.to_string(),
-                    duration: original_line.duration,
-                    original_text: original_line.text.clone(),
-                    translated_text: response_line.to_string(),
-                    translation_confidence: Some(0.7), // Lower confidence due to format issue
-                    detected_language: Some(detected_language.to_string()),
-                });
             }
         }
 
-        // Perfect line count match with new format
+        // Check success based on actual matches, not just line count
         if translated_lines.len() == original_lyrics.len() {
-            info!("[Parse Path: NEW_FORMAT_SUCCESS] Paired format parsing successful: {} lines matched", translated_lines.len());
-            return Ok((translated_lines, false));
+            if mismatch_count == 0 {
+                info!("[Parse Path: NEW_FORMAT_SUCCESS] Paired format parsing successful: {} lines matched perfectly", translated_lines.len());
+                return Ok((translated_lines, false));
+            } else {
+                warn!(
+                    "[Parse Path: NEW_FORMAT_PARTIAL] Paired format parsing completed with {} mismatches out of {} lines",
+                    mismatch_count, original_lyrics.len()
+                );
+                // Continue to legacy fallback for better alignment
+            }
         } else {
             warn!(
                 "[Parse Path: NEW_FORMAT_COUNT_MISMATCH] Line count mismatch after paired format parsing: {} vs {}",
                 translated_lines.len(),
                 original_lyrics.len()
             );
+            // Continue to legacy fallback
         }
     }
 
@@ -763,11 +809,15 @@ async fn parse_translation_response(
             original_lyrics,
             detected_language,
             config,
-        ).await;
+        )
+        .await;
     }
 
     // Perfect match - proceed normally with old format
-    info!("[Parse Path: LEGACY_SUCCESS] Legacy format parsing successful: {} lines matched", cleaned_response.len());
+    info!(
+        "[Parse Path: LEGACY_SUCCESS] Legacy format parsing successful: {} lines matched",
+        cleaned_response.len()
+    );
     let mut legacy_translated_lines = Vec::new();
 
     for (i, original_line) in original_lyrics.iter().enumerate() {
@@ -798,17 +848,17 @@ async fn resolve_line_count_mismatch(
 
     info!(
         "Resolving {:?} mismatch: {} translated vs {} original lines",
-        mismatch_type, translated_lines.len(), original_lyrics.len()
+        mismatch_type,
+        translated_lines.len(),
+        original_lyrics.len()
     );
 
     // Strategy 1: LLM-based alignment resolution (if config available)
     if let Some(config) = config {
-        if let Ok((resolved_lines, is_same)) = resolve_alignment_with_llm(
-            translated_lines,
-            original_lyrics,
-            detected_language,
-            config,
-        ).await {
+        if let Ok((resolved_lines, is_same)) =
+            resolve_alignment_with_llm(translated_lines, original_lyrics, detected_language, config)
+                .await
+        {
             info!("LLM-based alignment resolution successful");
             return Ok((resolved_lines, is_same));
         } else {
@@ -846,11 +896,9 @@ async fn resolve_line_count_mismatch(
         }
         MismatchType::LinesExtra => {
             // LLM split some lines - try intelligent merging
-            if let Ok(resolved) = resolve_by_intelligent_merging(
-                translated_lines,
-                original_lyrics,
-                detected_language,
-            ) {
+            if let Ok(resolved) =
+                resolve_by_intelligent_merging(translated_lines, original_lyrics, detected_language)
+            {
                 return Ok(resolved);
             }
         }
@@ -890,13 +938,20 @@ fn create_smart_alignment(
     };
 
     // High confidence for small mismatches, lower for large ones
-    let base_confidence = if ratio > 0.8 { 0.8 } else if ratio > 0.5 { 0.6 } else { 0.3 };
+    let base_confidence = if ratio > 0.8 {
+        0.8
+    } else if ratio > 0.5 {
+        0.6
+    } else {
+        0.3
+    };
 
     let mut alignment_map = Vec::new();
 
     // Simple proportional alignment for now
     for i in 0..original_count {
-        let translated_index = (i as f64 * translated_count as f64 / original_count as f64) as usize;
+        let translated_index =
+            (i as f64 * translated_count as f64 / original_count as f64) as usize;
         let mapped_index = translated_index.min(translated_count.saturating_sub(1));
         alignment_map.push((i, mapped_index));
     }
@@ -1194,7 +1249,10 @@ async fn try_gemini_alignment(prompt: &str, api_key: &str) -> Result<Vec<String>
         .map_err(|e| e.to_string())?;
 
     if !response.status().is_success() {
-        return Err(format!("Gemini alignment request failed: {}", response.status()));
+        return Err(format!(
+            "Gemini alignment request failed: {}",
+            response.status()
+        ));
     }
 
     let result: Value = response.json().await.map_err(|e| e.to_string())?;
@@ -1234,7 +1292,10 @@ async fn try_github_alignment(prompt: &str, github_token: &str) -> Result<Vec<St
         .map_err(|e| e.to_string())?;
 
     if !response.status().is_success() {
-        return Err(format!("GitHub alignment request failed: {}", response.status()));
+        return Err(format!(
+            "GitHub alignment request failed: {}",
+            response.status()
+        ));
     }
 
     let result: Value = response.json().await.map_err(|e| e.to_string())?;
@@ -1266,9 +1327,7 @@ async fn translate_with_strategies(
             TranslationStrategy::Chunked(chunk_size) => {
                 translate_lyrics_chunked(lyrics, config, *chunk_size).await
             }
-            TranslationStrategy::LineByLine => {
-                translate_lyrics_line_by_line(lyrics, config).await
-            }
+            TranslationStrategy::LineByLine => translate_lyrics_line_by_line(lyrics, config).await,
             TranslationStrategy::AlignmentFix => {
                 // This strategy is used within other strategies, not standalone
                 Err("AlignmentFix strategy must be used with another strategy".to_string())
@@ -1390,11 +1449,11 @@ async fn translate_lyrics_gemini(
 
     // Available Gemini models (based on the pricing table)
     let models = [
-        "gemini-2.5-flash-lite", // Fast with 250K TPM, 10 RPM
-        "gemini-2.0-flash",      // Latest with 1M TPM, 15 RPM
-        "gemini-2.5-flash",      // Fast with 250K TPM, 10 RPM
-        "gemini-2.0-flash-lite", // Fast with 250K TPM, 10 RPM
-        "gemini-2.5-pro",        // Most capable with 250K TPM, 5 RPM
+        "gemini-flash-lite-latest",
+        "gemini-flash-latest",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-pro",
     ];
 
     // Pass language detection to translation function - no separate API call
@@ -1896,12 +1955,7 @@ mod tests {
             TRANSLATION_SEPARATOR, TRANSLATION_SEPARATOR
         );
 
-        let result = parse_translation_response(
-            &response_text,
-            &original_lyrics,
-            "ja",
-            None,
-        ).await;
+        let result = parse_translation_response(&response_text, &original_lyrics, "ja", None).await;
 
         assert!(result.is_ok());
         let (translated_lines, _) = result.unwrap();
@@ -1913,23 +1967,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_parse_paired_format_missing_separator() {
-        let original_lyrics = vec![
-            LyricLine {
-                time: 0.0,
-                text: "Hello".to_string(),
-                duration: Some(2.0),
-            },
-        ];
+        let original_lyrics = vec![LyricLine {
+            time: 0.0,
+            text: "Hello".to_string(),
+            duration: Some(2.0),
+        }];
 
         // Response missing separator - should fallback to treating as translation
         let response_text = "Hola";
 
-        let result = parse_translation_response(
-            &response_text,
-            &original_lyrics,
-            "en",
-            None,
-        ).await;
+        let result = parse_translation_response(&response_text, &original_lyrics, "en", None).await;
 
         assert!(result.is_ok());
         let (translated_lines, _) = result.unwrap();
@@ -1941,23 +1988,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_parse_paired_format_original_mismatch() {
-        let original_lyrics = vec![
-            LyricLine {
-                time: 0.0,
-                text: "こんにちは".to_string(),
-                duration: Some(2.0),
-            },
-        ];
+        let original_lyrics = vec![LyricLine {
+            time: 0.0,
+            text: "こんにちは".to_string(),
+            duration: Some(2.0),
+        }];
 
         // Original part doesn't match exactly
         let response_text = format!("こんにちわ{}Hello", TRANSLATION_SEPARATOR);
 
-        let result = parse_translation_response(
-            &response_text,
-            &original_lyrics,
-            "ja",
-            None,
-        ).await;
+        let result = parse_translation_response(&response_text, &original_lyrics, "ja", None).await;
 
         assert!(result.is_ok());
         let (translated_lines, _) = result.unwrap();
@@ -1969,23 +2009,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_parse_paired_format_with_whitespace() {
-        let original_lyrics = vec![
-            LyricLine {
-                time: 0.0,
-                text: "Test".to_string(),
-                duration: Some(2.0),
-            },
-        ];
+        let original_lyrics = vec![LyricLine {
+            time: 0.0,
+            text: "Test".to_string(),
+            duration: Some(2.0),
+        }];
 
         // Translation with extra whitespace
         let response_text = format!("Test{}  Translated  ", TRANSLATION_SEPARATOR);
 
-        let result = parse_translation_response(
-            &response_text,
-            &original_lyrics,
-            "en",
-            None,
-        ).await;
+        let result = parse_translation_response(&response_text, &original_lyrics, "en", None).await;
 
         assert!(result.is_ok());
         let (translated_lines, _) = result.unwrap();
@@ -1996,23 +2029,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_parse_legacy_format_fallback() {
-        let original_lyrics = vec![
-            LyricLine {
-                time: 0.0,
-                text: "Original".to_string(),
-                duration: Some(2.0),
-            },
-        ];
+        let original_lyrics = vec![LyricLine {
+            time: 0.0,
+            text: "Original".to_string(),
+            duration: Some(2.0),
+        }];
 
         // Legacy format: just translation, no separator
         let response_text = "Translation";
 
-        let result = parse_translation_response(
-            &response_text,
-            &original_lyrics,
-            "en",
-            None,
-        ).await;
+        let result = parse_translation_response(&response_text, &original_lyrics, "en", None).await;
 
         assert!(result.is_ok());
         let (translated_lines, _) = result.unwrap();

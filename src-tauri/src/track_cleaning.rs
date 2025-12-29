@@ -19,9 +19,7 @@ static TRACK_CLEANING_CACHE: OnceLock<Arc<RwLock<HashMap<String, String>>>> = On
 
 /// Get shared cache for track cleaning results
 fn get_track_cleaning_cache() -> &'static Arc<RwLock<HashMap<String, String>>> {
-    TRACK_CLEANING_CACHE.get_or_init(|| {
-        Arc::new(RwLock::new(HashMap::new()))
-    })
+    TRACK_CLEANING_CACHE.get_or_init(|| Arc::new(RwLock::new(HashMap::new())))
 }
 
 /// Get shared HTTP client with connection pooling
@@ -1440,10 +1438,11 @@ IMPORTANT: Output must be parseable as raw JSON. Do not use markdown, code block
 3. **Preserve artist identity**: Keep the core artist name, stage names, band names
 4. **Handle collaborations**: Split multiple artists into separate array entries
 5. **Language preservation**: Don't translate artist names, preserve original script
-6. **Remove metadata**: Remove record labels, years, album info from artist field
-7. **CRITICAL - Multiple Artists**: Return ALL artists as separate entries in cleaned_artists array
-8. **Multi-language collaborations**: Recognize separators in different languages (和, と, 와, &, feat., vs, with, and, y, et)
-9. **Output format**: Separate multiple artists with either space or comma in cleaned_artists array
+6. **CRITICAL - Romanized Japanese/Korean/Chinese**: If an artist name appears to be romanized (e.g., "Natori", "Yoasobi", "Ado"), convert it back to the original Japanese/Korean/Chinese script (e.g., "なとり", "YOASOBI", "Ado"). YouTube Music often shows romanized versions but lyrics databases use original scripts.
+7. **Remove metadata**: Remove record labels, years, album info from artist field
+8. **CRITICAL - Multiple Artists**: Return ALL artists as separate entries in cleaned_artists array
+9. **Multi-language collaborations**: Recognize separators in different languages (和, と, 와, &, feat., vs, with, and, y, et)
+10. **Output format**: Separate multiple artists with either space or comma in cleaned_artists array
 
 ## Track Title Cleaning Principles:
 1. **Keep identity-bearing content**: Version markers like "Acoustic", "Live", "Remix" when part of release identity
@@ -1484,6 +1483,14 @@ Return ONE JSON object with this exact structure:
 - "艺术家A, Artist B & 아티스트C" → cleaned_artists: ["艺术家A", "Artist B", "아티스트C"]
 - "Artist A with Artist B" → cleaned_artists: ["Artist A", "Artist B"]
 - "Artist A and Artist B" → cleaned_artists: ["Artist A", "Artist B"]
+
+## Romanization Conversion Examples:
+- "Natori" → cleaned_title: "なとり", cleaned_artists: ["なとり"]
+- "Yoasobi" → cleaned_title: "YOASOBI", cleaned_artists: ["YOASOBI"]
+- "Kenshi Yonezu" → cleaned_title: "米津玄師", cleaned_artists: ["米津玄師"]
+- "Ado" → cleaned_title: "Ado", cleaned_artists: ["Ado"]
+- "Eve" (Japanese artist) → cleaned_title: "Eve", cleaned_artists: ["Eve"]
+- "Yorushika" → cleaned_title: "ヨルシカ", cleaned_artists: ["ヨルシカ"]
 
 ## Multi-Language Collaboration Rules:
 - Recognize mixed-language separators: "和" (Chinese), "와" (Korean), "と" (Japanese), "et" (French), "y" (Spanish)
@@ -1635,7 +1642,7 @@ pub async fn clean_artist_and_track_names_gemini(
     try_gemini_artist_track_cleaning(
         artist_name,
         track_name,
-        "gemini-1.5-flash-8b",
+        "gemini-flash-lite-latest",
         &gemini_api_key,
     )
     .await
@@ -1659,6 +1666,7 @@ Return ONE JSON object with this exact structure:
 {{
   "artist": {{
     "cleaned_title": "cleaned artist name",
+    "cleaned_artists": ["artist1", "artist2"],
     "kept_markers": [],
     "removed_context": [],
     "confidence": 0.95,
@@ -1675,6 +1683,12 @@ Return ONE JSON object with this exact structure:
 
 Remove: platform names, "Official", "MV", record labels, years, marketing text.
 Keep: artist identity, meaningful version markers, original language.
+
+CRITICAL - Romanization Conversion:
+- If artist name appears romanized (e.g., "Natori", "Yoasobi", "Kenshi Yonezu"), convert to original Japanese/Korean/Chinese script
+- Examples: "Natori" → "なとり", "Yoasobi" → "YOASOBI", "Kenshi Yonezu" → "米津玄師"
+- YouTube Music shows romanized names but lyrics databases use original scripts
+- Always prefer original script over romanization
 
 Multi-artist handling:
 - Separate collaborations: "Thomas Reid 和 Rxseboy" → two separate artists

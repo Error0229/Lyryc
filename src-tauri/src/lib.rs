@@ -7,6 +7,7 @@ use tokio::sync::Mutex;
 mod commands;
 mod furigana;
 mod lyrics;
+mod musicbrainz;
 mod track_cleaning;
 mod translation;
 mod types;
