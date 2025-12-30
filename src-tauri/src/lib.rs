@@ -8,7 +8,6 @@ mod cleaning;
 mod commands;
 mod furigana;
 mod lyrics;
-mod musicbrainz;
 mod translation;
 mod types;
 mod websocket;

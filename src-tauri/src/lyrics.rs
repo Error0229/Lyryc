@@ -1,5 +1,4 @@
 use crate::cleaning::{clean_artist_and_track_names, clean_track_name, remove_artist_from_track};
-use crate::musicbrainz::lookup_artist_variants;
 use crate::types::LyricLine;
 use anyhow::{anyhow, Result};
 use log::{debug, info, warn};
@@ -52,7 +51,7 @@ struct LyricsCandidate {
 struct SearchParameters {
     track_name: String,
     artist_name: String,
-    artist_variants: Vec<String>, // All artist name variants from MusicBrainz + cleaned names
+    artist_variants: Vec<String>, // All artist name variants from LLM cleaning
     cleaned_track: String,
     cleaned_artist: String,
     cleaned_artist_primary: String, // First artist from cleaned_artists array
@@ -75,14 +74,8 @@ impl SearchParameters {
     }
 
     async fn populate_cleaned_variants(&mut self) {
-        // Fetch artist variants from MusicBrainz in parallel with LLM cleaning
-        let mb_lookup = lookup_artist_variants(&self.artist_name);
-        let llm_cleaning = clean_artist_and_track_names(&self.artist_name, &self.track_name);
-
-        let (mb_variants, cleaning_result) = tokio::join!(mb_lookup, llm_cleaning);
-
-        // Process LLM cleaning result
-        match cleaning_result {
+        // Use LLM cleaning for artist and track names
+        match clean_artist_and_track_names(&self.artist_name, &self.track_name).await {
             Ok(result) => {
                 self.cleaned_artist = result.artist.cleaned_title.clone();
                 // Use the primary artist (first in array) for search
@@ -93,30 +86,23 @@ impl SearchParameters {
                     .cloned()
                     .unwrap_or_else(|| result.artist.cleaned_title.clone());
 
-                // Build comprehensive artist variants list
+                // Build artist variants list from LLM cleaning
                 self.artist_variants = Vec::new();
 
-                // 1. Add MusicBrainz variants first (most reliable)
-                for variant in mb_variants {
-                    if !self.artist_variants.contains(&variant) {
-                        self.artist_variants.push(variant);
-                    }
-                }
-
-                // 2. Add LLM cleaned artists
+                // 1. Add LLM cleaned artists
                 for artist in &result.artist.cleaned_artists {
                     if !self.artist_variants.contains(artist) {
                         self.artist_variants.push(artist.clone());
                     }
                 }
 
-                // 3. Add primary cleaned artist
+                // 2. Add primary cleaned artist
                 if !self.artist_variants.contains(&self.cleaned_artist_primary) {
                     self.artist_variants
                         .push(self.cleaned_artist_primary.clone());
                 }
 
-                // 4. Add original artist name as final fallback
+                // 3. Add original artist name as fallback
                 if !self.artist_variants.contains(&self.artist_name) {
                     self.artist_variants.push(self.artist_name.clone());
                 }
@@ -124,12 +110,14 @@ impl SearchParameters {
                 // Check if track cleaning actually worked in combined cleaning
                 let combined_cleaned_track = result.track.cleaned_title.clone();
                 if combined_cleaned_track != self.track_name {
-                    // Combined cleaning worked for track
                     self.cleaned_track = combined_cleaned_track;
                     debug!(
-                        "Combined artist/track cleaning successful: '{}' -> {} variants {:?}, '{}' -> '{}'",
-                        self.artist_name, self.artist_variants.len(), self.artist_variants,
-                        self.track_name, self.cleaned_track
+                        "Artist/track cleaning: '{}' -> {} variants {:?}, '{}' -> '{}'",
+                        self.artist_name,
+                        self.artist_variants.len(),
+                        self.artist_variants,
+                        self.track_name,
+                        self.cleaned_track
                     );
                 } else {
                     // Combined cleaning didn't clean the track, fall back to track-only cleaning
@@ -150,29 +138,21 @@ impl SearchParameters {
             }
             Err(e) => {
                 warn!(
-                    "Failed to clean artist/track with LLM: {}, using MusicBrainz + original",
+                    "Failed to clean artist/track with LLM: {}, using original names",
                     e
                 );
 
-                // Build artist variants from MusicBrainz only
-                self.artist_variants = mb_variants;
-                if !self.artist_variants.contains(&self.artist_name) {
-                    self.artist_variants.push(self.artist_name.clone());
-                }
+                // Use original name only
+                self.artist_variants = vec![self.artist_name.clone()];
 
                 // Fallback to separate cleaning for track
                 self.cleaned_track = clean_track_name(&self.track_name).await;
                 self.cleaned_artist = self.artist_name.clone();
-                self.cleaned_artist_primary = self
-                    .artist_variants
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| self.artist_name.clone());
+                self.cleaned_artist_primary = self.artist_name.clone();
 
                 debug!(
-                    "Using MusicBrainz + original fallback: artist '{}' -> {} variants {:?}, track '{}' -> '{}'",
-                    self.artist_name, self.artist_variants.len(), self.artist_variants,
-                    self.track_name, self.cleaned_track
+                    "Using original fallback: artist '{}', track '{}' -> '{}'",
+                    self.artist_name, self.track_name, self.cleaned_track
                 );
             }
         }
@@ -319,10 +299,10 @@ fn build_search_candidates(params: &SearchParameters) -> Result<Vec<LyricsCandid
     let mut candidates = Vec::new();
 
     // Try all artist variants at each priority level
-    // Priority order: MusicBrainz variants > LLM cleaned > Original
+    // Priority order: LLM cleaned > Original
     for (variant_idx, artist_variant) in params.artist_variants.iter().enumerate() {
         let variant_desc = if variant_idx == 0 {
-            "MusicBrainz/primary"
+            "primary"
         } else if variant_idx < params.artist_variants.len() - 1 {
             "variant"
         } else {
