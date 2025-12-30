@@ -13,20 +13,36 @@ use crate::translation::parser::parse_translation_response;
 use crate::translation::prompt::{build_translation_prompt, SYSTEM_PROMPT};
 use crate::translation::types::{LyricLine, TranslationConfig, TranslationResult};
 
-/// High-performance GitHub AI models ranked by accuracy
+/// GitHub AI models organized by rate limit tier (free tier optimized)
+///
+/// LOW TIER (15 req/min, 150 req/day) - Primary models, use first
+/// HIGH TIER (10 req/min, 50 req/day) - Fallback for quality
+/// SPECIAL TIER (1-2 req/min, 8-30 req/day) - Last resort only
 const GITHUB_MODELS: &[&str] = &[
-    "meta/Llama-4-Maverick-17B-128E-Instruct-FP8",
+    // === LOW TIER (150 req/day) - Burn these first ===
+    "openai/gpt-4.1-mini",
     "openai/gpt-4.1-nano",
     "openai/gpt-4o-mini",
-    "mistral ai/Mistral-Large-2411",
-    "mistral ai/mistral-medium-2505",
-    "mistral ai/mistral-small-2503",
+    "microsoft/Phi-4",
+    "mistralai/Mistral-Small-3.1",
     "meta/Meta-Llama-3.1-8B-Instruct",
-    "mistral ai/Codestral-2501",
-    "deepseek/DeepSeek-V3-0324",
-    "meta/Llama-3.3-70B-Instruct",
-    "xai/grok-3",
+    "meta/Llama-3.2-11B-Vision-Instruct",
     "meta/Llama-4-Scout-17B-16E-Instruct",
+    "cohere/Cohere-command-a",
+    // === HIGH TIER (50 req/day) - Quality fallback ===
+    "openai/gpt-4.1",
+    "openai/gpt-4o",
+    "meta/Llama-4-Maverick-17B-128E-Instruct-FP8",
+    "meta/Llama-3.3-70B-Instruct",
+    "meta/Llama-3.2-90B-Vision-Instruct",
+    "mistralai/Mistral-Medium-3",
+    "deepseek/DeepSeek-V3-0324",
+    "cohere/Cohere-command-r-08-2024",
+    "mistralai/Codestral-2501",
+    // === SPECIAL TIER (8-30 req/day) - Last resort ===
+    "xai/grok-3-mini",
+    "xai/grok-3",
+    "deepseek/DeepSeek-R1",
 ];
 
 /// Translate lyrics using GitHub AI models

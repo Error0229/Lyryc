@@ -1,7 +1,8 @@
 //! Translation module for lyrics translation
 //!
 //! This module provides comprehensive lyrics translation functionality with:
-//! - Multiple LLM provider support (GitHub AI, Google Gemini)
+//! - GitHub AI as primary provider (tier-optimized model selection)
+//! - Google Gemini as deprecated fallback (limited free tier)
 //! - Intelligent language detection
 //! - Line alignment and mismatch resolution
 //! - Progressive retry strategies
@@ -115,7 +116,7 @@ mod tests {
 
     #[test]
     fn test_separator_constant() {
-        assert_eq!(prompt::TRANSLATION_SEPARATOR, " |||SEP||| ");
+        assert_eq!(prompt::TRANSLATION_SEPARATOR, " <sep> ");
         assert!(prompt::TRANSLATION_SEPARATOR.len() > 5);
     }
 }

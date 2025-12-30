@@ -58,7 +58,7 @@ impl Default for TranslationConfig {
             preserve_rhyme: true,
             preserve_meaning: true,
             maintain_structure: true,
-            provider: "gemini".to_string(),
+            provider: "github".to_string(), // GitHub models preferred (higher rate limits)
             github_api_key: None,
             gemini_api_key: None,
         }

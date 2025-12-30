@@ -23,7 +23,7 @@ pub async fn parse_translation_response(
         .filter(|line| !line.is_empty())
         .collect();
 
-    // Check if the response uses the new format (original |||SEP||| translated)
+    // Check if the response uses the new format (original <sep> translated)
     let uses_new_format = cleaned_response
         .iter()
         .any(|line| line.contains(TRANSLATION_SEPARATOR));
