@@ -1,48 +1,51 @@
 //! Persistent lyrics caching module using SQLite
 //!
 //! Stores fetched lyrics in a SQLite database to avoid redundant API calls
-//! across app restarts.
+//! across app restarts. Gracefully degrades to no-cache if DB fails.
 
 use crate::types::LyricLine;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
 lazy_static::lazy_static! {
-    static ref DB_CONNECTION: Mutex<Connection> = Mutex::new(init_db());
+    static ref DB_CONNECTION: Mutex<Option<Connection>> = Mutex::new(try_init_db());
 }
 
 /// Get the database path in user's app data directory
-fn get_db_path() -> PathBuf {
-    // Use platform-specific app data directory via environment variables
-    let base_dir = std::env::var("LOCALAPPDATA") // Windows
-        .or_else(|_| std::env::var("XDG_DATA_HOME")) // Linux
-        .or_else(|_| std::env::var("HOME").map(|h| format!("{}/.local/share", h))) // Linux fallback
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."));
+fn get_db_path() -> Option<PathBuf> {
+    let base_dir = std::env::var("LOCALAPPDATA")
+        .or_else(|_| std::env::var("XDG_DATA_HOME"))
+        .or_else(|_| std::env::var("HOME").map(|h| format!("{}/.local/share", h)))
+        .ok()?;
 
-    let app_dir = base_dir.join("Lyryc");
+    let app_dir = PathBuf::from(base_dir).join("Lyryc");
 
-    // Create directory if it doesn't exist - fail fast if we can't
-    std::fs::create_dir_all(&app_dir)
-        .expect("Failed to create app data directory for lyrics cache");
+    if let Err(e) = std::fs::create_dir_all(&app_dir) {
+        error!("Failed to create app data directory: {}. Cache disabled.", e);
+        return None;
+    }
 
-    app_dir.join("lyrics_cache.db")
+    Some(app_dir.join("lyrics_cache.db"))
 }
 
-/// Initialize the database connection and create tables.
-/// Panics on failure - fail fast rather than silent degradation.
-fn init_db() -> Connection {
-    let db_path = get_db_path();
+/// Try to initialize the database. Returns None on failure (graceful degradation).
+fn try_init_db() -> Option<Connection> {
+    let db_path = get_db_path()?;
     info!("Initializing lyrics cache database at: {:?}", db_path);
 
-    let conn = Connection::open(&db_path)
-        .expect("Failed to open lyrics cache database");
+    let conn = match Connection::open(&db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            error!("Failed to open lyrics cache database: {}. Cache disabled.", e);
+            return None;
+        }
+    };
 
     // Create lyrics cache table
     // lyrics_json can be NULL to indicate "no lyrics found" (negative cache)
-    conn.execute(
+    if let Err(e) = conn.execute(
         "CREATE TABLE IF NOT EXISTS lyrics_cache (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             artist TEXT NOT NULL,
@@ -52,18 +55,21 @@ fn init_db() -> Connection {
             UNIQUE(artist, track)
         )",
         [],
-    )
-    .expect("Failed to create lyrics_cache table");
+    ) {
+        error!("Failed to create lyrics_cache table: {}. Cache disabled.", e);
+        return None;
+    }
 
     // Create index for faster lookups
-    conn.execute(
+    if let Err(e) = conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_artist_track ON lyrics_cache(artist, track)",
         [],
-    )
-    .expect("Failed to create index on lyrics_cache");
+    ) {
+        warn!("Failed to create index on lyrics_cache: {}. Continuing without index.", e);
+    }
 
     info!("Lyrics cache database initialized successfully");
-    conn
+    Some(conn)
 }
 
 /// Normalize key for consistent lookups (lowercase, trimmed)
@@ -77,16 +83,27 @@ pub enum CacheResult {
     Hit(Vec<LyricLine>),
     /// Cached as "no lyrics available" (negative cache)
     NegativeHit,
-    /// Not in cache
+    /// Not in cache or cache unavailable
     Miss,
 }
 
-/// Get cached lyrics if available
+/// Get cached lyrics if available. Returns Miss if cache is disabled.
 pub fn get_cached_lyrics(artist: &str, track: &str) -> CacheResult {
     let artist_key = normalize_key(artist);
     let track_key = normalize_key(track);
 
-    let conn = DB_CONNECTION.lock().expect("DB mutex poisoned");
+    let guard = match DB_CONNECTION.lock() {
+        Ok(g) => g,
+        Err(e) => {
+            warn!("Cache mutex poisoned: {}", e);
+            return CacheResult::Miss;
+        }
+    };
+
+    let conn = match guard.as_ref() {
+        Some(c) => c,
+        None => return CacheResult::Miss, // Cache disabled
+    };
 
     let result: Result<Option<String>, _> = conn.query_row(
         "SELECT lyrics_json FROM lyrics_cache WHERE artist = ?1 AND track = ?2",
@@ -113,8 +130,10 @@ pub fn get_cached_lyrics(artist: &str, track: &str) -> CacheResult {
             }
         }
         Ok(None) => {
-            // NULL lyrics_json means "no lyrics found" (negative cache)
-            debug!("Cache NEGATIVE HIT for '{}' by '{}' (instrumental/no lyrics)", track, artist);
+            debug!(
+                "Cache NEGATIVE HIT for '{}' by '{}' (instrumental/no lyrics)",
+                track, artist
+            );
             CacheResult::NegativeHit
         }
         Err(rusqlite::Error::QueryReturnedNoRows) => {
@@ -122,18 +141,26 @@ pub fn get_cached_lyrics(artist: &str, track: &str) -> CacheResult {
             CacheResult::Miss
         }
         Err(e) => {
-            error!("Database query error: {}", e);
+            warn!("Database query error: {}", e);
             CacheResult::Miss
         }
     }
 }
 
-/// Cache lyrics for future lookups
+/// Cache lyrics for future lookups. Silently fails if cache is disabled.
 pub fn cache_lyrics(artist: &str, track: &str, lyrics: Vec<LyricLine>) {
     let artist_key = normalize_key(artist);
     let track_key = normalize_key(track);
 
-    let conn = DB_CONNECTION.lock().expect("DB mutex poisoned");
+    let guard = match DB_CONNECTION.lock() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+
+    let conn = match guard.as_ref() {
+        Some(c) => c,
+        None => return, // Cache disabled
+    };
 
     let lyrics_json = match serde_json::to_string(&lyrics) {
         Ok(json) => json,
@@ -148,30 +175,41 @@ pub fn cache_lyrics(artist: &str, track: &str, lyrics: Vec<LyricLine>) {
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
 
-    // Use INSERT OR REPLACE to handle duplicates
     if let Err(e) = conn.execute(
         "INSERT OR REPLACE INTO lyrics_cache (artist, track, lyrics_json, cached_at) VALUES (?1, ?2, ?3, ?4)",
         params![artist_key, track_key, lyrics_json, cached_at],
     ) {
         error!("Failed to cache lyrics: {}", e);
     } else {
-        debug!("Cached {} lyrics lines for '{}' by '{}'", lyrics.len(), track, artist);
+        debug!(
+            "Cached {} lyrics lines for '{}' by '{}'",
+            lyrics.len(),
+            track,
+            artist
+        );
     }
 }
 
-/// Cache a negative result (no lyrics found) to avoid repeated API calls
+/// Cache a negative result (no lyrics found) to avoid repeated API calls.
 pub fn cache_no_lyrics(artist: &str, track: &str) {
     let artist_key = normalize_key(artist);
     let track_key = normalize_key(track);
 
-    let conn = DB_CONNECTION.lock().expect("DB mutex poisoned");
+    let guard = match DB_CONNECTION.lock() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+
+    let conn = match guard.as_ref() {
+        Some(c) => c,
+        None => return, // Cache disabled
+    };
 
     let cached_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
 
-    // Insert with NULL lyrics_json to indicate "no lyrics found"
     if let Err(e) = conn.execute(
         "INSERT OR REPLACE INTO lyrics_cache (artist, track, lyrics_json, cached_at) VALUES (?1, ?2, NULL, ?3)",
         params![artist_key, track_key, cached_at],
@@ -185,14 +223,19 @@ pub fn cache_no_lyrics(artist: &str, track: &str) {
 /// Clear the entire cache
 #[allow(dead_code)]
 pub fn clear_cache() {
-    let conn = DB_CONNECTION.lock().expect("DB mutex poisoned");
+    let guard = match DB_CONNECTION.lock() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
 
-    match conn.execute("DELETE FROM lyrics_cache", []) {
-        Ok(count) => {
-            info!("Cleared {} entries from lyrics cache", count);
-        }
-        Err(e) => {
-            error!("Failed to clear lyrics cache: {}", e);
+    if let Some(conn) = guard.as_ref() {
+        match conn.execute("DELETE FROM lyrics_cache", []) {
+            Ok(count) => {
+                info!("Cleared {} entries from lyrics cache", count);
+            }
+            Err(e) => {
+                error!("Failed to clear lyrics cache: {}", e);
+            }
         }
     }
 }
@@ -200,7 +243,8 @@ pub fn clear_cache() {
 /// Get cache statistics
 #[allow(dead_code)]
 pub fn get_cache_stats() -> Option<(usize, i64)> {
-    let conn = DB_CONNECTION.lock().ok()?;
+    let guard = DB_CONNECTION.lock().ok()?;
+    let conn = guard.as_ref()?;
 
     let count: usize = conn
         .query_row("SELECT COUNT(*) FROM lyrics_cache", [], |row| row.get(0))
@@ -213,4 +257,13 @@ pub fn get_cache_stats() -> Option<(usize, i64)> {
         .unwrap_or(0);
 
     Some((count, oldest))
+}
+
+/// Check if cache is available
+#[allow(dead_code)]
+pub fn is_cache_available() -> bool {
+    DB_CONNECTION
+        .lock()
+        .map(|g| g.is_some())
+        .unwrap_or(false)
 }
