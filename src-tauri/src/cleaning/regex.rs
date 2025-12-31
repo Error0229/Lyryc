@@ -336,10 +336,6 @@ fn final_cleanup(text: &str, original: &str) -> String {
         }
     }
 
-    // Separator cleanup - already handled in handle_separator_patterns
-    // Only do additional cleanup here if there are remaining separators
-    // that weren't caught earlier (e.g., multi-dash cases)
-
     // Handle remaining dot separators
     if cleaned.contains(" · ") && !cleaned.contains(" - ") {
         let parts: Vec<&str> = cleaned.split(" · ").collect();

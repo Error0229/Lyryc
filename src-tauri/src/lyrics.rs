@@ -1,7 +1,7 @@
 use crate::cleaning::{
     clean_artist_and_track_names, clean_track_name, clean_track_name_sync, remove_artist_from_track,
 };
-use crate::lyrics_cache::{cache_lyrics, get_cached_lyrics};
+use crate::lyrics_cache::{cache_lyrics, cache_no_lyrics, get_cached_lyrics, CacheResult};
 use crate::types::LyricLine;
 use anyhow::{anyhow, Result};
 use log::{debug, info, warn};
@@ -440,9 +440,18 @@ pub async fn fetch_lyrics(
     _request_id: Option<String>, // Keep for compatibility
 ) -> Result<Vec<LyricLine>, String> {
     // Check cache first - instant return if we've seen this song before
-    if let Some(cached) = get_cached_lyrics(&artist_name, &track_name) {
-        info!("Using cached lyrics for: {} by {}", track_name, artist_name);
-        return Ok(cached);
+    match get_cached_lyrics(&artist_name, &track_name) {
+        CacheResult::Hit(cached) => {
+            info!("Using cached lyrics for: {} by {}", track_name, artist_name);
+            return Ok(cached);
+        }
+        CacheResult::NegativeHit => {
+            info!("Cached negative result for: {} by {} (no lyrics available)", track_name, artist_name);
+            return Err("No lyrics found (cached)".to_string());
+        }
+        CacheResult::Miss => {
+            // Continue to fetch
+        }
     }
 
     // Convert single artist name to comma-separated format for search
@@ -512,6 +521,8 @@ pub async fn fetch_lyrics(
                         "No lyrics found after trying all strategies for '{}' by '{}': {}",
                         track_name, artist_name, e
                     );
+                    // Cache negative result to avoid repeated API calls for instrumentals
+                    cache_no_lyrics(&artist_name, &track_name);
                     Err(format!("No lyrics found: {}", e))
                 }
             }
