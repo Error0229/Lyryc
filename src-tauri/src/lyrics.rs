@@ -503,33 +503,34 @@ pub async fn fetch_lyrics(
     // === LLM PATH ===
     // Fast path failed or was empty, use LLM-cleaned candidates
     // By now LLM should be done (it ran in parallel with fast path HTTP requests)
-    match llm_handle.await {
-        Ok(llm_params) => {
-            let full_candidates = build_search_candidates(&llm_params)?;
-            if full_candidates.is_empty() {
-                return Err("No valid search candidates".to_string());
-            }
+    let search_params = match llm_handle.await {
+        Ok(llm_params) => llm_params,
+        Err(e) => {
+            // LLM task panicked - fallback to regex-cleaned params
+            warn!("LLM cleaning task failed: {}. Falling back to regex params.", e);
+            fast_params
+        }
+    };
 
-            match execute_staged_search(full_candidates).await {
-                Ok((winner, lyrics)) => {
-                    info!("LLM path success with: {}", winner.description);
-                    cache_lyrics(&artist_name, &track_name, lyrics.clone());
-                    Ok(lyrics)
-                }
-                Err(e) => {
-                    warn!(
-                        "No lyrics found after trying all strategies for '{}' by '{}': {}",
-                        track_name, artist_name, e
-                    );
-                    // Cache negative result to avoid repeated API calls for instrumentals
-                    cache_no_lyrics(&artist_name, &track_name);
-                    Err(format!("No lyrics found: {}", e))
-                }
-            }
+    let full_candidates = build_search_candidates(&search_params)?;
+    if full_candidates.is_empty() {
+        cache_no_lyrics(&artist_name, &track_name);
+        return Err("No valid search candidates".to_string());
+    }
+
+    match execute_staged_search(full_candidates).await {
+        Ok((winner, lyrics)) => {
+            info!("Search success with: {}", winner.description);
+            cache_lyrics(&artist_name, &track_name, lyrics.clone());
+            Ok(lyrics)
         }
         Err(e) => {
-            warn!("LLM cleaning task failed: {}", e);
-            Err(format!("Lyrics search failed: {}", e))
+            warn!(
+                "No lyrics found after trying all strategies for '{}' by '{}': {}",
+                track_name, artist_name, e
+            );
+            cache_no_lyrics(&artist_name, &track_name);
+            Err(format!("No lyrics found: {}", e))
         }
     }
 }

@@ -7,47 +7,56 @@ use crate::types::LyricLine;
 use log::{debug, error, info, warn};
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::OnceLock;
 
 /// Cache TTL: 30 days in seconds
 const CACHE_TTL_SECONDS: i64 = 30 * 24 * 60 * 60;
 
-lazy_static::lazy_static! {
-    static ref DB_CONNECTION: Mutex<Option<Connection>> = Mutex::new(try_init_db());
-}
+/// Cached database path (computed once)
+static DB_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
 
 /// Get the database path in user's app data directory
-fn get_db_path() -> Option<PathBuf> {
-    let base_dir = std::env::var("LOCALAPPDATA")
-        .or_else(|_| std::env::var("XDG_DATA_HOME"))
-        .or_else(|_| std::env::var("HOME").map(|h| format!("{}/.local/share", h)))
-        .ok()?;
+fn get_db_path() -> Option<&'static PathBuf> {
+    DB_PATH
+        .get_or_init(|| {
+            let base_dir = std::env::var("LOCALAPPDATA")
+                .or_else(|_| std::env::var("XDG_DATA_HOME"))
+                .or_else(|_| std::env::var("HOME").map(|h| format!("{}/.local/share", h)))
+                .ok()?;
 
-    let app_dir = PathBuf::from(base_dir).join("Lyryc");
+            let app_dir = PathBuf::from(base_dir).join("Lyryc");
 
-    if let Err(e) = std::fs::create_dir_all(&app_dir) {
-        error!("Failed to create app data directory: {}. Cache disabled.", e);
-        return None;
-    }
+            if let Err(e) = std::fs::create_dir_all(&app_dir) {
+                error!("Failed to create app data directory: {}. Cache disabled.", e);
+                return None;
+            }
 
-    Some(app_dir.join("lyrics_cache.db"))
+            Some(app_dir.join("lyrics_cache.db"))
+        })
+        .as_ref()
 }
 
-/// Try to initialize the database. Returns None on failure (graceful degradation).
-fn try_init_db() -> Option<Connection> {
+/// Open a new database connection. Returns None on failure.
+fn open_connection() -> Option<Connection> {
     let db_path = get_db_path()?;
-    info!("Initializing lyrics cache database at: {:?}", db_path);
 
-    let conn = match Connection::open(&db_path) {
+    let conn = match Connection::open(db_path) {
         Ok(c) => c,
         Err(e) => {
-            error!("Failed to open lyrics cache database: {}. Cache disabled.", e);
+            error!("Failed to open lyrics cache database: {}", e);
             return None;
         }
     };
 
-    // Create lyrics cache table
-    // lyrics_json can be NULL to indicate "no lyrics found" (negative cache)
+    // Enable WAL mode for better concurrent access
+    let _ = conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
+
+    Some(conn)
+}
+
+/// Initialize the database schema (called once on first use)
+fn ensure_schema(conn: &Connection) -> bool {
+    // Create table if not exists
     if let Err(e) = conn.execute(
         "CREATE TABLE IF NOT EXISTS lyrics_cache (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,45 +68,31 @@ fn try_init_db() -> Option<Connection> {
         )",
         [],
     ) {
-        error!("Failed to create lyrics_cache table: {}. Cache disabled.", e);
-        return None;
+        error!("Failed to create lyrics_cache table: {}", e);
+        return false;
     }
 
-    // Create index for faster lookups
+    // Create index
     if let Err(e) = conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_artist_track ON lyrics_cache(artist, track)",
         [],
     ) {
-        warn!("Failed to create index on lyrics_cache: {}. Continuing without index.", e);
+        warn!("Failed to create index: {}", e);
     }
 
-    // Clean up expired entries on startup
-    let min_timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
-        - CACHE_TTL_SECONDS;
-
-    match conn.execute(
-        "DELETE FROM lyrics_cache WHERE cached_at <= ?1",
-        params![min_timestamp],
-    ) {
-        Ok(count) if count > 0 => {
-            info!("Cleaned up {} expired cache entries on startup", count);
-        }
-        Ok(_) => {}
-        Err(e) => {
-            warn!("Failed to clean up expired entries: {}", e);
-        }
-    }
-
-    info!("Lyrics cache database initialized successfully");
-    Some(conn)
+    true
 }
 
-/// Normalize key for consistent lookups (lowercase, trimmed)
+/// Normalize key for consistent lookups
+/// - Lowercase
+/// - Unicode NFC normalization (via to_lowercase which handles most cases)
+/// - Collapse whitespace
+/// - Trim
 fn normalize_key(s: &str) -> String {
-    s.to_lowercase().trim().to_string()
+    s.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 /// Get current Unix timestamp
@@ -120,24 +115,19 @@ pub enum CacheResult {
 
 /// Get cached lyrics if available. Returns Miss if cache is disabled or entry expired.
 pub fn get_cached_lyrics(artist: &str, track: &str) -> CacheResult {
+    let conn = match open_connection() {
+        Some(c) => c,
+        None => return CacheResult::Miss,
+    };
+
+    if !ensure_schema(&conn) {
+        return CacheResult::Miss;
+    }
+
     let artist_key = normalize_key(artist);
     let track_key = normalize_key(track);
-
-    let guard = match DB_CONNECTION.lock() {
-        Ok(g) => g,
-        Err(e) => {
-            warn!("Cache mutex poisoned: {}", e);
-            return CacheResult::Miss;
-        }
-    };
-
-    let conn = match guard.as_ref() {
-        Some(c) => c,
-        None => return CacheResult::Miss, // Cache disabled
-    };
-
-    // Query with TTL check - only return entries newer than 30 days
     let min_timestamp = now_timestamp() - CACHE_TTL_SECONDS;
+
     let result: Result<Option<String>, _> = conn.query_row(
         "SELECT lyrics_json FROM lyrics_cache WHERE artist = ?1 AND track = ?2 AND cached_at > ?3",
         params![artist_key, track_key, min_timestamp],
@@ -182,18 +172,17 @@ pub fn get_cached_lyrics(artist: &str, track: &str) -> CacheResult {
 
 /// Cache lyrics for future lookups. Silently fails if cache is disabled.
 pub fn cache_lyrics(artist: &str, track: &str, lyrics: Vec<LyricLine>) {
+    let conn = match open_connection() {
+        Some(c) => c,
+        None => return,
+    };
+
+    if !ensure_schema(&conn) {
+        return;
+    }
+
     let artist_key = normalize_key(artist);
     let track_key = normalize_key(track);
-
-    let guard = match DB_CONNECTION.lock() {
-        Ok(g) => g,
-        Err(_) => return,
-    };
-
-    let conn = match guard.as_ref() {
-        Some(c) => c,
-        None => return, // Cache disabled
-    };
 
     let lyrics_json = match serde_json::to_string(&lyrics) {
         Ok(json) => json,
@@ -220,18 +209,17 @@ pub fn cache_lyrics(artist: &str, track: &str, lyrics: Vec<LyricLine>) {
 
 /// Cache a negative result (no lyrics found) to avoid repeated API calls.
 pub fn cache_no_lyrics(artist: &str, track: &str) {
+    let conn = match open_connection() {
+        Some(c) => c,
+        None => return,
+    };
+
+    if !ensure_schema(&conn) {
+        return;
+    }
+
     let artist_key = normalize_key(artist);
     let track_key = normalize_key(track);
-
-    let guard = match DB_CONNECTION.lock() {
-        Ok(g) => g,
-        Err(_) => return,
-    };
-
-    let conn = match guard.as_ref() {
-        Some(c) => c,
-        None => return, // Cache disabled
-    };
 
     if let Err(e) = conn.execute(
         "INSERT OR REPLACE INTO lyrics_cache (artist, track, lyrics_json, cached_at) VALUES (?1, ?2, NULL, ?3)",
@@ -246,28 +234,21 @@ pub fn cache_no_lyrics(artist: &str, track: &str) {
 /// Clear the entire cache
 #[allow(dead_code)]
 pub fn clear_cache() {
-    let guard = match DB_CONNECTION.lock() {
-        Ok(g) => g,
-        Err(_) => return,
+    let conn = match open_connection() {
+        Some(c) => c,
+        None => return,
     };
 
-    if let Some(conn) = guard.as_ref() {
-        match conn.execute("DELETE FROM lyrics_cache", []) {
-            Ok(count) => {
-                info!("Cleared {} entries from lyrics cache", count);
-            }
-            Err(e) => {
-                error!("Failed to clear lyrics cache: {}", e);
-            }
-        }
+    match conn.execute("DELETE FROM lyrics_cache", []) {
+        Ok(count) => info!("Cleared {} entries from lyrics cache", count),
+        Err(e) => error!("Failed to clear lyrics cache: {}", e),
     }
 }
 
 /// Get cache statistics
 #[allow(dead_code)]
 pub fn get_cache_stats() -> Option<(usize, i64)> {
-    let guard = DB_CONNECTION.lock().ok()?;
-    let conn = guard.as_ref()?;
+    let conn = open_connection()?;
 
     let count: usize = conn
         .query_row("SELECT COUNT(*) FROM lyrics_cache", [], |row| row.get(0))
@@ -285,21 +266,13 @@ pub fn get_cache_stats() -> Option<(usize, i64)> {
 /// Check if cache is available
 #[allow(dead_code)]
 pub fn is_cache_available() -> bool {
-    DB_CONNECTION
-        .lock()
-        .map(|g| g.is_some())
-        .unwrap_or(false)
+    get_db_path().is_some()
 }
 
 /// Clean up expired cache entries (older than 30 days)
 #[allow(dead_code)]
 pub fn cleanup_expired_entries() {
-    let guard = match DB_CONNECTION.lock() {
-        Ok(g) => g,
-        Err(_) => return,
-    };
-
-    let conn = match guard.as_ref() {
+    let conn = match open_connection() {
         Some(c) => c,
         None => return,
     };
@@ -309,12 +282,8 @@ pub fn cleanup_expired_entries() {
         "DELETE FROM lyrics_cache WHERE cached_at <= ?1",
         params![min_timestamp],
     ) {
-        Ok(count) if count > 0 => {
-            info!("Cleaned up {} expired cache entries", count);
-        }
+        Ok(count) if count > 0 => info!("Cleaned up {} expired cache entries", count),
         Ok(_) => {}
-        Err(e) => {
-            warn!("Failed to clean up expired cache entries: {}", e);
-        }
+        Err(e) => warn!("Failed to clean up expired cache entries: {}", e),
     }
 }
