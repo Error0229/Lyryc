@@ -853,21 +853,6 @@ async fn execute_concurrent_stage(candidates: Vec<LyricsCandidate>) -> Result<Ly
     best_result.ok_or_else(|| anyhow!("No successful results in stage"))
 }
 
-// Legacy function kept for compatibility - now just delegates to new staged approach
-#[allow(dead_code)]
-async fn search_strict_priority<F>(
-    candidates: Vec<LyricsCandidate>,
-    _per_req_timeout: Duration,
-    _overall_timeout: Duration,
-    _is_non_empty: F,
-) -> Result<(LyricsCandidate, Vec<LyricLine>)>
-where
-    F: Fn(&[LyricLine]) -> bool + Copy + Send + 'static,
-{
-    // Delegate to new staged search implementation
-    execute_staged_search(candidates).await
-}
-
 #[tauri::command]
 pub async fn fetch_lrclib_raw(
     track_name: String,

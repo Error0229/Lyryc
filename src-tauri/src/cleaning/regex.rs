@@ -8,6 +8,21 @@
 use log::debug;
 use regex::Regex;
 
+/// Split text by common separators (-, ·, ×). Returns (first_part, second_part) or None.
+fn split_by_separator(text: &str) -> Option<(&str, &str)> {
+    // Try each separator pattern
+    for sep in &[" - ", " – ", " — ", " · ", " × "] {
+        if let Some(pos) = text.find(sep) {
+            let first = text[..pos].trim();
+            let second = text[pos + sep.len()..].trim();
+            if !first.is_empty() && !second.is_empty() {
+                return Some((first, second));
+            }
+        }
+    }
+    None
+}
+
 /// Synchronous regex-based track name cleaning
 pub fn clean_track_name_sync(track_name: &str) -> String {
     let mut cleaned = track_name.to_string();
@@ -196,52 +211,25 @@ fn handle_separator_patterns(text: &str) -> String {
         }
     }
 
-    // For "-", "·", "×" separators
-    // Original behavior: keep FIRST part (before separator)
-    // Exception: "Artist feat. X - Track" pattern → keep second part
-    let separator_patterns = vec![
-        r"^([^-]+)\s*[-–—]\s*(.+)$",
-        r"^([^·]+)\s*[·]\s*(.+)$",
-        r"^([^×]+)\s*[×]\s*(.+)$",
-    ];
+    // Handle separators: "-", "·", "×"
+    // Rule: Keep first part, UNLESS first part has "feat/ft." then keep second
+    if let Some((first, second)) = split_by_separator(&cleaned) {
+        let first_lower = first.to_lowercase();
+        let second_lower = second.to_lowercase();
 
-    for pattern in separator_patterns {
-        if let Ok(re) = Regex::new(pattern) {
-            if let Some(captures) = re.captures(&cleaned) {
-                if let Some(first_group) = captures.get(1) {
-                    if let Some(second_group) = captures.get(2) {
-                        let first_part = first_group.as_str().trim();
-                        let second_part = second_group.as_str().trim();
+        // "Artist feat. X - Track" → keep Track
+        let is_featuring = first_lower.contains("feat") || first_lower.contains("ft.");
+        let second_is_junk = second_lower.contains("youtube") || second_lower.contains("music video");
 
-                        // Check if first part is "Artist feat. X" pattern
-                        let has_featuring = first_part.to_lowercase().contains("feat")
-                            || first_part.to_lowercase().contains("ft.");
-
-                        // Only take second part for "Artist feat. X - Track" pattern
-                        if has_featuring
-                            && !second_part.is_empty()
-                            && !second_part.to_lowercase().contains("youtube")
-                            && !second_part.to_lowercase().contains("music video")
-                        {
-                            debug!(
-                                "Artist feat pattern detected, keeping track: '{}'",
-                                second_part
-                            );
-                            cleaned = second_part.to_string();
-                            break;
-                        }
-
-                        // Default: keep FIRST part (original behavior from de7d91f)
-                        // This handles "Japanese - Romaji", "Title - Subtitle", etc.
-                        if !first_part.is_empty() && first_part.len() > 1 {
-                            debug!("Keeping first part before separator: '{}'", first_part);
-                            cleaned = first_part.to_string();
-                            break;
-                        }
-                    }
-                }
-            }
-        }
+        cleaned = if is_featuring && !second.is_empty() && !second_is_junk {
+            debug!("Feat pattern: keeping '{}'", second);
+            second.to_string()
+        } else if !first.is_empty() && first.len() > 1 {
+            debug!("Separator: keeping first part '{}'", first);
+            first.to_string()
+        } else {
+            cleaned
+        };
     }
 
     cleaned

@@ -9,6 +9,9 @@ use rusqlite::{params, Connection};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+/// Cache TTL: 30 days in seconds
+const CACHE_TTL_SECONDS: i64 = 30 * 24 * 60 * 60;
+
 lazy_static::lazy_static! {
     static ref DB_CONNECTION: Mutex<Option<Connection>> = Mutex::new(try_init_db());
 }
@@ -68,6 +71,26 @@ fn try_init_db() -> Option<Connection> {
         warn!("Failed to create index on lyrics_cache: {}. Continuing without index.", e);
     }
 
+    // Clean up expired entries on startup
+    let min_timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+        - CACHE_TTL_SECONDS;
+
+    match conn.execute(
+        "DELETE FROM lyrics_cache WHERE cached_at <= ?1",
+        params![min_timestamp],
+    ) {
+        Ok(count) if count > 0 => {
+            info!("Cleaned up {} expired cache entries on startup", count);
+        }
+        Ok(_) => {}
+        Err(e) => {
+            warn!("Failed to clean up expired entries: {}", e);
+        }
+    }
+
     info!("Lyrics cache database initialized successfully");
     Some(conn)
 }
@@ -75,6 +98,14 @@ fn try_init_db() -> Option<Connection> {
 /// Normalize key for consistent lookups (lowercase, trimmed)
 fn normalize_key(s: &str) -> String {
     s.to_lowercase().trim().to_string()
+}
+
+/// Get current Unix timestamp
+fn now_timestamp() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// Cache lookup result
@@ -87,7 +118,7 @@ pub enum CacheResult {
     Miss,
 }
 
-/// Get cached lyrics if available. Returns Miss if cache is disabled.
+/// Get cached lyrics if available. Returns Miss if cache is disabled or entry expired.
 pub fn get_cached_lyrics(artist: &str, track: &str) -> CacheResult {
     let artist_key = normalize_key(artist);
     let track_key = normalize_key(track);
@@ -105,9 +136,11 @@ pub fn get_cached_lyrics(artist: &str, track: &str) -> CacheResult {
         None => return CacheResult::Miss, // Cache disabled
     };
 
+    // Query with TTL check - only return entries newer than 30 days
+    let min_timestamp = now_timestamp() - CACHE_TTL_SECONDS;
     let result: Result<Option<String>, _> = conn.query_row(
-        "SELECT lyrics_json FROM lyrics_cache WHERE artist = ?1 AND track = ?2",
-        params![artist_key, track_key],
+        "SELECT lyrics_json FROM lyrics_cache WHERE artist = ?1 AND track = ?2 AND cached_at > ?3",
+        params![artist_key, track_key, min_timestamp],
         |row| row.get(0),
     );
 
@@ -170,14 +203,9 @@ pub fn cache_lyrics(artist: &str, track: &str, lyrics: Vec<LyricLine>) {
         }
     };
 
-    let cached_at = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-
     if let Err(e) = conn.execute(
         "INSERT OR REPLACE INTO lyrics_cache (artist, track, lyrics_json, cached_at) VALUES (?1, ?2, ?3, ?4)",
-        params![artist_key, track_key, lyrics_json, cached_at],
+        params![artist_key, track_key, lyrics_json, now_timestamp()],
     ) {
         error!("Failed to cache lyrics: {}", e);
     } else {
@@ -205,14 +233,9 @@ pub fn cache_no_lyrics(artist: &str, track: &str) {
         None => return, // Cache disabled
     };
 
-    let cached_at = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-
     if let Err(e) = conn.execute(
         "INSERT OR REPLACE INTO lyrics_cache (artist, track, lyrics_json, cached_at) VALUES (?1, ?2, NULL, ?3)",
-        params![artist_key, track_key, cached_at],
+        params![artist_key, track_key, now_timestamp()],
     ) {
         error!("Failed to cache negative result: {}", e);
     } else {
@@ -266,4 +289,32 @@ pub fn is_cache_available() -> bool {
         .lock()
         .map(|g| g.is_some())
         .unwrap_or(false)
+}
+
+/// Clean up expired cache entries (older than 30 days)
+#[allow(dead_code)]
+pub fn cleanup_expired_entries() {
+    let guard = match DB_CONNECTION.lock() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+
+    let conn = match guard.as_ref() {
+        Some(c) => c,
+        None => return,
+    };
+
+    let min_timestamp = now_timestamp() - CACHE_TTL_SECONDS;
+    match conn.execute(
+        "DELETE FROM lyrics_cache WHERE cached_at <= ?1",
+        params![min_timestamp],
+    ) {
+        Ok(count) if count > 0 => {
+            info!("Cleaned up {} expired cache entries", count);
+        }
+        Ok(_) => {}
+        Err(e) => {
+            warn!("Failed to clean up expired cache entries: {}", e);
+        }
+    }
 }
