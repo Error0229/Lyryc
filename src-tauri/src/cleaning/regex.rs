@@ -1,5 +1,9 @@
 //! Regex-based track name cleaning
 //! This is the fallback when LLM cleaning is unavailable
+//!
+//! Key design decision (from commit de7d91f):
+//! - Default: keep FIRST part before separator (handles "Japanese - Romaji", "Title - Subtitle")
+//! - Exception: "Artist feat. X - Track" pattern → keep second part
 
 use log::debug;
 use regex::Regex;
@@ -177,7 +181,7 @@ fn apply_cleanup_patterns(text: &str) -> String {
 fn handle_separator_patterns(text: &str) -> String {
     let mut cleaned = text.to_string();
 
-    // For "/" separators
+    // For "/" separators - keep first part (original behavior)
     if cleaned.contains(" / ")
         && !cleaned.to_lowercase().contains("feat")
         && !cleaned.to_lowercase().contains("ft.")
@@ -193,6 +197,8 @@ fn handle_separator_patterns(text: &str) -> String {
     }
 
     // For "-", "·", "×" separators
+    // Original behavior: keep FIRST part (before separator)
+    // Exception: "Artist feat. X - Track" pattern → keep second part
     let separator_patterns = vec![
         r"^([^-]+)\s*[-–—]\s*(.+)$",
         r"^([^·]+)\s*[·]\s*(.+)$",
@@ -202,29 +208,34 @@ fn handle_separator_patterns(text: &str) -> String {
     for pattern in separator_patterns {
         if let Ok(re) = Regex::new(pattern) {
             if let Some(captures) = re.captures(&cleaned) {
-                if let Some(artist_part) = captures.get(1) {
-                    if let Some(track_part) = captures.get(2) {
-                        let artist_candidate = artist_part.as_str().trim();
-                        let track_name_candidate = track_part.as_str().trim();
+                if let Some(first_group) = captures.get(1) {
+                    if let Some(second_group) = captures.get(2) {
+                        let first_part = first_group.as_str().trim();
+                        let second_part = second_group.as_str().trim();
 
-                        let has_featuring = artist_candidate.to_lowercase().contains("feat")
-                            || artist_candidate.to_lowercase().contains("ft.");
+                        // Check if first part is "Artist feat. X" pattern
+                        let has_featuring = first_part.to_lowercase().contains("feat")
+                            || first_part.to_lowercase().contains("ft.");
 
-                        if !track_name_candidate.is_empty()
-                            && track_name_candidate.len() >= 1
-                            && !artist_candidate.is_empty()
-                            && (has_featuring
-                                || (artist_candidate.len() as f64)
-                                    < (track_name_candidate.len() as f64) * 3.0)
-                            && !track_name_candidate.to_lowercase().contains("youtube")
-                            && !track_name_candidate.to_lowercase().contains("music video")
-                            && !track_name_candidate.eq(artist_candidate)
+                        // Only take second part for "Artist feat. X - Track" pattern
+                        if has_featuring
+                            && !second_part.is_empty()
+                            && !second_part.to_lowercase().contains("youtube")
+                            && !second_part.to_lowercase().contains("music video")
                         {
                             debug!(
-                                "Extracted track name after separator: '{}'",
-                                track_name_candidate
+                                "Artist feat pattern detected, keeping track: '{}'",
+                                second_part
                             );
-                            cleaned = track_name_candidate.to_string();
+                            cleaned = second_part.to_string();
+                            break;
+                        }
+
+                        // Default: keep FIRST part (original behavior from de7d91f)
+                        // This handles "Japanese - Romaji", "Title - Subtitle", etc.
+                        if !first_part.is_empty() && first_part.len() > 1 {
+                            debug!("Keeping first part before separator: '{}'", first_part);
+                            cleaned = first_part.to_string();
                             break;
                         }
                     }
@@ -325,21 +336,9 @@ fn final_cleanup(text: &str, original: &str) -> String {
         }
     }
 
-    // Aggressive Artist - Track extraction
-    if cleaned.contains(" - ") {
-        let parts: Vec<&str> = cleaned.split(" - ").collect();
-        if parts.len() >= 2 {
-            let track_part = parts[1].trim();
-            if !track_part.is_empty()
-                && track_part.len() >= 1
-                && !track_part.to_lowercase().starts_with("youtube")
-                && !track_part.to_lowercase().starts_with("official")
-                && !track_part.to_lowercase().contains("cover by")
-            {
-                cleaned = track_part.to_string();
-            }
-        }
-    }
+    // Separator cleanup - already handled in handle_separator_patterns
+    // Only do additional cleanup here if there are remaining separators
+    // that weren't caught earlier (e.g., multi-dash cases)
 
     // Handle remaining dot separators
     if cleaned.contains(" · ") && !cleaned.contains(" - ") {

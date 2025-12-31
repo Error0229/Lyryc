@@ -1,4 +1,7 @@
-use crate::cleaning::{clean_artist_and_track_names, clean_track_name, remove_artist_from_track};
+use crate::cleaning::{
+    clean_artist_and_track_names, clean_track_name, clean_track_name_sync, remove_artist_from_track,
+};
+use crate::lyrics_cache::{cache_lyrics, get_cached_lyrics};
 use crate::types::LyricLine;
 use anyhow::{anyhow, Result};
 use log::{debug, info, warn};
@@ -87,6 +90,26 @@ impl SearchParameters {
         }
     }
 
+    /// Fast path: populate with regex cleaning only (instant, no LLM calls)
+    fn populate_regex_only(&mut self) {
+        // Use regex cleaning for track name
+        self.cleaned_track = clean_track_name_sync(&self.track_name);
+
+        // Use original artist name (no LLM cleaning)
+        self.cleaned_artist = self.artist_name.clone();
+        self.cleaned_artist_primary = self.artist_name.clone();
+        self.artist_variants = vec![self.artist_name.clone()];
+
+        // Track without artist prefix
+        self.track_without_artist = remove_artist_from_track(&self.track_name, &self.artist_name);
+        self.cleaned_track_without_artist = clean_track_name_sync(&self.track_without_artist);
+
+        debug!(
+            "Regex-only cleaning: '{}' -> '{}', artist: '{}'",
+            self.track_name, self.cleaned_track, self.artist_name
+        );
+    }
+
     async fn populate_cleaned_variants(&mut self) {
         // Use LLM cleaning for artist and track names
         match clean_artist_and_track_names(&self.artist_name, &self.track_name).await {
@@ -172,7 +195,7 @@ impl SearchParameters {
         }
 
         self.track_without_artist = remove_artist_from_track(&self.track_name, &self.artist_name);
-        self.cleaned_track_without_artist = clean_track_name(&self.track_without_artist).await;
+        self.cleaned_track_without_artist = clean_track_name_sync(&self.track_without_artist);
     }
 }
 
@@ -228,8 +251,7 @@ fn token_overlap_score(expected: &str, candidate: &str) -> f32 {
     if expected_tokens.is_empty() {
         return 0.0;
     }
-    let candidate_tokens: std::collections::HashSet<&str> =
-        candidate.split_whitespace().collect();
+    let candidate_tokens: std::collections::HashSet<&str> = candidate.split_whitespace().collect();
     let mut matches = 0;
     for token in &expected_tokens {
         if candidate_tokens.contains(token) {
@@ -266,12 +288,7 @@ fn has_cover_marker(text: &str) -> bool {
         || lowered.contains("remix")
 }
 
-fn score_result_match(
-    context: &MatchContext,
-    track: &str,
-    artist: &str,
-    has_synced: bool,
-) -> f32 {
+fn score_result_match(context: &MatchContext, track: &str, artist: &str, has_synced: bool) -> f32 {
     let cleaned_track = crate::cleaning::clean_track_name_sync(track);
 
     let mut best_track: f32 = 0.0;
@@ -287,17 +304,18 @@ fn score_result_match(
         best_artist = best_artist.max(score);
     }
 
-    let artist_weight = if context.expected_artists.is_empty() { 0.0 } else { 0.25 };
+    let artist_weight = if context.expected_artists.is_empty() {
+        0.0
+    } else {
+        0.25
+    };
     let track_weight = 0.95 - artist_weight;
     let mut score: f32 = best_track * track_weight + best_artist * artist_weight;
     if has_synced {
         score += 0.05;
     }
 
-    let expected_has_cover = context
-        .expected_tracks
-        .iter()
-        .any(|t| has_cover_marker(t));
+    let expected_has_cover = context.expected_tracks.iter().any(|t| has_cover_marker(t));
     if !expected_has_cover {
         if has_cover_marker(track) {
             score -= 0.15;
@@ -421,6 +439,12 @@ pub async fn fetch_lyrics(
     artist_name: String,
     _request_id: Option<String>, // Keep for compatibility
 ) -> Result<Vec<LyricLine>, String> {
+    // Check cache first - instant return if we've seen this song before
+    if let Some(cached) = get_cached_lyrics(&artist_name, &track_name) {
+        info!("Using cached lyrics for: {} by {}", track_name, artist_name);
+        return Ok(cached);
+    }
+
     // Convert single artist name to comma-separated format for search
     let search_artist = if artist_name.contains(',') {
         artist_name.clone() // Already comma-separated
@@ -430,29 +454,71 @@ pub async fn fetch_lyrics(
 
     info!("Fetching lyrics for: {} by {}", track_name, search_artist);
 
-    // Prepare search parameters with all variants
-    let mut params = SearchParameters::new(track_name.clone(), search_artist.clone());
-    params.populate_cleaned_variants().await;
+    // === PARALLEL APPROACH ===
+    // Start LLM cleaning in background immediately
+    let llm_track = track_name.clone();
+    let llm_artist = search_artist.clone();
+    let llm_handle = tokio::spawn(async move {
+        let mut params = SearchParameters::new(llm_track, llm_artist);
+        params.populate_cleaned_variants().await;
+        params
+    });
 
-    // Build all search candidates with proper priority
-    let candidates = build_search_candidates(&params)?;
+    // Regex cleaning for fast path (instant)
+    let mut fast_params = SearchParameters::new(track_name.clone(), search_artist.clone());
+    fast_params.populate_regex_only();
 
-    if candidates.is_empty() {
-        return Err("No valid search candidates".to_string());
+    // Build fast path candidates (only highest priority - stages 1-2)
+    let fast_candidates = build_search_candidates(&fast_params)?;
+    let fast_candidates: Vec<_> = fast_candidates
+        .into_iter()
+        .filter(|c| c.priority >= PRIORITY_EXACT_ORIGINAL) // Only priority 9-10
+        .collect();
+
+    // Try fast path with limited stages (runs in parallel with LLM cleaning)
+    if !fast_candidates.is_empty() {
+        debug!(
+            "Trying fast path with {} high-priority candidates",
+            fast_candidates.len()
+        );
+
+        if let Ok((winner, lyrics)) = execute_staged_search(fast_candidates).await {
+            info!("Fast path success with: {}", winner.description);
+            llm_handle.abort(); // Cancel LLM - we don't need it
+            cache_lyrics(&artist_name, &track_name, lyrics.clone());
+            return Ok(lyrics);
+        }
+        debug!("Fast path failed, waiting for LLM results");
     }
 
-    // Execute staged priority search
-    match execute_staged_search(candidates).await {
-        Ok((winner, lyrics)) => {
-            info!("Success with strategy: {}", winner.description);
-            Ok(lyrics)
+    // === LLM PATH ===
+    // Fast path failed or was empty, use LLM-cleaned candidates
+    // By now LLM should be done (it ran in parallel with fast path HTTP requests)
+    match llm_handle.await {
+        Ok(llm_params) => {
+            let full_candidates = build_search_candidates(&llm_params)?;
+            if full_candidates.is_empty() {
+                return Err("No valid search candidates".to_string());
+            }
+
+            match execute_staged_search(full_candidates).await {
+                Ok((winner, lyrics)) => {
+                    info!("LLM path success with: {}", winner.description);
+                    cache_lyrics(&artist_name, &track_name, lyrics.clone());
+                    Ok(lyrics)
+                }
+                Err(e) => {
+                    warn!(
+                        "No lyrics found after trying all strategies for '{}' by '{}': {}",
+                        track_name, artist_name, e
+                    );
+                    Err(format!("No lyrics found: {}", e))
+                }
+            }
         }
         Err(e) => {
-            warn!(
-                "No lyrics found after trying all strategies for '{}' by '{}': {}",
-                track_name, artist_name, e
-            );
-            Err(format!("No lyrics found: {}", e))
+            warn!("LLM cleaning task failed: {}", e);
+            Err(format!("Lyrics search failed: {}", e))
         }
     }
 }
@@ -667,8 +733,7 @@ async fn execute_staged_search(
     }
 
     // Execute each stage in priority order
-    let mut best_low_confidence: Option<LyricsFetchResult> = None;
-    let total_stages = stages.len();
+    let _total_stages = stages.len();
     for (stage_num, stage_candidates) in stages.into_iter().enumerate() {
         debug!(
             "Executing stage {} with {} candidates at priority {}",
@@ -690,17 +755,16 @@ async fn execute_staged_search(
                     stage_num + 1,
                     result.candidate.description
                 );
-                let is_last_stage = stage_num + 1 == total_stages;
-                if result.score >= MIN_ACCEPTABLE_SCORE || is_last_stage {
+                if result.score >= MIN_ACCEPTABLE_SCORE {
                     return Ok((result.candidate, result.lyrics));
                 }
-                if best_low_confidence
-                    .as_ref()
-                    .map(|r| result.score > r.score)
-                    .unwrap_or(true)
-                {
-                    best_low_confidence = Some(result);
-                }
+                warn!(
+                    "Stage {} best match score {:.2} below threshold {:.2}: {}",
+                    stage_num + 1,
+                    result.score,
+                    MIN_ACCEPTABLE_SCORE,
+                    result.candidate.description
+                );
             }
             Err(e) => {
                 debug!("Stage {} failed: {}", stage_num + 1, e);
@@ -709,21 +773,11 @@ async fn execute_staged_search(
         }
     }
 
-    if let Some(result) = best_low_confidence {
-        warn!(
-            "Falling back to low-confidence match with score {:.2}: {}",
-            result.score, result.candidate.description
-        );
-        return Ok((result.candidate, result.lyrics));
-    }
-
     Err(anyhow!("All search stages failed"))
 }
 
 /// Execute all candidates in a stage concurrently, return first successful result
-async fn execute_concurrent_stage(
-    candidates: Vec<LyricsCandidate>,
-) -> Result<LyricsFetchResult> {
+async fn execute_concurrent_stage(candidates: Vec<LyricsCandidate>) -> Result<LyricsFetchResult> {
     if candidates.is_empty() {
         return Err(anyhow!("No candidates in stage"));
     }
