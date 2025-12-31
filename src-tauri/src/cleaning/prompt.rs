@@ -56,7 +56,7 @@ pub const ARTIST_TRACK_CLEANING_SYSTEM_PROMPT: &str = r#"You are a meticulous mu
 
 ## Track Title Cleaning Principles:
 1. **Keep identity-bearing content**: Version markers like "Acoustic", "Live", "Remix" when part of release identity
-2. **Remove distribution context**: "Official Video", "MV", "Visualizer", platform names
+2. **Remove distribution context**: "Official Video", "MV", "Visualizer", "YouTube", "Spotify", "VEVO"
 3. **Handle parenthetical content**: Keep meaningful subtitles, remove marketing text
 4. **Featuring credits**: Follow keep_feat configuration (currently false)
 5. **Language preservation**: Don't translate titles, keep original script

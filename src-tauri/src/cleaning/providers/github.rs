@@ -18,11 +18,11 @@ const GITHUB_MODELS: &[&str] = &[
     "meta/Llama-4-Maverick-17B-128E-Instruct-FP8",
     "openai/gpt-4.1-nano",
     "openai/gpt-4o-mini",
-    "mistral ai/Mistral-Large-2411",
-    "mistral ai/mistral-medium-2505",
-    "mistral ai/mistral-small-2503",
+    "mistralai/Mistral-Large-2411",
+    "mistralai/mistral-medium-2505",
+    "mistralai/mistral-small-2503",
     "meta/Meta-Llama-3.1-8B-Instruct",
-    "mistral ai/Codestral-2501",
+    "mistralai/Codestral-2501",
     "deepseek/DeepSeek-V3-0324",
     "meta/Llama-3.3-70B-Instruct",
     "xai/grok-3",
@@ -83,7 +83,7 @@ pub async fn clean_track_name_github_with_key(
                 return Ok(cleaned);
             }
             Err(e) => {
-                if e.contains("429") && e.contains("Rate limit") {
+                if e.contains("429") {
                     blacklist_model(model_id, RATE_LIMIT_BLACKLIST_DURATION);
                     warn!(
                         "Model {} rate limited for track cleaning, blacklisted for 24 hours",
@@ -204,7 +204,7 @@ pub async fn clean_artist_and_track_names_github(
                 return Ok(result);
             }
             Err(e) => {
-                if e.contains("429") && e.contains("Rate limit") {
+                if e.contains("429") {
                     blacklist_model(model_id, RATE_LIMIT_BLACKLIST_DURATION);
                     warn!("Model {} rate limited, blacklisted for 24 hours", model_id);
                 }

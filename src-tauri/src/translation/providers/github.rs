@@ -88,7 +88,7 @@ pub async fn translate_lyrics_github(
                 return Ok(result);
             }
             Err(e) => {
-                if e.contains("429") && e.contains("Rate limit") {
+                if e.contains("429") {
                     blacklist_model(model_id, RATE_LIMIT_BLACKLIST_DURATION);
                     warn!("Model {} rate limited, blacklisted for 24 hours", model_id);
                 }

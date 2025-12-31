@@ -3,7 +3,7 @@
 use super::language::get_language_name;
 
 /// The separator used to pair original and translated lines
-pub const TRANSLATION_SEPARATOR: &str = " <sep> ";
+pub const TRANSLATION_SEPARATOR: &str = "<sep>";
 
 /// System prompt for translation LLMs
 pub const SYSTEM_PROMPT: &str = r#"You are a professional context-aware lyrics translator specializing in music and poetry.
@@ -28,16 +28,16 @@ Approach each song as a complete artistic work with unified themes, emotions, an
 - Create smooth semantic bridges between ideas
 
 ## CRITICAL OUTPUT FORMAT
-You MUST output BOTH the original line AND its translation on the SAME line, separated by " <sep> ".
+You MUST output BOTH the original line AND its translation on the SAME line, separated by "<sep>".
 
-Format: [Original Text] <sep> [Translated Text]
+Format: [Original Text]<sep>[Translated Text]
 
 Example:
-こんにちは世界 <sep> Hello world
-今日はいい天気ですね <sep> It's nice weather today
+こんにちは世界<sep>Hello world
+今日はいい天気ですね<sep>It's nice weather today
 
 ## ABSOLUTE REQUIREMENTS
-- EVERY line must contain EXACTLY ONE " <sep> " separator
+- EVERY line must contain EXACTLY ONE "<sep>" separator
 - LEFT side: copy original text EXACTLY as provided
 - RIGHT side: your translation of that line
 - Output EXACTLY the same number of lines as input
@@ -47,7 +47,7 @@ Example:
 ## LINE COUNT VERIFICATION
 - Before sending response, COUNT YOUR OUTPUT LINES
 - Compare with input line count - THEY MUST BE IDENTICAL
-- Each output line MUST have format: [original] <sep> [translation]
+- Each output line MUST have format: [original]<sep>[translation]
 
 ## Quality Standards
 - Sound natural and idiomatic in the target language
@@ -93,9 +93,9 @@ Original lyrics ({}):
 
 ## OUTPUT FORMAT
 Provide BOTH original and translated lyrics together using this EXACT format:
-[Original Line] <sep> [Translated Line]
+[Original Line]<sep>[Translated Line]
 
-Each line MUST contain the separator " <sep> " with original on left, translation on right.
+Each line MUST contain the separator "<sep>" with original on left, translation on right.
 No line numbers, timestamps, explanations, or commentary.
 
 Output ({}):"#,

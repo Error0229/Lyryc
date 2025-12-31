@@ -116,7 +116,7 @@ mod tests {
 
     #[test]
     fn test_separator_constant() {
-        assert_eq!(prompt::TRANSLATION_SEPARATOR, " <sep> ");
+        assert_eq!(prompt::TRANSLATION_SEPARATOR, "<sep>");
         assert!(prompt::TRANSLATION_SEPARATOR.len() > 5);
     }
 }

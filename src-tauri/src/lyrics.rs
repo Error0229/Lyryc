@@ -41,10 +41,24 @@ fn get_lyrics_http_client() -> &'static Arc<Client> {
 }
 
 #[derive(Clone, Debug)]
+struct MatchContext {
+    expected_tracks: Vec<String>,
+    expected_artists: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
 struct LyricsCandidate {
     priority: u8, // Higher number = higher priority
     url: String,
     description: String,
+    match_context: MatchContext,
+}
+
+#[derive(Clone, Debug)]
+struct LyricsFetchResult {
+    candidate: LyricsCandidate,
+    lyrics: Vec<LyricLine>,
+    score: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -162,12 +176,146 @@ impl SearchParameters {
     }
 }
 
+fn build_match_context(params: &SearchParameters) -> MatchContext {
+    let mut expected_tracks = Vec::new();
+    let track_candidates = vec![
+        params.cleaned_track.as_str(),
+        params.track_name.as_str(),
+        params.cleaned_track_without_artist.as_str(),
+        params.track_without_artist.as_str(),
+    ];
+    for track in track_candidates {
+        if !track.trim().is_empty() && !expected_tracks.contains(&track.to_string()) {
+            expected_tracks.push(track.to_string());
+        }
+    }
+
+    let mut expected_artists = Vec::new();
+    for artist in &params.artist_variants {
+        if !artist.trim().is_empty() && !expected_artists.contains(artist) {
+            expected_artists.push(artist.clone());
+        }
+    }
+
+    MatchContext {
+        expected_tracks,
+        expected_artists,
+    }
+}
+
+fn normalize_for_match(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut last_space = false;
+    for ch in text.to_lowercase().chars() {
+        if ch.is_alphanumeric() {
+            out.push(ch);
+            last_space = false;
+        } else if ch.is_whitespace() {
+            if !last_space {
+                out.push(' ');
+                last_space = true;
+            }
+        } else if !last_space {
+            out.push(' ');
+            last_space = true;
+        }
+    }
+    out.trim().to_string()
+}
+
+fn token_overlap_score(expected: &str, candidate: &str) -> f32 {
+    let expected_tokens: Vec<&str> = expected.split_whitespace().collect();
+    if expected_tokens.is_empty() {
+        return 0.0;
+    }
+    let candidate_tokens: std::collections::HashSet<&str> =
+        candidate.split_whitespace().collect();
+    let mut matches = 0;
+    for token in &expected_tokens {
+        if candidate_tokens.contains(token) {
+            matches += 1;
+        }
+    }
+    matches as f32 / expected_tokens.len() as f32
+}
+
+fn string_match_score(expected: &str, candidate: &str, contains_score: f32) -> f32 {
+    let expected_norm = normalize_for_match(expected);
+    let candidate_norm = normalize_for_match(candidate);
+    if expected_norm.is_empty() || candidate_norm.is_empty() {
+        return 0.0;
+    }
+    if expected_norm == candidate_norm {
+        return 1.0;
+    }
+    if candidate_norm.contains(&expected_norm) || expected_norm.contains(&candidate_norm) {
+        return contains_score;
+    }
+    let overlap = token_overlap_score(&expected_norm, &candidate_norm);
+    if overlap > 0.0 {
+        return 0.4 + 0.5 * overlap;
+    }
+    0.0
+}
+
+fn has_cover_marker(text: &str) -> bool {
+    let lowered = text.to_lowercase();
+    lowered.contains("cover")
+        || lowered.contains("karaoke")
+        || lowered.contains("instrumental")
+        || lowered.contains("remix")
+}
+
+fn score_result_match(
+    context: &MatchContext,
+    track: &str,
+    artist: &str,
+    has_synced: bool,
+) -> f32 {
+    let cleaned_track = crate::cleaning::clean_track_name_sync(track);
+
+    let mut best_track: f32 = 0.0;
+    for expected in &context.expected_tracks {
+        let score_raw = string_match_score(expected, track, 0.85);
+        let score_cleaned = string_match_score(expected, &cleaned_track, 0.85);
+        best_track = best_track.max(score_raw.max(score_cleaned));
+    }
+
+    let mut best_artist: f32 = 0.0;
+    for expected in &context.expected_artists {
+        let score = string_match_score(expected, artist, 0.7);
+        best_artist = best_artist.max(score);
+    }
+
+    let artist_weight = if context.expected_artists.is_empty() { 0.0 } else { 0.25 };
+    let track_weight = 0.95 - artist_weight;
+    let mut score: f32 = best_track * track_weight + best_artist * artist_weight;
+    if has_synced {
+        score += 0.05;
+    }
+
+    let expected_has_cover = context
+        .expected_tracks
+        .iter()
+        .any(|t| has_cover_marker(t));
+    if !expected_has_cover {
+        if has_cover_marker(track) {
+            score -= 0.15;
+        }
+        if has_cover_marker(artist) {
+            score -= 0.1;
+        }
+    }
+
+    score.clamp(0.0, 1.0)
+}
+
 async fn fetch_lyrics_from_url(
     client: Arc<Client>,
     candidate: LyricsCandidate,
     token: CancellationToken,
     per_req_timeout: Duration,
-) -> Result<(LyricsCandidate, Vec<LyricLine>)> {
+) -> Result<LyricsFetchResult> {
     let req_fut = async {
         let resp = client
             .get(&candidate.url)
@@ -184,66 +332,81 @@ async fn fetch_lyrics_from_url(
             candidate.description
         );
 
-        let lyrics = if json.is_empty() {
-            Vec::new()
-        } else {
-            // Find the best result (prefer synced lyrics)
-            let track_data = json
-                .iter()
-                .find(|item| {
-                    item["syncedLyrics"].as_str().is_some()
-                        && !item["syncedLyrics"].as_str().unwrap().trim().is_empty()
-                })
-                .or_else(|| {
-                    json.iter().find(|item| {
-                        item["plainLyrics"].as_str().is_some()
-                            && !item["plainLyrics"].as_str().unwrap().trim().is_empty()
-                    })
-                })
-                .or(json.first());
+        if json.is_empty() {
+            return Ok::<_, anyhow::Error>(LyricsFetchResult {
+                candidate,
+                lyrics: Vec::new(),
+                score: 0.0,
+            });
+        }
 
-            match track_data {
-                Some(data) => {
-                    // Check for synced lyrics first
-                    if let Some(synced_lyrics) = data["syncedLyrics"].as_str() {
-                        if !synced_lyrics.trim().is_empty() {
-                            info!(
-                                "Found synced lyrics for {}, parsing LRC format",
-                                candidate.description
-                            );
-                            parse_lrc_format(synced_lyrics)
-                        } else if let Some(plain_lyrics) = data["plainLyrics"].as_str() {
-                            if !plain_lyrics.trim().is_empty() {
-                                info!(
-                                    "Found plain lyrics for {}, converting to unsynced format",
-                                    candidate.description
-                                );
-                                convert_plain_lyrics_to_lines(plain_lyrics)
-                            } else {
-                                Vec::new()
-                            }
-                        } else {
-                            Vec::new()
-                        }
-                    } else if let Some(plain_lyrics) = data["plainLyrics"].as_str() {
-                        if !plain_lyrics.trim().is_empty() {
-                            info!(
-                                "Found plain lyrics for {}, converting to unsynced format",
-                                candidate.description
-                            );
-                            convert_plain_lyrics_to_lines(plain_lyrics)
-                        } else {
-                            Vec::new()
-                        }
-                    } else {
-                        Vec::new()
-                    }
-                }
-                None => Vec::new(),
+        let mut best_index: Option<usize> = None;
+        let mut best_score = 0.0;
+        let mut best_has_synced = false;
+
+        for (index, data) in json.iter().enumerate() {
+            let synced = data["syncedLyrics"]
+                .as_str()
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false);
+            let plain = data["plainLyrics"]
+                .as_str()
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false);
+
+            if !synced && !plain {
+                continue;
             }
+
+            let track = data["trackName"].as_str().unwrap_or("");
+            let artist = data["artistName"].as_str().unwrap_or("");
+            let score = score_result_match(&candidate.match_context, track, artist, synced);
+
+            if best_index.is_none() || score > best_score {
+                best_index = Some(index);
+                best_score = score;
+                best_has_synced = synced;
+            }
+        }
+
+        let (lyrics, match_summary) = match best_index {
+            Some(index) => {
+                let data = &json[index];
+                let track = data["trackName"].as_str().unwrap_or("");
+                let artist = data["artistName"].as_str().unwrap_or("");
+                let synced_lyrics = data["syncedLyrics"].as_str().unwrap_or("");
+                let plain_lyrics = data["plainLyrics"].as_str().unwrap_or("");
+                let lyrics = if best_has_synced && !synced_lyrics.trim().is_empty() {
+                    info!(
+                        "Found synced lyrics for {}, parsing LRC format",
+                        candidate.description
+                    );
+                    parse_lrc_format(synced_lyrics)
+                } else if !plain_lyrics.trim().is_empty() {
+                    info!(
+                        "Found plain lyrics for {}, converting to unsynced format",
+                        candidate.description
+                    );
+                    convert_plain_lyrics_to_lines(plain_lyrics)
+                } else {
+                    Vec::new()
+                };
+                let summary = format!("'{}' by '{}' (score {:.2})", track, artist, best_score);
+                (lyrics, summary)
+            }
+            None => (Vec::new(), "no lyric-bearing results".to_string()),
         };
 
-        Ok::<_, anyhow::Error>((candidate, lyrics))
+        debug!(
+            "Best match for {} -> {}",
+            candidate.description, match_summary
+        );
+
+        Ok::<_, anyhow::Error>(LyricsFetchResult {
+            candidate,
+            lyrics,
+            score: best_score,
+        })
     };
 
     tokio::select! {
@@ -297,6 +460,7 @@ pub async fn fetch_lyrics(
 /// Build all search candidates with proper priority and error handling
 fn build_search_candidates(params: &SearchParameters) -> Result<Vec<LyricsCandidate>, String> {
     let mut candidates = Vec::new();
+    let match_context = build_match_context(params);
 
     // Try all artist variants at each priority level
     // Priority order: LLM cleaned > Original
@@ -315,6 +479,7 @@ fn build_search_candidates(params: &SearchParameters) -> Result<Vec<LyricsCandid
             &params.cleaned_track,
             artist_variant,
             PRIORITY_EXACT_CLEANED,
+            &match_context,
             &format!(
                 "exact cleaned track + {} artist '{}'",
                 variant_desc, artist_variant
@@ -326,6 +491,7 @@ fn build_search_candidates(params: &SearchParameters) -> Result<Vec<LyricsCandid
             &params.track_name,
             artist_variant,
             PRIORITY_EXACT_ORIGINAL,
+            &match_context,
             &format!("exact track + {} artist '{}'", variant_desc, artist_variant),
         );
 
@@ -335,6 +501,7 @@ fn build_search_candidates(params: &SearchParameters) -> Result<Vec<LyricsCandid
             &params.cleaned_track,
             artist_variant,
             PRIORITY_WILDCARD_CLEANED_WITH_ARTIST,
+            &match_context,
             &format!(
                 "wildcard cleaned track + {} artist '{}'",
                 variant_desc, artist_variant
@@ -346,6 +513,7 @@ fn build_search_candidates(params: &SearchParameters) -> Result<Vec<LyricsCandid
             &params.track_name,
             artist_variant,
             PRIORITY_WILDCARD_WITH_ARTIST,
+            &match_context,
             &format!(
                 "wildcard track + {} artist '{}'",
                 variant_desc, artist_variant
@@ -358,6 +526,7 @@ fn build_search_candidates(params: &SearchParameters) -> Result<Vec<LyricsCandid
             &params.cleaned_track_without_artist,
             artist_variant,
             PRIORITY_EXACT_CLEANED_WITHOUT_ARTIST,
+            &match_context,
             &format!(
                 "exact cleaned without prefix + {} artist '{}'",
                 variant_desc, artist_variant
@@ -369,6 +538,7 @@ fn build_search_candidates(params: &SearchParameters) -> Result<Vec<LyricsCandid
             &params.track_without_artist,
             artist_variant,
             PRIORITY_EXACT_WITHOUT_ARTIST,
+            &match_context,
             &format!(
                 "exact without prefix + {} artist '{}'",
                 variant_desc, artist_variant
@@ -381,6 +551,7 @@ fn build_search_candidates(params: &SearchParameters) -> Result<Vec<LyricsCandid
         &mut candidates,
         &params.cleaned_track,
         PRIORITY_WILDCARD_CLEANED_ONLY,
+        &match_context,
         "wildcard cleaned only",
     );
 
@@ -388,6 +559,7 @@ fn build_search_candidates(params: &SearchParameters) -> Result<Vec<LyricsCandid
         &mut candidates,
         &params.track_name,
         PRIORITY_WILDCARD_ORIGINAL_ONLY,
+        &match_context,
         "wildcard original only",
     );
 
@@ -400,6 +572,7 @@ fn add_exact_search_candidate(
     track: &str,
     artist: &str,
     priority: u8,
+    match_context: &MatchContext,
     description_prefix: &str,
 ) {
     if !track.trim().is_empty() && !artist.trim().is_empty() {
@@ -412,6 +585,7 @@ fn add_exact_search_candidate(
             priority,
             url,
             description: format!("{}: '{}' by '{}'", description_prefix, track, artist),
+            match_context: match_context.clone(),
         });
     }
 }
@@ -422,6 +596,7 @@ fn add_wildcard_search_candidate(
     track: &str,
     artist: &str,
     priority: u8,
+    match_context: &MatchContext,
     description_prefix: &str,
 ) {
     if !track.trim().is_empty() && !artist.trim().is_empty() {
@@ -433,6 +608,7 @@ fn add_wildcard_search_candidate(
             priority,
             url,
             description: format!("{}: '{}' + '{}'", description_prefix, track, artist),
+            match_context: match_context.clone(),
         });
     }
 }
@@ -442,6 +618,7 @@ fn add_wildcard_only_candidate(
     candidates: &mut Vec<LyricsCandidate>,
     track: &str,
     priority: u8,
+    match_context: &MatchContext,
     description_prefix: &str,
 ) {
     if !track.trim().is_empty() {
@@ -453,6 +630,7 @@ fn add_wildcard_only_candidate(
             priority,
             url,
             description: format!("{}: '{}'", description_prefix, track),
+            match_context: match_context.clone(),
         });
     }
 }
@@ -461,6 +639,7 @@ fn add_wildcard_only_candidate(
 async fn execute_staged_search(
     mut candidates: Vec<LyricsCandidate>,
 ) -> Result<(LyricsCandidate, Vec<LyricLine>)> {
+    const MIN_ACCEPTABLE_SCORE: f32 = 0.6;
     // Sort candidates by priority (highest first)
     candidates.sort_by_key(|c| std::cmp::Reverse(c.priority));
 
@@ -488,6 +667,8 @@ async fn execute_staged_search(
     }
 
     // Execute each stage in priority order
+    let mut best_low_confidence: Option<LyricsFetchResult> = None;
+    let total_stages = stages.len();
     for (stage_num, stage_candidates) in stages.into_iter().enumerate() {
         debug!(
             "Executing stage {} with {} candidates at priority {}",
@@ -507,9 +688,19 @@ async fn execute_staged_search(
                 info!(
                     "Stage {} succeeded with: {}",
                     stage_num + 1,
-                    result.0.description
+                    result.candidate.description
                 );
-                return Ok(result);
+                let is_last_stage = stage_num + 1 == total_stages;
+                if result.score >= MIN_ACCEPTABLE_SCORE || is_last_stage {
+                    return Ok((result.candidate, result.lyrics));
+                }
+                if best_low_confidence
+                    .as_ref()
+                    .map(|r| result.score > r.score)
+                    .unwrap_or(true)
+                {
+                    best_low_confidence = Some(result);
+                }
             }
             Err(e) => {
                 debug!("Stage {} failed: {}", stage_num + 1, e);
@@ -518,13 +709,21 @@ async fn execute_staged_search(
         }
     }
 
+    if let Some(result) = best_low_confidence {
+        warn!(
+            "Falling back to low-confidence match with score {:.2}: {}",
+            result.score, result.candidate.description
+        );
+        return Ok((result.candidate, result.lyrics));
+    }
+
     Err(anyhow!("All search stages failed"))
 }
 
 /// Execute all candidates in a stage concurrently, return first successful result
 async fn execute_concurrent_stage(
     candidates: Vec<LyricsCandidate>,
-) -> Result<(LyricsCandidate, Vec<LyricLine>)> {
+) -> Result<LyricsFetchResult> {
     if candidates.is_empty() {
         return Err(anyhow!("No candidates in stage"));
     }
@@ -546,40 +745,47 @@ async fn execute_concurrent_stage(
         ));
     }
 
-    // Wait for first successful result within stage timeout
+    // Collect best result within stage timeout
     let stage_timeout = Duration::from_secs(STAGE_TIMEOUT_SECS);
-    let result = timeout(stage_timeout, async {
-        while let Some(joined) = set.join_next().await {
-            match joined {
-                Ok(Ok((candidate, lyrics))) => {
-                    if !lyrics.is_empty() {
-                        // Found successful result - cancel remaining and return
-                        cancel_all.cancel();
-                        return Ok((candidate, lyrics));
+    let deadline = tokio::time::Instant::now() + stage_timeout;
+    let mut best_result: Option<LyricsFetchResult> = None;
+
+    loop {
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            break;
+        }
+
+        let remaining = deadline - now;
+        let joined = timeout(remaining, set.join_next()).await;
+        match joined {
+            Ok(Some(Ok(Ok(result)))) => {
+                if !result.lyrics.is_empty() {
+                    let is_better = best_result
+                        .as_ref()
+                        .map(|best| result.score > best.score)
+                        .unwrap_or(true);
+                    if is_better {
+                        best_result = Some(result);
                     }
                 }
-                Ok(Err(e)) => {
-                    debug!("Candidate failed: {}", e);
-                    // Continue with other candidates
-                }
-                Err(e) => {
-                    debug!("Task join error: {}", e);
-                    // Continue with other candidates
-                }
             }
+            Ok(Some(Ok(Err(e)))) => {
+                debug!("Candidate failed: {}", e);
+            }
+            Ok(Some(Err(e))) => {
+                debug!("Task join error: {}", e);
+            }
+            Ok(None) => break,
+            Err(_) => break,
         }
-        Err(anyhow!("No successful results in stage"))
-    })
-    .await;
+    }
 
     // Cleanup
     cancel_all.cancel();
     set.abort_all();
 
-    match result {
-        Ok(stage_result) => stage_result,
-        Err(_) => Err(anyhow!("Stage timeout")),
-    }
+    best_result.ok_or_else(|| anyhow!("No successful results in stage"))
 }
 
 // Legacy function kept for compatibility - now just delegates to new staged approach
