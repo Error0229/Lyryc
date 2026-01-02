@@ -1,7 +1,7 @@
+use crate::cleaning::clean_track_name;
 use crate::cleaning::providers::{
     clean_track_name_gemini_with_key, clean_track_name_github_with_key,
 };
-use crate::cleaning::{clean_artist_and_track_names, clean_track_name, ArtistTrackCleaningResult};
 use crate::translation::{translate_lyrics, LyricLine, TranslationConfig, TranslationResult};
 use crate::types::{TrackInfo, TrackState};
 use tauri::State;
@@ -83,15 +83,6 @@ pub async fn translate_lyrics_command(
     config: TranslationConfig,
 ) -> Result<TranslationResult, String> {
     translate_lyrics(lyrics, config).await
-}
-
-/// Clean both artist and track names using LLM
-#[tauri::command]
-pub async fn clean_artist_and_track_names_command(
-    artist_name: String,
-    track_name: String,
-) -> Result<ArtistTrackCleaningResult, String> {
-    clean_artist_and_track_names(&artist_name, &track_name).await
 }
 
 #[tauri::command]

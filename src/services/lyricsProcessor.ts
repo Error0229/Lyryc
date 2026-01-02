@@ -60,38 +60,10 @@ export class LyricsProcessor {
         throw new Error('Request was cancelled');
       }
 
-      // Step 1: Clean artist and track names using LLM
-      let cleanedArtist = artistName;
-      let cleanedTrack = trackName;
-      
-      try {
-        console.log(`[LyricsProcessor] Cleaning names with LLM...`);
-        const cleaningResult = await invoke('clean_artist_and_track_names_command', {
-          artistName: artistName,
-          trackName: trackName
-        }) as {
-          artist: { cleaned_title: string; confidence: number; notes?: string };
-          track: { cleaned_title: string; confidence: number; notes?: string };
-          cleaned_artists: string[];
-        };
-
-        cleanedArtist = cleaningResult.cleaned_artists.length > 0 
-          ? cleaningResult.cleaned_artists.join(', ')
-          : cleaningResult.artist.cleaned_title;
-        cleanedTrack = cleaningResult.track.cleaned_title;
-        
-        console.log(`[LyricsProcessor] Names cleaned: "${artistName}" -> "${cleanedArtist}", "${trackName}" -> "${cleanedTrack}"`);
-        console.log(`[LyricsProcessor] Artists array:`, cleaningResult.cleaned_artists);
-        console.log(`[LyricsProcessor] Cleaning confidence: Artist ${cleaningResult.artist.confidence}, Track ${cleaningResult.track.confidence}`);
-      } catch (cleaningError) {
-        console.warn(`[LyricsProcessor] Name cleaning failed, using original names:`, cleaningError);
-        // Continue with original names if cleaning fails
-      }
-
-      // Step 2: Fetch lyrics from backend using cleaned names
+      // Fetch lyrics from backend (backend handles cleaning internally)
       const lrclibLyrics = await invoke('fetch_lyrics', {
-        trackName: cleanedTrack,
-        artistName: cleanedArtist
+        trackName,
+        artistName
       }) as LyricLine[];
 
       // Check if cancelled after LRCLib fetch

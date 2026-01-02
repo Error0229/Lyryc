@@ -30,11 +30,6 @@ interface FuriganaResult {
   html: string;
 }
 
-interface CleanedNames {
-  artist: string;
-  track: string;
-}
-
 // =============================================================================
 // Lyrics Operations
 // =============================================================================
@@ -42,13 +37,6 @@ interface CleanedNames {
 export const LyricsBridge = {
   async fetch(trackName: string, artistName: string): Promise<LyricLine[]> {
     return invoke<LyricLine[]>('fetch_lyrics', { trackName, artistName });
-  },
-
-  async cleanNames(artistName: string, trackName: string): Promise<CleanedNames> {
-    return invoke<CleanedNames>('clean_artist_and_track_names_command', {
-      artistName,
-      trackName,
-    });
   },
 };
 

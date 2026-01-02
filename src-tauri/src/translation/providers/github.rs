@@ -24,7 +24,7 @@ const GITHUB_MODELS: &[&str] = &[
     "openai/gpt-4.1-nano",
     "openai/gpt-4o-mini",
     "microsoft/Phi-4",
-    "mistralai/Mistral-Small-3.1",
+    "mistral-ai/Mistral-Small-3.1",
     "meta/Meta-Llama-3.1-8B-Instruct",
     "meta/Llama-3.2-11B-Vision-Instruct",
     "meta/Llama-4-Scout-17B-16E-Instruct",
@@ -35,15 +35,32 @@ const GITHUB_MODELS: &[&str] = &[
     "meta/Llama-4-Maverick-17B-128E-Instruct-FP8",
     "meta/Llama-3.3-70B-Instruct",
     "meta/Llama-3.2-90B-Vision-Instruct",
-    "mistralai/Mistral-Medium-3",
+    "mistral-ai/Mistral-Medium-3",
     "deepseek/DeepSeek-V3-0324",
     "cohere/Cohere-command-r-08-2024",
-    "mistralai/Codestral-2501",
+    "mistral-ai/Codestral-2501",
     // === SPECIAL TIER (8-30 req/day) - Last resort ===
     "xai/grok-3-mini",
     "xai/grok-3",
     "deepseek/DeepSeek-R1",
 ];
+
+fn normalize_model_id(model_id: &str) -> String {
+    let trimmed = model_id.trim();
+    if let Some((provider, rest)) = trimmed.split_once('/') {
+        let provider_lower = provider.to_lowercase();
+        let normalized_provider = match provider_lower.as_str() {
+            "mistral ai" | "mistralai" => "mistral-ai",
+            _ => provider,
+        };
+        return format!("{}/{}", normalized_provider, rest);
+    }
+    trimmed.to_string()
+}
+
+fn is_rate_limited_error(error: &str) -> bool {
+    error.starts_with("HTTP 429")
+}
 
 /// Translate lyrics using GitHub AI models
 pub async fn translate_lyrics_github(
@@ -59,11 +76,13 @@ pub async fn translate_lyrics_github(
             "GitHub API key required for translation. Please enter your API key in the Translation settings.".to_string()
         })?;
 
-    let available_models: Vec<&str> = GITHUB_MODELS
-        .iter()
-        .filter(|model| !is_model_blacklisted(model))
-        .copied()
-        .collect();
+    let mut available_models = Vec::new();
+    for &model in GITHUB_MODELS.iter() {
+        let normalized = normalize_model_id(model);
+        if !available_models.contains(&normalized) && !is_model_blacklisted(&normalized) {
+            available_models.push(normalized);
+        }
+    }
 
     if available_models.is_empty() {
         return Err("All GitHub AI models are currently rate-limited".to_string());
@@ -78,7 +97,15 @@ pub async fn translate_lyrics_github(
     let source_language = config.source_language.clone();
 
     for (i, model_id) in available_models.iter().enumerate() {
-        match try_llm_translation(lyrics, config, &source_language, model_id, &github_token).await {
+        match try_llm_translation(
+            lyrics,
+            config,
+            &source_language,
+            model_id,
+            &github_token,
+        )
+        .await
+        {
             Ok(result) => {
                 info!(
                     "Translation successful with {}: {} lines translated",
@@ -88,7 +115,7 @@ pub async fn translate_lyrics_github(
                 return Ok(result);
             }
             Err(e) => {
-                if e.contains("429") && e.contains("Rate limit") {
+                if is_rate_limited_error(&e) {
                     blacklist_model(model_id, RATE_LIMIT_BLACKLIST_DURATION);
                     warn!("Model {} rate limited, blacklisted for 24 hours", model_id);
                 }

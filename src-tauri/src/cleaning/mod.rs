@@ -106,6 +106,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn validates_cleaning_against_csv_fixture() {
+        let base_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let path = base_dir.join("tests").join("fixtures").join("LyricCleanData.csv");
+
+        let mut rdr = csv::ReaderBuilder::new()
+            .has_headers(true)
+            .from_path(&path)
+            .expect("Failed to open tests/fixtures/LyricCleanData.csv");
+        let mut mismatches = Vec::new();
+
+        for (idx, record) in rdr.records().enumerate() {
+            let record = record.expect("Failed to read CSV record");
+            let original = record.get(0).unwrap_or("").trim();
+            let expected = record.get(1).unwrap_or("").trim();
+            if original.is_empty() {
+                continue;
+            }
+
+            let cleaned = clean_track_name_sync(original);
+            if cleaned != expected && !cleaned.eq_ignore_ascii_case(expected) {
+                mismatches.push(format!(
+                    "Line {}: '{}' -> '{}' (expected '{}')",
+                    idx + 2,
+                    original,
+                    cleaned,
+                    expected
+                ));
+                if mismatches.len() >= 10 {
+                    break;
+                }
+            }
+        }
+
+        assert!(
+            mismatches.is_empty(),
+            "Cleaning mismatches (showing up to 10):\n{}",
+            mismatches.join("\n")
+        );
+    }
+
+    #[test]
     fn cleans_japanese_title_with_romaji_suffix_after_hyphen() {
         let input = "私じゃなかったんだね。 - Watashijyanakattandane.";
         let cleaned = clean_track_name_sync(input);

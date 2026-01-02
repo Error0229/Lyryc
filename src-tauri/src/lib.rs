@@ -8,6 +8,7 @@ mod cleaning;
 mod commands;
 mod furigana;
 mod lyrics;
+mod lyrics_cache;
 mod translation;
 mod types;
 mod websocket;
@@ -16,8 +17,8 @@ mod window_management;
 
 // Import types and functions from modules
 use commands::{
-    clean_artist_and_track_names_command, clean_track_name_command, clean_track_name_with_config,
-    get_current_track, get_supported_languages, set_current_track, translate_lyrics_command,
+    clean_track_name_command, clean_track_name_with_config, get_current_track,
+    get_supported_languages, set_current_track, translate_lyrics_command,
 };
 use furigana::generate_furigana_command;
 use lyrics::{fetch_lrclib_raw, fetch_lyrics};
@@ -159,7 +160,6 @@ pub fn run() {
             set_current_track,
             clean_track_name_command,
             clean_track_name_with_config,
-            clean_artist_and_track_names_command,
             translate_lyrics_command,
             get_supported_languages,
             fetch_lyrics,

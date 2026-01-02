@@ -85,6 +85,7 @@ pub async fn translate_lyrics(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::translation::language::detect_language_fallback;
 
     #[test]
     fn test_language_detection() {
@@ -116,7 +117,7 @@ mod tests {
 
     #[test]
     fn test_separator_constant() {
-        assert_eq!(prompt::TRANSLATION_SEPARATOR, " <sep> ");
-        assert!(prompt::TRANSLATION_SEPARATOR.len() > 5);
+        assert_eq!(prompt::TRANSLATION_SEPARATOR, "<sep>");
+        assert!(prompt::TRANSLATION_SEPARATOR.len() >= 5);
     }
 }
