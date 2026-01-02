@@ -2,7 +2,7 @@
 
 use super::language::get_language_name;
 
-/// The separator used to pair original and translated lines
+/// The separator used to pair original and translated lines (parser supports legacy format).
 pub const TRANSLATION_SEPARATOR: &str = "<sep>";
 
 /// System prompt for translation LLMs

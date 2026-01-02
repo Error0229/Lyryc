@@ -31,6 +31,23 @@ const GITHUB_MODELS: &[&str] = &[
 
 const RATE_LIMIT_BLACKLIST_DURATION: u64 = 86400; // 24 hours
 
+fn normalize_model_id(model_id: &str) -> String {
+    let trimmed = model_id.trim();
+    if let Some((provider, rest)) = trimmed.split_once('/') {
+        let provider_lower = provider.to_lowercase();
+        let normalized_provider = match provider_lower.as_str() {
+            "mistral ai" | "mistralai" => "mistral-ai",
+            _ => provider,
+        };
+        return format!("{}/{}", normalized_provider, rest);
+    }
+    trimmed.to_string()
+}
+
+fn is_rate_limited_error(error: &str) -> bool {
+    error.starts_with("HTTP 429")
+}
+
 /// Cleans track name using GitHub AI models when token is available
 pub async fn clean_track_name_github(track_name: &str) -> Result<String, String> {
     clean_track_name_github_with_key(track_name, None).await
@@ -56,11 +73,13 @@ pub async fn clean_track_name_github_with_key(
         return Err("GitHub token is empty".to_string());
     }
 
-    let available_models: Vec<&str> = GITHUB_MODELS
-        .iter()
-        .filter(|model| !is_model_blacklisted(model))
-        .copied()
-        .collect();
+    let mut available_models = Vec::new();
+    for &model in GITHUB_MODELS.iter() {
+        let normalized = normalize_model_id(model);
+        if !available_models.contains(&normalized) && !is_model_blacklisted(&normalized) {
+            available_models.push(normalized);
+        }
+    }
 
     if available_models.is_empty() {
         debug!("All GitHub AI models are currently rate-limited, falling back to regex cleaning");
@@ -83,7 +102,7 @@ pub async fn clean_track_name_github_with_key(
                 return Ok(cleaned);
             }
             Err(e) => {
-                if e.contains("429") {
+                if is_rate_limited_error(&e) {
                     blacklist_model(model_id, RATE_LIMIT_BLACKLIST_DURATION);
                     warn!(
                         "Model {} rate limited for track cleaning, blacklisted for 24 hours",
@@ -186,26 +205,34 @@ pub async fn clean_artist_and_track_names_github(
             .to_string()
     })?;
 
-    let available_models: Vec<&str> = GITHUB_MODELS
-        .iter()
-        .filter(|model| !is_model_blacklisted(model))
-        .copied()
-        .collect();
+    let mut available_models = Vec::new();
+    for &model in GITHUB_MODELS.iter() {
+        let normalized = normalize_model_id(model);
+        if !available_models.contains(&normalized) && !is_model_blacklisted(&normalized) {
+            available_models.push(normalized);
+        }
+    }
 
     if available_models.is_empty() {
         return Err("All GitHub AI models are currently rate-limited".to_string());
     }
 
     for model_id in available_models {
-        match try_llm_artist_track_cleaning(artist_name, track_name, model_id, &github_token).await
+        match try_llm_artist_track_cleaning(
+            artist_name,
+            track_name,
+            model_id.as_str(),
+            &github_token,
+        )
+        .await
         {
             Ok(result) => {
                 info!("Artist/track cleaning successful with {}", model_id);
                 return Ok(result);
             }
             Err(e) => {
-                if e.contains("429") {
-                    blacklist_model(model_id, RATE_LIMIT_BLACKLIST_DURATION);
+                if is_rate_limited_error(&e) {
+                    blacklist_model(&model_id, RATE_LIMIT_BLACKLIST_DURATION);
                     warn!("Model {} rate limited, blacklisted for 24 hours", model_id);
                 }
                 debug!("Cleaning failed with {}: {}", model_id, e);
