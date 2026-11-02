@@ -1,0 +1,112 @@
+/** Overlay data hooks: backend events, translation, furigana, window height. */
+import { useEffect, useMemo, type RefObject } from "react";
+import { backend } from "../services/ipc/backend";
+import { textSignature, translationKey } from "../lib/lyrics";
+import { hasKanji, isJapaneseSong } from "../lib/japanese";
+import { useSession } from "../state/session";
+import { useSettings } from "../state/settings";
+import { applyLyrics, reportLlmError, setTrack } from "./actions";
+import { playhead } from "./playhead";
+
+const log = (what: string) => (e: unknown) => console.warn(`[overlay] ${what}:`, e);
+
+export function useBackendEvents() {
+  useEffect(() => {
+    backend.initExtension().catch(log("init_extension_connection"));
+    backend
+      .currentTrack()
+      .then((t) => t && setTrack(t))
+      .catch(log("get_current_track"));
+
+    return backend.subscribe({
+      track: setTrack,
+      time: (s) => {
+        playhead.sample(s.currentTime, s.isPlaying);
+        if (useSession.getState().playing !== s.isPlaying) useSession.setState({ playing: s.isPlaying });
+      },
+      playing: (p) => {
+        playhead.setPlaying(p);
+        useSession.setState({ playing: p });
+      },
+      clickThrough: (on) => useSession.setState({ clickThrough: on }),
+      lyrics: ({ track, lines }) => applyLyrics(track, lines),
+    });
+  }, []);
+}
+
+/** Translate when the lyric *text* or the translation prefs change; retiming alone does not. */
+export function useTranslations() {
+  const lyrics = useSession((s) => s.lyrics);
+  const p = useSettings((s) => s.translation);
+  const signature = useMemo(() => textSignature(lyrics), [lyrics]);
+
+  useEffect(() => {
+    const lines = useSession.getState().lyrics;
+    if (!p.enabled || lines.length === 0) return;
+    let live = true;
+    backend
+      .translate(lines, p)
+      .then((list) => {
+        if (!live) return;
+        const map: Record<string, string> = {};
+        for (const l of list) map[translationKey(l.original)] = l.translated;
+        useSession.setState({ translations: map });
+      })
+      .catch((e) => live && reportLlmError(e, "Translation"));
+    return () => {
+      live = false;
+    };
+    // Prefs fields are listed individually so display-only changes don't retranslate.
+  }, [signature, p.enabled, p.sourceLanguage, p.targetLanguage, p.style, p.customPrompt, p.preserveRhyme, p.preserveMeaning, p.maintainStructure]);
+}
+
+const pending = new Set<string>();
+
+function ensureFurigana(text: string) {
+  if (!hasKanji(text) || pending.has(text) || useSession.getState().furigana[text]) return;
+  pending.add(text);
+  backend
+    .furigana(text)
+    .catch(() => [{ text }])
+    .then((spans) => useSession.setState((s) => ({ furigana: { ...s.furigana, [text]: spans } })))
+    .finally(() => pending.delete(text));
+}
+
+/** Fetch readings for the active line and the next two, so they are ready in time. */
+export function useFurigana(index: number) {
+  const enabled = useSettings((s) => s.furigana.enabled);
+  const lyrics = useSession((s) => s.lyrics);
+  const japanese = useMemo(() => isJapaneseSong(lyrics), [lyrics]);
+
+  useEffect(() => {
+    if (!enabled || !japanese) return;
+    lyrics.slice(Math.max(index, 0), Math.max(index, 0) + 3).forEach((l) => ensureFurigana(l.text));
+  }, [enabled, japanese, lyrics, index]);
+
+  return enabled && japanese;
+}
+
+/** Keep the native window as tall as the content (backend adds its own padding). */
+export function useFitWindow(ref: RefObject<HTMLElement | null>, hasTranslation: boolean, hasFurigana: boolean) {
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let last = 0;
+    let timer = 0;
+    const send = () => {
+      const h = Math.ceil(el.getBoundingClientRect().height);
+      if (Math.abs(h - last) < 2) return;
+      last = h;
+      backend.fitHeight(h, hasTranslation, hasFurigana).catch(log("adjust_window_height"));
+    };
+    const ro = new ResizeObserver(() => {
+      clearTimeout(timer);
+      timer = window.setTimeout(send, 150);
+    });
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      clearTimeout(timer);
+    };
+  }, [ref, hasTranslation, hasFurigana]);
+}

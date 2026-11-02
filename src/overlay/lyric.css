@@ -1,0 +1,115 @@
+/*
+ * Lyric rendering. The only per-frame input is --t (seconds, playback time
+ * plus offset) on .lyric-stage. Each token carries its own timing:
+ *   --ws  sweep start   --wl  sweep length   --wd  time it settles as "sung"
+ * Progress is pure CSS, and every animated property is a transform or an
+ * opacity, so a frame costs a style recalc and a composite, never a layout.
+ */
+
+.lyric-stage {
+  --t: 0;
+  position: relative;
+  font-family: var(--lyric-font);
+  font-size: var(--lyric-size);
+  font-weight: var(--lyric-weight);
+  line-height: var(--lyric-lh);
+  letter-spacing: var(--lyric-ls);
+  text-align: var(--lyric-align);
+}
+
+.lyric-line {
+  display: inline-block;
+  white-space: nowrap;
+  transform: scale(var(--fit, 1));
+  transform-origin: var(--lyric-origin, center) center;
+}
+
+.tok {
+  --p: clamp(0, (var(--t) - var(--ws)) / var(--wl), 1);
+  position: relative;
+  display: inline-block;
+  white-space: pre;
+}
+
+.tok-base {
+  color: var(--lyric-upcoming);
+  text-shadow: var(--lyric-shadow);
+}
+
+.tok-fill,
+.tok-sung {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  text-shadow: var(--lyric-glow);
+}
+
+/* Counter-translated pair: the window slides right, the text stays put. */
+.tok-fill {
+  overflow: hidden;
+  color: var(--lyric-active);
+  transform: translateX(calc((var(--p) - 1) * 100%));
+}
+.tok-fill-in {
+  display: block;
+  transform: translateX(calc((1 - var(--p)) * 100%));
+}
+
+.tok-sung {
+  color: var(--lyric-sung);
+  opacity: clamp(0, (var(--t) - var(--wd)) * 4, 1);
+}
+
+/* Plain mode: one layer, one colour. */
+.lyric-line[data-plain] .tok-base {
+  color: var(--lyric-text);
+}
+
+/* Furigana. */
+.tok ruby {
+  ruby-position: over;
+}
+.lyric-stage[data-ruby="under"] .tok ruby {
+  ruby-position: under;
+}
+.tok rt {
+  font-size: var(--rt-scale);
+  font-weight: 500;
+  letter-spacing: 0;
+  line-height: 1.1;
+  opacity: var(--rt-opacity);
+}
+.tok-base rt {
+  color: var(--rt-color);
+}
+
+.lyric-translation {
+  display: block;
+  font-size: calc(var(--tr-scale) * 1em);
+  font-weight: 400;
+  line-height: 1.3;
+  color: var(--tr-color);
+  opacity: var(--tr-opacity);
+  text-shadow: var(--lyric-shadow);
+  white-space: nowrap;
+}
+
+/*
+ * After a timing swap the fill eases to the new position instead of jumping.
+ * Transitions retarget every frame, so this only adds a brief lag.
+ */
+.lyric-stage[data-retiming] :is(.tok-fill, .tok-fill-in, .tok-sung) {
+  transition:
+    transform var(--dur-retime) var(--ease-out),
+    opacity var(--dur-retime) var(--ease-out);
+}
+
+/* Reduced motion: words switch on whole instead of sweeping. */
+@media (prefers-reduced-motion: reduce) {
+  .tok {
+    --p: clamp(0, (var(--t) - var(--ws)) * 1000, 1);
+  }
+  .tok-sung {
+    opacity: clamp(0, (var(--t) - var(--wd)) * 1000, 1);
+  }
+}
