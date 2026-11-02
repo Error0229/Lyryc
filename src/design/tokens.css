@@ -1,0 +1,94 @@
+/*
+ * Lyryc design tokens. Values that switch with the theme (colour, elevation)
+ * plus z-layers and durations live here; static scales (type, radius, easing)
+ * live in index.css @theme. index.css maps the --c-* colours into
+ * Tailwind. Change a value here and every surface follows.
+ * See ./README.md for the rationale.
+ */
+
+:root {
+  /* ---- Colour: light (settings window) -------------------------------- */
+  --c-bg: oklch(0.985 0.002 260);
+  --c-surface: oklch(1 0 0);
+  --c-surface-muted: oklch(0.967 0.003 260);
+  --c-surface-sunken: oklch(0.945 0.004 260);
+  --c-line: oklch(0.91 0.004 260);
+  --c-line-strong: oklch(0.84 0.006 260);
+  --c-fg: oklch(0.22 0.01 260);
+  --c-fg-muted: oklch(0.46 0.012 260);
+  --c-fg-subtle: oklch(0.6 0.01 260);
+  --c-accent: oklch(0.55 0.16 262);
+  --c-accent-hover: oklch(0.5 0.16 262);
+  --c-accent-fg: oklch(0.99 0 0);
+  --c-accent-soft: oklch(0.95 0.03 262);
+  --c-success: oklch(0.58 0.13 155);
+  --c-success-soft: oklch(0.95 0.04 155);
+  --c-danger: oklch(0.56 0.19 25);
+  --c-danger-soft: oklch(0.95 0.03 25);
+  --c-warning: oklch(0.7 0.14 70);
+  --c-focus: oklch(0.55 0.16 262 / 0.45);
+  --c-scrim: oklch(0.2 0.01 260 / 0.32);
+
+  /* ---- Colour: overlay chrome (always dark glass, independent of theme) */
+  --c-glass: oklch(0.18 0.01 260 / 0.72);
+  --c-glass-line: oklch(1 0 0 / 0.1);
+  --c-glass-fg: oklch(0.97 0 0);
+  --c-glass-fg-muted: oklch(0.97 0 0 / 0.62);
+  --c-glass-hover: oklch(1 0 0 / 0.1);
+
+  /* ---- Elevation ------------------------------------------------------ */
+  --elev-0: none;
+  --elev-1: 0 1px 2px oklch(0.2 0.01 260 / 0.06), 0 0 0 1px oklch(0.2 0.01 260 / 0.04);
+  --elev-2: 0 4px 12px -2px oklch(0.2 0.01 260 / 0.1), 0 0 0 1px oklch(0.2 0.01 260 / 0.05);
+  --elev-3: 0 16px 40px -8px oklch(0.2 0.01 260 / 0.22), 0 0 0 1px oklch(0.2 0.01 260 / 0.06);
+
+  /* ---- Z layers ------------------------------------------------------- */
+  --z-base: 0;
+  --z-raised: 10;
+  --z-controls: 20;
+  --z-scrim: 40;
+  --z-dialog: 50;
+  --z-popover: 60;
+  --z-toast: 70;
+  --z-tooltip: 80;
+
+  /* ---- Motion (mirrored in motion.ts for JS-driven animation) --------- */
+  --dur-instant: 80ms;
+  --dur-fast: 140ms;
+  --dur-base: 200ms;
+  --dur-slow: 320ms;
+  --dur-line: 420ms;
+  /* how long the word fill eases into new timing after lyrics are swapped */
+  --dur-retime: 360ms;
+
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  --c-bg: oklch(0.17 0.006 260);
+  --c-surface: oklch(0.205 0.007 260);
+  --c-surface-muted: oklch(0.235 0.008 260);
+  --c-surface-sunken: oklch(0.15 0.006 260);
+  --c-line: oklch(0.29 0.008 260);
+  --c-line-strong: oklch(0.36 0.01 260);
+  --c-fg: oklch(0.95 0.003 260);
+  --c-fg-muted: oklch(0.72 0.008 260);
+  --c-fg-subtle: oklch(0.58 0.01 260);
+  --c-accent: oklch(0.68 0.14 262);
+  --c-accent-hover: oklch(0.74 0.13 262);
+  --c-accent-fg: oklch(0.16 0.02 262);
+  --c-accent-soft: oklch(0.3 0.06 262);
+  --c-success: oklch(0.72 0.14 155);
+  --c-success-soft: oklch(0.3 0.05 155);
+  --c-danger: oklch(0.7 0.16 25);
+  --c-danger-soft: oklch(0.3 0.06 25);
+  --c-warning: oklch(0.8 0.13 75);
+  --c-focus: oklch(0.68 0.14 262 / 0.5);
+  --c-scrim: oklch(0 0 0 / 0.5);
+
+  --elev-1: 0 1px 2px oklch(0 0 0 / 0.3), 0 0 0 1px oklch(1 0 0 / 0.04);
+  --elev-2: 0 6px 16px -4px oklch(0 0 0 / 0.45), 0 0 0 1px oklch(1 0 0 / 0.06);
+  --elev-3: 0 20px 48px -8px oklch(0 0 0 / 0.6), 0 0 0 1px oklch(1 0 0 / 0.08);
+
+  color-scheme: dark;
+}
