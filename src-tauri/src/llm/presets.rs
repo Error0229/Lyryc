@@ -37,6 +37,11 @@ impl Preset {
     pub fn default_model(&self) -> Option<&'static str> {
         self.suggested_models.first().copied()
     }
+
+    /// The service behind this preset is gone; never route to it automatically.
+    pub fn retired(&self) -> bool {
+        self.id == GITHUB
+    }
 }
 
 pub const CUSTOM: &str = "custom";

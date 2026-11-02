@@ -130,7 +130,7 @@ pub fn env_keys() -> Vec<AdhocKey> {
         github_api_key: std::env::var("GITHUB_TOKEN").ok(),
         gemini_api_key: std::env::var("GEMINI_API_KEY").ok(),
     }
-    .candidates(GITHUB)
+    .candidates(GEMINI)
 }
 
 fn clean_key(key: &str) -> Option<String> {
@@ -370,7 +370,7 @@ impl Store {
     pub fn import_legacy(&mut self, keys: &LegacyKeys) -> Result<LlmSettings, String> {
         let mut changed = false;
         let mut first: Option<Route> = None;
-        for (preset_id, key) in keys.candidates(GITHUB) {
+        for (preset_id, key) in keys.candidates(GEMINI) {
             let Some(preset) = presets::find(preset_id) else {
                 continue;
             };
@@ -389,7 +389,7 @@ impl Store {
                     id
                 }
             };
-            if first.is_none() {
+            if first.is_none() && !preset.retired() {
                 first = preset.default_model().map(|model| Route {
                     provider_id: id,
                     model: model.to_string(),
@@ -685,14 +685,14 @@ mod tests {
         };
         let first = s.import_legacy(&keys).unwrap();
         assert_eq!(first.providers.len(), 2);
-        let gh = first
+        let gm = first
             .providers
             .iter()
-            .find(|p| p.preset_id == GITHUB)
+            .find(|p| p.preset_id == GEMINI)
             .unwrap();
         let expected = route(
-            &gh.id,
-            presets::find(GITHUB).unwrap().default_model().unwrap(),
+            &gm.id,
+            presets::find(GEMINI).unwrap().default_model().unwrap(),
         );
         assert_eq!(first.routes.translation, expected);
         assert_eq!(first.routes.cleaning, expected);
@@ -711,6 +711,20 @@ mod tests {
         assert_eq!(third.providers.len(), 3);
         assert_eq!(third.routes, first.routes);
         let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn import_never_routes_to_retired_preset() {
+        let mut s = Store::in_memory();
+        let v = s
+            .import_legacy(&LegacyKeys {
+                github_api_key: Some("ghp_legacy_token".into()),
+                gemini_api_key: None,
+            })
+            .unwrap();
+        assert_eq!(v.providers.len(), 1);
+        assert_eq!(v.routes.translation, None);
+        assert_eq!(v.routes.cleaning, None);
     }
 
     #[test]
