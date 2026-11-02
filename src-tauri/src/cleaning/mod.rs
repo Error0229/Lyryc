@@ -1,89 +1,84 @@
 //! Track name cleaning module
 //!
 //! This module provides comprehensive track name cleaning functionality with:
-//! - Multiple LLM provider support (GitHub AI, Google Gemini)
+//! - Any BYOK provider via `crate::llm` (the `cleaning` route, else `translation`)
 //! - Regex-based fallback cleaning
 //! - Caching for duplicate requests
 //! - Combined artist and track name cleaning
 
 mod cache;
+mod parse;
 mod prompt;
-pub mod providers;
 mod regex;
 mod types;
 
-use log::debug;
+use log::{debug, info, warn};
 
 // Re-export public types and functions
 pub use regex::{clean_track_name_sync, remove_artist_from_track};
 pub use types::ArtistTrackCleaningResult;
 
+use crate::llm::{self, store::AdhocKey, ChatRequest, Target, Task, NOT_CONFIGURED};
 use cache::get_track_cleaning_cache;
-use providers::{
-    clean_artist_and_track_names_gemini, clean_artist_and_track_names_github,
-    clean_track_name_gemini, clean_track_name_github,
+use parse::{parse_artist_track_cleaning_response, parse_track_cleaning_response};
+use prompt::{
+    build_artist_track_cleaning_prompt, build_track_cleaning_prompt,
+    ARTIST_TRACK_CLEANING_SYSTEM_PROMPT, TRACK_CLEANING_SYSTEM_PROMPT,
 };
 
-/// Main track cleaning function - tries GitHub AI first, then Gemini, then regex fallback
+/// Main track cleaning function - routed LLM first, regex fallback
 pub async fn clean_track_name(track_name: &str) -> String {
+    clean_track_name_with_keys(track_name, &[]).await
+}
+
+/// Track cleaning that may use legacy keys from the current call when no
+/// route is configured.
+pub async fn clean_track_name_with_keys(track_name: &str, call_keys: &[AdhocKey]) -> String {
     // Check cache first to avoid duplicate operations
     let cache = get_track_cleaning_cache();
-    {
-        let cache_read = cache.read().await;
-        if let Some(cached_result) = cache_read.get(track_name) {
-            debug!("Using cached cleaning result for: {}", track_name);
-            return cached_result.clone();
-        }
+    if let Some(cached_result) = cache.read().await.get(track_name) {
+        debug!("Using cached cleaning result for: {}", track_name);
+        return cached_result.clone();
     }
 
-    dotenv::dotenv().ok();
-
-    let cleaned_result = {
-        if let Ok(github_token) = std::env::var("GITHUB_TOKEN") {
-            if !github_token.trim().is_empty() {
-                debug!("GitHub token available, trying GitHub AI models");
-                match clean_track_name_github(track_name).await {
-                    Ok(cleaned) => cleaned,
-                    Err(e) => {
-                        debug!("GitHub AI cleaning failed, trying Gemini fallback: {}", e);
-                        match clean_track_name_gemini(track_name).await {
-                            Ok(cleaned) => cleaned,
-                            Err(e) => {
-                                debug!("Gemini cleaning also failed, using regex fallback: {}", e);
-                                clean_track_name_sync(track_name)
-                            }
-                        }
-                    }
-                }
-            } else {
-                debug!("GitHub token is empty, skipping GitHub AI models");
-                match clean_track_name_gemini(track_name).await {
-                    Ok(cleaned) => cleaned,
-                    Err(e) => {
-                        debug!("Gemini cleaning also failed, using regex fallback: {}", e);
-                        clean_track_name_sync(track_name)
-                    }
-                }
-            }
-        } else {
-            debug!("No GitHub token found, skipping GitHub AI models");
-            match clean_track_name_gemini(track_name).await {
-                Ok(cleaned) => cleaned,
-                Err(e) => {
-                    debug!("Gemini cleaning also failed, using regex fallback: {}", e);
-                    clean_track_name_sync(track_name)
-                }
-            }
-        }
+    let Some(target) = llm::resolve(Task::Cleaning, call_keys) else {
+        debug!("No LLM configured for cleaning, using regex");
+        return clean_track_name_sync(track_name);
     };
 
-    // Cache the result for future calls
-    {
-        let mut cache_write = cache.write().await;
-        cache_write.insert(track_name.to_string(), cleaned_result.clone());
+    match llm_clean_track(&target, track_name).await {
+        Ok(cleaned) => {
+            info!("LLM cleaning: '{}' -> '{}'", track_name, cleaned);
+            // Only LLM results are cached, so configuring a provider later
+            // is not shadowed by stale regex results.
+            cache
+                .write()
+                .await
+                .insert(track_name.to_string(), cleaned.clone());
+            cleaned
+        }
+        Err(e) => {
+            warn!("LLM cleaning failed, using regex: {}", e);
+            clean_track_name_sync(track_name)
+        }
     }
+}
 
-    cleaned_result
+async fn llm_clean_track(target: &Target, track_name: &str) -> Result<String, String> {
+    let user = build_track_cleaning_prompt(track_name);
+    let reply = llm::complete(
+        target,
+        &ChatRequest {
+            system: Some(TRACK_CLEANING_SYSTEM_PROMPT),
+            user: &user,
+            temperature: Some(0.1),
+            max_tokens: 2048,
+            json: true,
+        },
+    )
+    .await?;
+    parse_track_cleaning_response(&reply)
+        .map_err(|e| format!("{} ({}): {}", target.label, target.model, e))
 }
 
 /// Clean both artist and track names using LLM
@@ -91,14 +86,21 @@ pub async fn clean_artist_and_track_names(
     artist_name: &str,
     track_name: &str,
 ) -> Result<ArtistTrackCleaningResult, String> {
-    // Try GitHub AI first, fallback to Gemini
-    match clean_artist_and_track_names_github(artist_name, track_name).await {
-        Ok(result) => Ok(result),
-        Err(github_error) => {
-            log::warn!("GitHub cleaning failed, trying Gemini: {}", github_error);
-            clean_artist_and_track_names_gemini(artist_name, track_name).await
-        }
-    }
+    let target = llm::resolve(Task::Cleaning, &[])
+        .ok_or_else(|| format!("{NOT_CONFIGURED} no provider is set up for cleaning"))?;
+    let user = build_artist_track_cleaning_prompt(artist_name, track_name);
+    let reply = llm::complete(
+        &target,
+        &ChatRequest {
+            system: Some(ARTIST_TRACK_CLEANING_SYSTEM_PROMPT),
+            user: &user,
+            temperature: Some(0.1),
+            max_tokens: 2048,
+            json: true,
+        },
+    )
+    .await?;
+    parse_artist_track_cleaning_response(&reply)
 }
 
 #[cfg(test)]
@@ -108,7 +110,10 @@ mod tests {
     #[test]
     fn validates_cleaning_against_csv_fixture() {
         let base_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let path = base_dir.join("tests").join("fixtures").join("LyricCleanData.csv");
+        let path = base_dir
+            .join("tests")
+            .join("fixtures")
+            .join("LyricCleanData.csv");
 
         let mut rdr = csv::ReaderBuilder::new()
             .has_headers(true)

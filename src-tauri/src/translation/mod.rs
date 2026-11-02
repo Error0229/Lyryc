@@ -1,33 +1,31 @@
 //! Translation module for lyrics translation
 //!
 //! This module provides comprehensive lyrics translation functionality with:
-//! - GitHub AI as primary provider (tier-optimized model selection)
-//! - Google Gemini as deprecated fallback (limited free tier)
+//! - Any BYOK provider via `crate::llm` (the caller resolves the route)
 //! - Intelligent language detection
 //! - Line alignment and mismatch resolution
 //! - Progressive retry strategies
 
 mod alignment;
-mod blacklist;
 mod language;
 mod parser;
 mod prompt;
-mod providers;
 mod strategy;
 mod types;
 
 use log::{error, info};
 
+use crate::llm::Target;
 use types::TranslationStrategy;
 
 // Re-export public types and functions
-pub use blacklist::{blacklist_model, is_model_blacklisted};
 pub use types::{LyricLine, TranslationConfig, TranslationResult};
 
 /// Main translation function with enhanced mismatch resolution and fallback support
 pub async fn translate_lyrics(
     lyrics: Vec<LyricLine>,
     config: TranslationConfig,
+    target: &Target,
 ) -> Result<TranslationResult, String> {
     let start_time = std::time::Instant::now();
 
@@ -43,10 +41,12 @@ pub async fn translate_lyrics(
     }
 
     info!(
-        "Starting enhanced translation for {} lines from {} to {}",
+        "Starting enhanced translation for {} lines from {} to {} via {} ({})",
         lyrics.len(),
         config.source_language,
-        config.target_language
+        config.target_language,
+        target.label,
+        target.model
     );
 
     // Define progressive translation strategies
@@ -56,7 +56,7 @@ pub async fn translate_lyrics(
         TranslationStrategy::LineByLine,
     ];
 
-    let result = strategy::translate_with_strategies(&lyrics, &config, &strategies).await;
+    let result = strategy::translate_with_strategies(&lyrics, &config, target, &strategies).await;
 
     match result {
         Ok(mut translation_result) => {
@@ -113,6 +113,30 @@ mod tests {
         assert_eq!(config.target_language, "en");
         assert_eq!(config.style, "natural");
         assert!(config.preserve_meaning);
+    }
+
+    #[test]
+    fn legacy_config_still_deserializes() {
+        let legacy = r#"{
+            "source_language": "auto", "target_language": "zh-tw", "style": "natural",
+            "custom_prompt": null, "preserve_rhyme": true, "preserve_meaning": true,
+            "maintain_structure": true, "provider": "gemini",
+            "github_api_key": "ghp_x", "gemini_api_key": "AIza_y"
+        }"#;
+        let config: TranslationConfig = serde_json::from_str(legacy).unwrap();
+        assert_eq!(config.provider, "gemini");
+        let keys = config.legacy_keys();
+        assert_eq!(keys[0], ("gemini", "AIza_y".to_string()));
+        assert_eq!(keys[1], ("github", "ghp_x".to_string()));
+
+        // A migrated frontend may drop the legacy fields entirely.
+        let modern = r#"{
+            "source_language": "ja", "target_language": "en", "style": "literal",
+            "preserve_rhyme": false, "preserve_meaning": true, "maintain_structure": true
+        }"#;
+        let config: TranslationConfig = serde_json::from_str(modern).unwrap();
+        assert!(config.legacy_keys().is_empty());
+        assert!(config.custom_prompt.is_none());
     }
 
     #[test]
