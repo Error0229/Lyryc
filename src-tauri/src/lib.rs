@@ -7,6 +7,7 @@ use tokio::sync::Mutex;
 mod cleaning;
 mod commands;
 mod furigana;
+mod llm;
 mod lyrics;
 mod lyrics_cache;
 mod translation;
@@ -21,6 +22,10 @@ use commands::{
     get_supported_languages, set_current_track, translate_lyrics_command,
 };
 use furigana::generate_furigana_command;
+use llm::commands::{
+    llm_get_settings, llm_import_legacy_keys, llm_list_models, llm_list_presets, llm_remove_provider,
+    llm_set_route, llm_test, llm_upsert_provider,
+};
 use lyrics::{fetch_lrclib_raw, fetch_lyrics};
 use types::{ClickThroughState, TrackState, WebSocketState};
 use websocket_commands::{
@@ -49,6 +54,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            app.manage(llm::store::init(app.path().app_config_dir().ok()));
+
             #[cfg(desktop)]
             {
                 use tauri_plugin_global_shortcut::{
@@ -179,7 +186,15 @@ pub fn run() {
             toggle_window_visibility,
             quit_app,
             enable_drag_mode,
-            generate_furigana_command
+            generate_furigana_command,
+            llm_list_presets,
+            llm_get_settings,
+            llm_upsert_provider,
+            llm_remove_provider,
+            llm_set_route,
+            llm_list_models,
+            llm_test,
+            llm_import_legacy_keys
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
