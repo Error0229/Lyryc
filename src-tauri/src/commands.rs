@@ -1,7 +1,5 @@
-use crate::cleaning::clean_track_name;
-use crate::cleaning::providers::{
-    clean_track_name_gemini_with_key, clean_track_name_github_with_key,
-};
+use crate::cleaning::{clean_track_name, clean_track_name_with_keys};
+use crate::llm::{self, Task, NOT_CONFIGURED};
 use crate::translation::{translate_lyrics, LyricLine, TranslationConfig, TranslationResult};
 use crate::types::{TrackInfo, TrackState};
 use tauri::State;
@@ -27,54 +25,15 @@ pub async fn clean_track_name_command(track_name: String) -> Result<String, Stri
     Ok(clean_track_name(&track_name).await)
 }
 
-/// Enhanced track cleaning command that can use translation API keys
+/// Track cleaning with an optional legacy config. The config's keys are only
+/// used when neither the `cleaning` nor the `translation` route is set.
 #[tauri::command]
 pub async fn clean_track_name_with_config(
     track_name: String,
     config: Option<TranslationConfig>,
 ) -> Result<String, String> {
-    if let Some(config) = config {
-        // Try GitHub AI first with provided API key
-        if let Some(github_key) = &config.github_api_key {
-            if !github_key.trim().is_empty() {
-                log::debug!("Using provided GitHub API key for track cleaning");
-                match clean_track_name_github_with_key(&track_name, Some(github_key.clone())).await
-                {
-                    Ok(cleaned) => return Ok(cleaned),
-                    Err(e) => {
-                        log::debug!("GitHub track cleaning with provided key failed: {}", e);
-                        // Continue to Gemini fallback
-                    }
-                }
-            } else {
-                log::debug!("GitHub API key provided but empty, skipping GitHub AI");
-            }
-        } else {
-            log::debug!("No GitHub API key provided in config");
-        }
-
-        // Try Gemini fallback with provided API key
-        if let Some(gemini_key) = &config.gemini_api_key {
-            if !gemini_key.trim().is_empty() {
-                log::debug!("Using provided Gemini API key for track cleaning");
-                match clean_track_name_gemini_with_key(&track_name, Some(gemini_key.clone())).await
-                {
-                    Ok(cleaned) => return Ok(cleaned),
-                    Err(e) => {
-                        log::debug!("Gemini track cleaning with provided key failed: {}", e);
-                        // Continue to standard fallback
-                    }
-                }
-            } else {
-                log::debug!("Gemini API key provided but empty, skipping Gemini AI");
-            }
-        } else {
-            log::debug!("No Gemini API key provided in config");
-        }
-    }
-
-    // Fallback to standard flow (check env vars then regex)
-    Ok(clean_track_name(&track_name).await)
+    let call_keys = config.map(|c| c.legacy_keys()).unwrap_or_default();
+    Ok(clean_track_name_with_keys(&track_name, &call_keys).await)
 }
 
 #[tauri::command]
@@ -82,7 +41,10 @@ pub async fn translate_lyrics_command(
     lyrics: Vec<LyricLine>,
     config: TranslationConfig,
 ) -> Result<TranslationResult, String> {
-    translate_lyrics(lyrics, config).await
+    let target = llm::resolve(Task::Translation, &config.legacy_keys()).ok_or_else(|| {
+        format!("{NOT_CONFIGURED} no provider is set up for translation. Add one in Settings.")
+    })?;
+    translate_lyrics(lyrics, config, &target).await
 }
 
 #[tauri::command]

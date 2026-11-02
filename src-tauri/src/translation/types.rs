@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::llm::store::{AdhocKey, LegacyKeys};
+
 /// Line count mismatch types for alignment resolution
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -33,7 +35,11 @@ pub enum TranslationStrategy {
     AlignmentFix,
 }
 
-/// Configuration for translation request
+/// Configuration for translation request.
+///
+/// `provider` and the two key fields are legacy: the backend settings store
+/// picks the provider now. They are still accepted, and a key that arrives here
+/// is used for a task that has no route yet, so an un-migrated frontend works.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TranslationConfig {
     pub source_language: String,
@@ -43,7 +49,8 @@ pub struct TranslationConfig {
     pub preserve_rhyme: bool,
     pub preserve_meaning: bool,
     pub maintain_structure: bool,
-    pub provider: String, // "github" or "gemini"
+    #[serde(default)]
+    pub provider: String, // legacy: "github" or "gemini"
     pub github_api_key: Option<String>,
     pub gemini_api_key: Option<String>,
 }
@@ -62,6 +69,17 @@ impl Default for TranslationConfig {
             github_api_key: None,
             gemini_api_key: None,
         }
+    }
+}
+
+impl TranslationConfig {
+    /// Legacy keys from this call, the selected legacy provider first.
+    pub fn legacy_keys(&self) -> Vec<AdhocKey> {
+        LegacyKeys {
+            github_api_key: self.github_api_key.clone(),
+            gemini_api_key: self.gemini_api_key.clone(),
+        }
+        .candidates(&self.provider)
     }
 }
 
