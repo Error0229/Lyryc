@@ -2,6 +2,7 @@ use crate::cleaning::{
     clean_artist_and_track_names, clean_track_name, clean_track_name_sync, remove_artist_from_track,
 };
 use crate::lyrics_cache::{cache_lyrics, cache_no_lyrics, get_cached_lyrics, CacheResult};
+use crate::timing;
 use crate::types::LyricLine;
 use anyhow::{anyhow, Result};
 use log::{debug, info, warn};
@@ -62,6 +63,17 @@ struct LyricsFetchResult {
     candidate: LyricsCandidate,
     lyrics: Vec<LyricLine>,
     score: f32,
+    /// Set when `lyrics` are estimated from plainLyrics, so the caller can look
+    /// for real timing and must not cache the estimate.
+    plain_source: Option<PlainSource>,
+}
+
+/// The LRCLIB entry an estimated result came from.
+#[derive(Clone, Debug)]
+struct PlainSource {
+    track: String,
+    artist: String,
+    duration: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -355,6 +367,7 @@ async fn fetch_lyrics_from_url(
                 candidate,
                 lyrics: Vec::new(),
                 score: 0.0,
+                plain_source: None,
             });
         }
 
@@ -387,6 +400,7 @@ async fn fetch_lyrics_from_url(
             }
         }
 
+        let mut plain_source = None;
         let (lyrics, match_summary) = match best_index {
             Some(index) => {
                 let data = &json[index];
@@ -405,7 +419,13 @@ async fn fetch_lyrics_from_url(
                         "Found plain lyrics for {}, converting to unsynced format",
                         candidate.description
                     );
-                    convert_plain_lyrics_to_lines(plain_lyrics)
+                    let duration = data["duration"].as_f64().unwrap_or(0.0);
+                    plain_source = Some(PlainSource {
+                        track: track.to_string(),
+                        artist: artist.to_string(),
+                        duration,
+                    });
+                    timing::estimate_plain(plain_lyrics, duration)
                 } else {
                     Vec::new()
                 };
@@ -424,6 +444,7 @@ async fn fetch_lyrics_from_url(
             candidate,
             lyrics,
             score: best_score,
+            plain_source,
         })
     };
 
@@ -491,11 +512,10 @@ pub async fn fetch_lyrics(
             fast_candidates.len()
         );
 
-        if let Ok((winner, lyrics)) = execute_staged_search(fast_candidates).await {
-            info!("Fast path success with: {}", winner.description);
+        if let Ok(result) = execute_staged_search(fast_candidates).await {
+            info!("Fast path success with: {}", result.candidate.description);
             llm_handle.abort(); // Cancel LLM - we don't need it
-            cache_lyrics(&artist_name, &track_name, lyrics.clone());
-            return Ok(lyrics);
+            return Ok(finish_lyrics(&artist_name, &track_name, result).await);
         }
         debug!("Fast path failed, waiting for LLM results");
     }
@@ -519,10 +539,9 @@ pub async fn fetch_lyrics(
     }
 
     match execute_staged_search(full_candidates).await {
-        Ok((winner, lyrics)) => {
-            info!("Search success with: {}", winner.description);
-            cache_lyrics(&artist_name, &track_name, lyrics.clone());
-            Ok(lyrics)
+        Ok(result) => {
+            info!("Search success with: {}", result.candidate.description);
+            Ok(finish_lyrics(&artist_name, &track_name, result).await)
         }
         Err(e) => {
             warn!(
@@ -531,6 +550,32 @@ pub async fn fetch_lyrics(
             );
             cache_no_lyrics(&artist_name, &track_name);
             Err(format!("No lyrics found: {}", e))
+        }
+    }
+}
+
+/// Cache real timing; for a plain-only hit, try to upgrade it to a synced LRCLIB
+/// entry of the same recording first. Estimates are never cached, so a later
+/// play can still pick up real timing.
+async fn finish_lyrics(artist_name: &str, track_name: &str, result: LyricsFetchResult) -> Vec<LyricLine> {
+    let Some(src) = result.plain_source else {
+        cache_lyrics(artist_name, track_name, result.lyrics.clone());
+        return result.lyrics;
+    };
+    let client = get_lyrics_http_client();
+    match timing::find_synced_alternative(client, &src.track, &src.artist, src.duration).await {
+        Some(lrc) => {
+            let lyrics = parse_lrc_format(&lrc);
+            if lyrics.is_empty() {
+                return result.lyrics;
+            }
+            info!("Upgraded plain lyrics to a synced LRCLIB entry for '{}'", src.track);
+            cache_lyrics(artist_name, track_name, lyrics.clone());
+            lyrics
+        }
+        None => {
+            info!("No synced timing for '{}'; returning estimated timing (not cached)", src.track);
+            result.lyrics
         }
     }
 }
@@ -714,9 +759,7 @@ fn add_wildcard_only_candidate(
 }
 
 /// Execute search in priority stages - higher priority stages complete before lower ones
-async fn execute_staged_search(
-    mut candidates: Vec<LyricsCandidate>,
-) -> Result<(LyricsCandidate, Vec<LyricLine>)> {
+async fn execute_staged_search(mut candidates: Vec<LyricsCandidate>) -> Result<LyricsFetchResult> {
     const MIN_ACCEPTABLE_SCORE: f32 = 0.6;
     // Sort candidates by priority (highest first)
     candidates.sort_by_key(|c| std::cmp::Reverse(c.priority));
@@ -768,7 +811,7 @@ async fn execute_staged_search(
                     result.candidate.description
                 );
                 if result.score >= MIN_ACCEPTABLE_SCORE {
-                    return Ok((result.candidate, result.lyrics));
+                    return Ok(result);
                 }
                 warn!(
                     "Stage {} best match score {:.2} below threshold {:.2}: {}",
@@ -980,25 +1023,6 @@ pub fn parse_lrc_format(lrc_content: &str) -> Vec<LyricLine> {
     // Set duration for last line (default 3 seconds)
     if let Some(last) = lyrics.last_mut() {
         last.duration = Some(3.0);
-    }
-
-    lyrics
-}
-
-pub fn convert_plain_lyrics_to_lines(plain_lyrics: &str) -> Vec<LyricLine> {
-    let mut lyrics = Vec::new();
-    let lines: Vec<&str> = plain_lyrics.lines().collect();
-
-    // Create unsynced lyrics with placeholder timing (5 seconds per line)
-    for (index, line) in lines.iter().enumerate() {
-        let text = line.trim();
-        if !text.is_empty() {
-            lyrics.push(LyricLine {
-                time: (index as f64) * 5.0, // 5 seconds per line
-                text: text.to_string(),
-                duration: Some(5.0),
-            });
-        }
     }
 
     lyrics

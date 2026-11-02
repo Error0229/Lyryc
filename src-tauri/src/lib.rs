@@ -9,6 +9,7 @@ mod commands;
 mod furigana;
 mod lyrics;
 mod lyrics_cache;
+mod timing;
 mod translation;
 mod types;
 mod websocket;
