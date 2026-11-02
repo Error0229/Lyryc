@@ -1,0 +1,7 @@
+data/.http/
+data/audio/
+results/raw/
+.venv/
+__pycache__/
+*.log
+data/dataset.json

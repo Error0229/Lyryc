@@ -1,0 +1,30 @@
+[project]
+name = "lyryc-timing-research"
+version = "0.1.0"
+description = "Benchmark for assigning timestamps to plain lyrics (Lyryc)"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "numpy<2.3",
+    "soundfile>=0.12",
+    "faster-whisper>=1.1",
+    "torch==2.7.1",
+    "torchaudio==2.7.1",
+    "uroman>=1.3",
+    "psutil>=5.9",
+    "pykakasi>=2.3.0",
+    "demucs>=4.0.1",
+    "transformers>=4.45,<5",
+    "onnxruntime>=1.31.1",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+torchaudio = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
