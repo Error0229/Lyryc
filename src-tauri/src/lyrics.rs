@@ -38,7 +38,7 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex as StdMutex, OnceLock};
 use std::time::Duration;
 use tauri::Emitter;
@@ -103,15 +103,51 @@ async fn lrclib_get(
         let status = resp.status();
         let busy = status == StatusCode::TOO_MANY_REQUESTS
             || status == StatusCode::SERVICE_UNAVAILABLE;
-        let wait = retry_after(&resp).unwrap_or(Duration::from_secs(1));
-        if !busy || attempt == LRCLIB_MAX_RETRIES || wait > LRCLIB_MAX_RETRY_WAIT {
-            return Ok(resp);
-        }
+        // Retry only when the server says when: retrying an overloaded server
+        // on a guess triples the load and costs ~3 s per question.
+        let wait = match retry_after(&resp) {
+            Some(wait) if busy && attempt < LRCLIB_MAX_RETRIES && wait <= LRCLIB_MAX_RETRY_WAIT => wait,
+            _ => return Ok(resp),
+        };
         attempt += 1;
         debug!("LRCLIB answered {} for {}; retrying in {:?}", status, url, wait);
         tokio::time::sleep(with_jitter(wait)).await;
     }
 }
+
+/// After this many LRCLIB requests in a row got no answer, stop asking...
+const LRCLIB_TRIP_AFTER: u32 = 3;
+/// ...for this long. The first request after it probes; a failure pauses again.
+const LRCLIB_COOLDOWN: Duration = Duration::from_secs(120);
+
+/// LRCLIB's recent health. While it is paused, every question is answered
+/// "no answer" at once (so nothing is negative-cached), and the lookup moves
+/// on to the LLM and the sources instead of waiting on a server that is down.
+#[derive(Default)]
+struct Health {
+    failures: u32,
+    paused_until: Option<tokio::time::Instant>,
+}
+
+impl Health {
+    fn paused(&self, now: tokio::time::Instant) -> bool {
+        self.paused_until.is_some_and(|until| now < until)
+    }
+
+    fn record(&mut self, ok: bool, now: tokio::time::Instant) {
+        if ok {
+            *self = Health::default();
+            return;
+        }
+        self.failures += 1;
+        if self.failures >= LRCLIB_TRIP_AFTER && !self.paused(now) {
+            warn!("LRCLIB is not answering; pausing it for {}s", LRCLIB_COOLDOWN.as_secs());
+            self.paused_until = Some(now + LRCLIB_COOLDOWN);
+        }
+    }
+}
+
+static LRCLIB_HEALTH: LazyLock<StdMutex<Health>> = LazyLock::new(Default::default);
 
 fn retry_after(resp: &reqwest::Response) -> Option<Duration> {
     let secs: f64 = resp
@@ -150,6 +186,8 @@ enum Reply {
     NotFound,
     /// No usable answer (network, timeout, 5xx after retries).
     Failed(String),
+    /// Not asked: LRCLIB is paused after failing (see `Health`).
+    Paused,
 }
 
 /// Synced lyrics from one LRCLIB record. None for plain-only, instrumental,
@@ -297,11 +335,19 @@ impl<'a, E: Effects> Lookup<'a, E> {
             debug!("LRCLIB budget spent; skipping {}", url);
             return None;
         }
+        if self.req.background {
+            after_live_lookups().await;
+        }
         let answer = match self.fx.lrclib(&url).await {
             Reply::Json(v) => Some(v),
             Reply::NotFound => None,
             Reply::Failed(e) => {
                 warn!("LRCLIB gave no answer for {}: {}", url, e);
+                self.incomplete = true;
+                None
+            }
+            Reply::Paused => {
+                debug!("LRCLIB paused; not asking {}", url);
                 self.incomplete = true;
                 None
             }
@@ -502,12 +548,14 @@ struct Request {
     web_search: bool,
     /// The user pressed "Search again": the last answer was wrong.
     refetch: bool,
+    /// A lookahead or pre-aligner lookup: lets the song on screen use LRCLIB first.
+    background: bool,
 }
 
 impl Request {
     fn new(title: String, artist: String, duration: Option<f64>) -> Self {
         let duration = duration.filter(|d| (1.0..=3600.0).contains(d));
-        Self { title, artist, duration, video_id: None, web_search: false, refetch: false }
+        Self { title, artist, duration, video_id: None, web_search: false, refetch: false, background: false }
     }
 }
 
@@ -550,23 +598,33 @@ trait Effects: Send + Sync {
 
 struct Live;
 
+async fn lrclib_reply(url: &str) -> Reply {
+    let resp = match lrclib_get(client(), url, REQUEST_TIMEOUT).await {
+        Ok(resp) => resp,
+        Err(e) => return Reply::Failed(e.to_string()),
+    };
+    if resp.status() == StatusCode::NOT_FOUND {
+        return Reply::NotFound;
+    }
+    let json = async { resp.error_for_status()?.json::<Value>().await };
+    match json.await {
+        Ok(v) => Reply::Json(v),
+        Err(e) => Reply::Failed(e.to_string()),
+    }
+}
+
 impl Effects for Live {
     fn cached(&self, artist: &str, track: &str) -> CacheResult {
         get_cached_lyrics(artist, track)
     }
     async fn lrclib(&self, url: &str) -> Reply {
-        let resp = match lrclib_get(client(), url, REQUEST_TIMEOUT).await {
-            Ok(resp) => resp,
-            Err(e) => return Reply::Failed(e.to_string()),
-        };
-        if resp.status() == StatusCode::NOT_FOUND {
-            return Reply::NotFound;
+        if LRCLIB_HEALTH.lock().unwrap().paused(tokio::time::Instant::now()) {
+            return Reply::Paused;
         }
-        let json = async { resp.error_for_status()?.json::<Value>().await };
-        match json.await {
-            Ok(v) => Reply::Json(v),
-            Err(e) => Reply::Failed(e.to_string()),
-        }
+        let reply = lrclib_reply(url).await;
+        let ok = !matches!(reply, Reply::Failed(_));
+        LRCLIB_HEALTH.lock().unwrap().record(ok, tokio::time::Instant::now());
+        reply
     }
     /// Song identification as measured in docs/research/llm-search and
     /// llm-lyrics-deep: the release's own names, e.g. "Snow Country" / Yorushika
@@ -649,7 +707,12 @@ pub async fn fetch_lyrics_timed(
         prealign::forget(req.video_id.as_deref());
     }
     let (mut timed, mut upgrade) = {
+        // The lock first: a lookahead holding it must not wait on this lookup.
         let _song = song_lock(&req).await;
+        let _live = LiveLookup::start();
+        if !req.refetch {
+            adopt_queue_names(&req);
+        }
         fetch_timed(&Live, &req, extra_sources).await?
     };
     if with_aligned(&Live, &req, &mut timed) {
@@ -730,6 +793,69 @@ pub fn on_upcoming(data: &Value) {
     }
 }
 
+/// The names the queue gave each video the lookahead looked up.
+static QUEUE_NAMES: LazyLock<StdMutex<HashMap<String, (String, String)>>> = LazyLock::new(Default::default);
+
+/// YouTube names one video two ways: the queue shows the uploader's title, the
+/// player a translated one ("ご自愛ください - gojiai kudasai" vs "gojiai kudasai",
+/// with an English UI). What the lookahead found under the queue's names is the
+/// answer for the player's too: copied over unless the player's names have one.
+fn adopt_queue_names(req: &Request) {
+    let Some(id) = &req.video_id else {
+        return;
+    };
+    let Some((title, artist)) = QUEUE_NAMES.lock().unwrap().get(id).cloned() else {
+        return;
+    };
+    if song_key(&artist, &title) == song_key(&req.artist, &req.title)
+        || !matches!(get_cached_lyrics(&req.artist, &req.title), CacheResult::Miss | CacheResult::NegativeHit)
+    {
+        return;
+    }
+    match get_cached_lyrics(&artist, &title) {
+        CacheResult::Hit(lines, source) => {
+            cache_lyrics(&req.artist, &req.title, &lines, source.as_deref().unwrap_or("lrclib"));
+        }
+        CacheResult::Instrumental => cache_instrumental(&req.artist, &req.title),
+        _ => return,
+    }
+    debug!("'{}' is the queue's '{}': using what the lookahead found", req.title, title);
+}
+
+/// Lookups for the song on screen. Background ones (lookahead, pre-aligner)
+/// wait for them before each LRCLIB request: one request at a time goes to
+/// LRCLIB, and the song playing now should not queue behind the next one's.
+static LIVE: AtomicUsize = AtomicUsize::new(0);
+static LIVE_DONE: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+struct LiveLookup;
+
+impl LiveLookup {
+    fn start() -> Self {
+        LIVE.fetch_add(1, Ordering::SeqCst);
+        LiveLookup
+    }
+}
+
+impl Drop for LiveLookup {
+    fn drop(&mut self) {
+        LIVE.fetch_sub(1, Ordering::SeqCst);
+        LIVE_DONE.notify_waiters();
+    }
+}
+
+async fn after_live_lookups() {
+    loop {
+        let done = LIVE_DONE.notified();
+        tokio::pin!(done);
+        done.as_mut().enable(); // registered before the check: no missed wakeup
+        if LIVE.load(Ordering::SeqCst) == 0 {
+            return;
+        }
+        done.await;
+    }
+}
+
 /// One lookup per song at a time. A second asker (the song starts while its
 /// lookahead runs, or the pre-aligner wants it too) waits, then reads the cache.
 async fn song_lock(req: &Request) -> tokio::sync::OwnedMutexGuard<()> {
@@ -738,7 +864,12 @@ async fn song_lock(req: &Request) -> tokio::sync::OwnedMutexGuard<()> {
     let lock = {
         let mut locks = LOCKS.lock().unwrap();
         locks.retain(|_, l| Arc::strong_count(l) > 1); // drop the idle ones
-        locks.entry(song_key(&req.artist, &req.title)).or_default().clone()
+        // By video when there is one: the queue and the player may name it differently.
+        let key = match &req.video_id {
+            Some(id) => (id.clone(), String::new()),
+            None => song_key(&req.artist, &req.title),
+        };
+        locks.entry(key).or_default().clone()
     };
     lock.lock_owned().await
 }
@@ -757,6 +888,10 @@ pub async fn lookup_ahead(
 ) -> Option<(Vec<LyricLine>, bool)> {
     let mut req = Request::new(title.to_string(), artist.to_string(), duration);
     req.video_id = ytmusic::is_video_id(video_id).then(|| video_id.to_string());
+    req.background = true;
+    if let Some(id) = &req.video_id {
+        QUEUE_NAMES.lock().unwrap().insert(id.clone(), (title.to_string(), artist.to_string()));
+    }
     let _song = song_lock(&req).await;
     let (timed, upgrade) = fetch_timed(&Live, &req, extra_sources).await.ok()?;
     if let Some(job) = upgrade {
@@ -1246,6 +1381,26 @@ mod tests {
 
     fn overloaded() -> Reply {
         Reply::Failed("HTTP status server error (503 Service Unavailable)".into())
+    }
+
+    #[test]
+    fn lrclib_pauses_after_three_failures_in_a_row_then_probes_again() {
+        let t0 = tokio::time::Instant::now();
+        let mut h = Health::default();
+        h.record(false, t0);
+        h.record(false, t0);
+        h.record(true, t0);
+        h.record(false, t0);
+        h.record(false, t0);
+        assert!(!h.paused(t0), "an answer in between resets the count");
+        h.record(false, t0);
+        assert!(h.paused(t0));
+        let later = t0 + LRCLIB_COOLDOWN;
+        assert!(!h.paused(later), "the pause ends; the next request probes");
+        h.record(false, later);
+        assert!(h.paused(later), "and a failed probe pauses again at once");
+        h.record(true, later);
+        assert!(!h.paused(later));
     }
 
     #[tokio::test]
@@ -1746,6 +1901,7 @@ mod tests {
                 Reply::Json(_) => "ok".to_string(),
                 Reply::NotFound => "404".to_string(),
                 Reply::Failed(e) => e.clone(),
+                Reply::Paused => "paused".to_string(),
             };
             println!("  {url} -> {status}");
             self.0.lock().unwrap().push(status);
