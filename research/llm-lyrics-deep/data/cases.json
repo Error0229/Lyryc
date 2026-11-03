@@ -1,0 +1,643 @@
+[
+ {
+  "id": 1,
+  "kind": "bilingual",
+  "raw_title": "雪国 - Snow Country",
+  "raw_artist": "Yorushika",
+  "ref_id": 34294964,
+  "title": [
+   "雪国"
+  ],
+  "artist": [
+   "ヨルシカ"
+  ],
+  "alt_title": [
+   "Snow Country",
+   "Yukiguni"
+  ],
+  "alt_artist": [
+   "Yorushika"
+  ],
+  "duration": 288
+ },
+ {
+  "id": 2,
+  "kind": "yt-video",
+  "raw_title": "【MV】私じゃなかったんだね。(Official Video)",
+  "raw_artist": "マカロニえんぴつ",
+  "ref_id": 32384588,
+  "title": [
+   "私じゃなかったんだね。"
+  ],
+  "artist": [
+   "りりあ。"
+  ],
+  "alt_title": [
+   "Watashi ja Nakattan da ne."
+  ],
+  "alt_artist": [
+   "Riria.",
+   "Lilia"
+  ],
+  "duration": 244
+ },
+ {
+  "id": 3,
+  "kind": "unverified",
+  "raw_title": "SYNC",
+  "raw_artist": "Daoko",
+  "ref_id": null,
+  "duration": null,
+  "title": null,
+  "artist": null,
+  "alt_title": [],
+  "alt_artist": []
+ },
+ {
+  "id": 4,
+  "kind": "romanized",
+  "raw_title": "Odoriko",
+  "raw_artist": "Vaundy",
+  "ref_id": 36065563,
+  "title": [
+   "踊り子"
+  ],
+  "artist": [
+   "Vaundy"
+  ],
+  "alt_title": [
+   "Odoriko"
+  ],
+  "alt_artist": [],
+  "duration": 229
+ },
+ {
+  "id": 5,
+  "kind": "romanized",
+  "raw_title": "Kaikai Kitan",
+  "raw_artist": "Eve",
+  "ref_id": 35615692,
+  "title": [
+   "廻廻奇譚"
+  ],
+  "artist": [
+   "Eve"
+  ],
+  "alt_title": [
+   "Kaikai Kitan"
+  ],
+  "alt_artist": [],
+  "duration": 221
+ },
+ {
+  "id": 6,
+  "kind": "romanized",
+  "raw_title": "Shinunoga E-Wa",
+  "raw_artist": "Fujii Kaze",
+  "ref_id": 22827630,
+  "title": [
+   "死ぬのがいいわ"
+  ],
+  "artist": [
+   "藤井風",
+   "藤井 風"
+  ],
+  "alt_title": [
+   "Shinunoga E-Wa"
+  ],
+  "alt_artist": [
+   "Fujii Kaze"
+  ],
+  "duration": 191
+ },
+ {
+  "id": 7,
+  "kind": "romanized",
+  "raw_title": "Qing Tian",
+  "raw_artist": "Jay Chou",
+  "ref_id": 34884008,
+  "title": [
+   "晴天"
+  ],
+  "artist": [
+   "周杰倫",
+   "周杰伦"
+  ],
+  "alt_title": [
+   "Qing Tian",
+   "Sunny Day"
+  ],
+  "alt_artist": [
+   "Jay Chou"
+  ],
+  "duration": 270
+ },
+ {
+  "id": 8,
+  "kind": "translated",
+  "raw_title": "Through the Night",
+  "raw_artist": "IU",
+  "ref_id": 26401678,
+  "title": [
+   "밤편지"
+  ],
+  "artist": [
+   "아이유",
+   "IU"
+  ],
+  "alt_title": [
+   "Through the Night"
+  ],
+  "alt_artist": [],
+  "duration": 283
+ },
+ {
+  "id": 9,
+  "kind": "translated",
+  "raw_title": "Spring Day",
+  "raw_artist": "BTS",
+  "ref_id": 942430,
+  "title": [
+   "봄날"
+  ],
+  "artist": [
+   "방탄소년단",
+   "BTS"
+  ],
+  "alt_title": [
+   "Spring Day"
+  ],
+  "alt_artist": [],
+  "duration": 274
+ },
+ {
+  "id": 10,
+  "kind": "romanized",
+  "raw_title": "Itte.",
+  "raw_artist": "YORUSHIKA",
+  "ref_id": 35902805,
+  "title": [
+   "言って。"
+  ],
+  "artist": [
+   "ヨルシカ"
+  ],
+  "alt_title": [
+   "Itte",
+   "Say It"
+  ],
+  "alt_artist": [
+   "Yorushika"
+  ],
+  "duration": 262
+ },
+ {
+  "id": 11,
+  "kind": "yt-video",
+  "raw_title": "YOASOBI「アイドル」 Official Music Video",
+  "raw_artist": "Ayase / YOASOBI",
+  "ref_id": 34971523,
+  "title": [
+   "アイドル"
+  ],
+  "artist": [
+   "YOASOBI"
+  ],
+  "alt_title": [
+   "Idol"
+  ],
+  "alt_artist": [],
+  "duration": 214
+ },
+ {
+  "id": 12,
+  "kind": "yt-video",
+  "raw_title": "米津玄師 MV「KICK BACK」",
+  "raw_artist": "米津玄師",
+  "ref_id": 16305377,
+  "title": [
+   "KICK BACK"
+  ],
+  "artist": [
+   "米津玄師"
+  ],
+  "alt_title": [],
+  "alt_artist": [
+   "Kenshi Yonezu"
+  ],
+  "duration": 194
+ },
+ {
+  "id": 13,
+  "kind": "yt-video",
+  "raw_title": "周杰倫 Jay Chou【稻香 Rice Field】-Official Music Video",
+  "raw_artist": "周杰倫 Jay Chou",
+  "ref_id": 25905586,
+  "title": [
+   "稻香"
+  ],
+  "artist": [
+   "周杰倫",
+   "周杰伦"
+  ],
+  "alt_title": [
+   "Dao Xiang",
+   "Rice Field"
+  ],
+  "alt_artist": [
+   "Jay Chou"
+  ],
+  "duration": 224
+ },
+ {
+  "id": 14,
+  "kind": "yt-video",
+  "raw_title": "[MV] IU(아이유) _ Blueming(블루밍)",
+  "raw_artist": "1theK (원더케이)",
+  "ref_id": 7366003,
+  "title": [
+   "Blueming",
+   "블루밍"
+  ],
+  "artist": [
+   "아이유",
+   "IU"
+  ],
+  "alt_title": [],
+  "alt_artist": [],
+  "duration": 217
+ },
+ {
+  "id": 15,
+  "kind": "yt-video",
+  "raw_title": "Official髭男dism - Subtitle［Official Video］",
+  "raw_artist": "Official髭男dism",
+  "ref_id": 6645966,
+  "title": [
+   "Subtitle"
+  ],
+  "artist": [
+   "Official髭男dism"
+  ],
+  "alt_title": [],
+  "alt_artist": [
+   "Official HIGE DANdism"
+  ],
+  "duration": 306
+ },
+ {
+  "id": 16,
+  "kind": "yt-video",
+  "raw_title": "ヨルシカ - 晴る (OFFICIAL VIDEO)",
+  "raw_artist": "ヨルシカ",
+  "ref_id": 5376018,
+  "title": [
+   "晴る"
+  ],
+  "artist": [
+   "ヨルシカ"
+  ],
+  "alt_title": [
+   "Haru"
+  ],
+  "alt_artist": [
+   "Yorushika"
+  ],
+  "duration": 271
+ },
+ {
+  "id": 17,
+  "kind": "romanized-artist",
+  "raw_title": "Lemon",
+  "raw_artist": "Kenshi Yonezu",
+  "ref_id": 1878758,
+  "title": [
+   "Lemon"
+  ],
+  "artist": [
+   "米津玄師"
+  ],
+  "alt_title": [],
+  "alt_artist": [
+   "Kenshi Yonezu"
+  ],
+  "duration": 256
+ },
+ {
+  "id": 18,
+  "kind": "romanized-artist",
+  "raw_title": "Pretender",
+  "raw_artist": "Official HIGE DANdism",
+  "ref_id": 16708838,
+  "title": [
+   "Pretender"
+  ],
+  "artist": [
+   "Official髭男dism"
+  ],
+  "alt_title": [],
+  "alt_artist": [
+   "Official HIGE DANdism"
+  ],
+  "duration": 326
+ },
+ {
+  "id": 19,
+  "kind": "romanized",
+  "raw_title": "Yoru ni Kakeru",
+  "raw_artist": "YOASOBI",
+  "ref_id": 35871655,
+  "title": [
+   "夜に駆ける"
+  ],
+  "artist": [
+   "YOASOBI"
+  ],
+  "alt_title": [
+   "Yoru ni Kakeru",
+   "Into the Night"
+  ],
+  "alt_artist": [],
+  "duration": 261
+ },
+ {
+  "id": 20,
+  "kind": "clean",
+  "raw_title": "夜に駆ける",
+  "raw_artist": "YOASOBI",
+  "ref_id": 35871655,
+  "title": [
+   "夜に駆ける"
+  ],
+  "artist": [
+   "YOASOBI"
+  ],
+  "alt_title": [
+   "Yoru ni Kakeru",
+   "Into the Night"
+  ],
+  "alt_artist": [],
+  "duration": 261
+ },
+ {
+  "id": 21,
+  "kind": "clean",
+  "raw_title": "Blinding Lights",
+  "raw_artist": "The Weeknd",
+  "ref_id": 35840837,
+  "title": [
+   "Blinding Lights"
+  ],
+  "artist": [
+   "The Weeknd"
+  ],
+  "alt_title": [],
+  "alt_artist": [],
+  "duration": 200
+ },
+ {
+  "id": 22,
+  "kind": "yt-video",
+  "raw_title": "Queen – Bohemian Rhapsody (Official Video Remastered)",
+  "raw_artist": "Queen Official",
+  "ref_id": 35871817,
+  "title": [
+   "Bohemian Rhapsody"
+  ],
+  "artist": [
+   "Queen"
+  ],
+  "alt_title": [],
+  "alt_artist": [],
+  "duration": 354
+ },
+ {
+  "id": 23,
+  "kind": "obscure",
+  "raw_title": "ずっと真夜中でいいのに。『ミラーチューン』MV",
+  "raw_artist": "ずっと真夜中でいいのに。 ZUTOMAYO",
+  "ref_id": 15052228,
+  "title": [
+   "ミラーチューン"
+  ],
+  "artist": [
+   "ずっと真夜中でいいのに。"
+  ],
+  "alt_title": [
+   "Mirror Tune"
+  ],
+  "alt_artist": [
+   "ZUTOMAYO"
+  ],
+  "duration": 254
+ },
+ {
+  "id": 24,
+  "kind": "obscure",
+  "raw_title": "草東沒有派對 No Party For Cao Dong【山海 The Mountain and the Sea】Official Music Video",
+  "raw_artist": "草東沒有派對 No Party For Cao Dong",
+  "ref_id": 9417694,
+  "title": [
+   "山海"
+  ],
+  "artist": [
+   "草東沒有派對",
+   "草东没有派对"
+  ],
+  "alt_title": [
+   "Shan Hai",
+   "The Mountain and the Sea"
+  ],
+  "alt_artist": [
+   "No Party For Cao Dong"
+  ],
+  "duration": 252
+ },
+ {
+  "id": 25,
+  "kind": "obscure",
+  "raw_title": "Kawaki wo Ameku",
+  "raw_artist": "Minami",
+  "ref_id": 36273290,
+  "title": [
+   "カワキヲアメク"
+  ],
+  "artist": [
+   "美波"
+  ],
+  "alt_title": [
+   "Kawaki wo Ameku"
+  ],
+  "alt_artist": [
+   "Minami"
+  ],
+  "duration": 270
+ },
+ {
+  "id": 26,
+  "kind": "translated",
+  "raw_title": "How can I love the heartbreak, you're the one I love",
+  "raw_artist": "AKMU",
+  "ref_id": 9116940,
+  "title": [
+   "어떻게 이별까지 사랑하겠어, 널 사랑하는 거지"
+  ],
+  "artist": [
+   "AKMU",
+   "악뮤"
+  ],
+  "alt_title": [
+   "How can I love the heartbreak, you're the one I love"
+  ],
+  "alt_artist": [],
+  "duration": 290
+ },
+ {
+  "id": 27,
+  "kind": "instrumental",
+  "raw_title": "Merry Christmas Mr. Lawrence",
+  "raw_artist": "Ryuichi Sakamoto",
+  "ref_id": 35930629,
+  "title": [
+   "Merry Christmas Mr. Lawrence",
+   "Merry Christmas, Mr. Lawrence",
+   "戦場のメリークリスマス"
+  ],
+  "artist": [
+   "坂本龍一",
+   "Ryuichi Sakamoto"
+  ],
+  "alt_title": [],
+  "alt_artist": [],
+  "duration": 240
+ },
+ {
+  "id": 28,
+  "kind": "not-a-song",
+  "raw_title": "lofi hip hop radio 📚 beats to relax/study to",
+  "raw_artist": "Lofi Girl",
+  "ref_id": null,
+  "duration": null,
+  "title": null,
+  "artist": null,
+  "alt_title": [],
+  "alt_artist": []
+ },
+ {
+  "id": 29,
+  "kind": "obscure",
+  "raw_title": "deca joins - 海浪 (Official Music Video)",
+  "raw_artist": "deca joins",
+  "ref_id": 35996062,
+  "title": [
+   "海浪"
+  ],
+  "artist": [
+   "deca joins"
+  ],
+  "duration": 250
+ },
+ {
+  "id": 30,
+  "kind": "obscure",
+  "raw_title": "SE SO NEON - NAN CHUN",
+  "raw_artist": "SE SO NEON",
+  "ref_id": 15636581,
+  "title": [
+   "난춘",
+   "난춘(亂春)",
+   "NAN CHUN"
+  ],
+  "artist": [
+   "새소년",
+   "SE SO NEON"
+  ],
+  "duration": 229
+ },
+ {
+  "id": 31,
+  "kind": "obscure",
+  "raw_title": "Treehouse",
+  "raw_artist": "Alex G",
+  "ref_id": 36058966,
+  "title": [
+   "Treehouse"
+  ],
+  "artist": [
+   "Alex G"
+  ],
+  "duration": 149
+ },
+ {
+  "id": 32,
+  "kind": "obscure",
+  "raw_title": "Regal Lily - Rickenbacker",
+  "raw_artist": "Regal Lily",
+  "ref_id": 3096479,
+  "title": [
+   "リッケンバッカー"
+  ],
+  "artist": [
+   "リーガルリリー"
+  ],
+  "duration": 258
+ },
+ {
+  "id": 33,
+  "kind": "obscure",
+  "raw_title": "Inside Out",
+  "raw_artist": "Duster",
+  "ref_id": 14875527,
+  "title": [
+   "Inside Out"
+  ],
+  "artist": [
+   "Duster"
+  ],
+  "duration": 142
+ },
+ {
+  "id": 34,
+  "kind": "instrumental",
+  "raw_title": "Aruarian Dance",
+  "raw_artist": "Nujabes",
+  "ref_id": 36237886,
+  "title": [
+   "Aruarian Dance"
+  ],
+  "artist": [
+   "Nujabes"
+  ],
+  "duration": 250
+ },
+ {
+  "id": 35,
+  "kind": "instrumental",
+  "raw_title": "Ludovico Einaudi - Experience",
+  "raw_artist": "Ludovico Einaudi",
+  "ref_id": 36315549,
+  "title": [
+   "Experience"
+  ],
+  "artist": [
+   "Ludovico Einaudi"
+  ],
+  "duration": 316
+ },
+ {
+  "id": 36,
+  "kind": "instrumental",
+  "raw_title": "Summer (from Kikujiro)",
+  "raw_artist": "Joe Hisaishi",
+  "ref_id": 36148240,
+  "title": [
+   "Summer",
+   "菊次郎の夏"
+  ],
+  "artist": [
+   "Joe Hisaishi",
+   "久石譲"
+  ],
+  "duration": 238
+ }
+]

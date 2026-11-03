@@ -69,6 +69,12 @@ fn init_db() -> Option<Connection> {
         return None;
     }
 
+    // Where the timing came from ("lrclib", "qq", ...). Added later; NULL rows
+    // predate it and are LRCLIB. Fails harmlessly once the column exists.
+    let _ = conn.execute("ALTER TABLE lyrics_cache ADD COLUMN source TEXT", []);
+
+    create_aligned_table(&conn);
+
     // Create composite index for optimal lookups with TTL filtering
     if let Err(e) = conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_cache_lookup ON lyrics_cache(artist, track, cached_at DESC)",
@@ -99,6 +105,11 @@ fn normalize_key(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
 }
 
+/// The cache's identity for a song: (artist, track), normalized.
+pub fn song_key(artist: &str, track: &str) -> (String, String) {
+    (normalize_key(artist), normalize_key(track))
+}
+
 /// Get current Unix timestamp
 fn now_timestamp() -> i64 {
     std::time::SystemTime::now()
@@ -109,10 +120,13 @@ fn now_timestamp() -> i64 {
 
 /// Cache lookup result
 pub enum CacheResult {
-    /// Lyrics found in cache
-    Hit(Vec<LyricLine>),
+    /// Lyrics found in cache, and where their timing came from (None: LRCLIB,
+    /// or a row written before sources were recorded)
+    Hit(Vec<LyricLine>, Option<String>),
     /// Cached as "no lyrics available" (negative cache)
     NegativeHit,
+    /// Known to have no words at all: nothing to look for.
+    Instrumental,
     /// Not in cache or cache unavailable
     Miss,
 }
@@ -136,18 +150,18 @@ pub fn get_cached_lyrics(artist: &str, track: &str) -> CacheResult {
     let track_key = normalize_key(track);
     let min_timestamp = now_timestamp() - CACHE_TTL_SECONDS;
 
-    let result: Result<Option<String>, _> = conn.query_row(
-        "SELECT lyrics_json FROM lyrics_cache WHERE artist = ?1 AND track = ?2 AND cached_at > ?3",
+    let result: Result<(Option<String>, Option<String>), _> = conn.query_row(
+        "SELECT lyrics_json, source FROM lyrics_cache WHERE artist = ?1 AND track = ?2 AND cached_at > ?3",
         params![artist_key, track_key, min_timestamp],
-        |row| row.get(0),
+        |row| Ok((row.get(0)?, row.get(1)?)),
     );
 
     match result {
-        Ok(Some(lyrics_json)) => {
+        Ok((Some(lyrics_json), source)) => {
             match serde_json::from_str::<Vec<LyricLine>>(&lyrics_json) {
                 Ok(lyrics) => {
                     debug!("Cache HIT for '{}' by '{}' ({} lines)", track, artist, lyrics.len());
-                    CacheResult::Hit(lyrics)
+                    CacheResult::Hit(lyrics, source)
                 }
                 Err(e) => {
                     error!("Failed to deserialize cached lyrics: {}", e);
@@ -155,8 +169,12 @@ pub fn get_cached_lyrics(artist: &str, track: &str) -> CacheResult {
                 }
             }
         }
-        Ok(None) => {
-            debug!("Cache NEGATIVE HIT for '{}' by '{}' (instrumental)", track, artist);
+        Ok((None, Some(source))) if source == INSTRUMENTAL => {
+            debug!("Cache HIT for '{}' by '{}': instrumental", track, artist);
+            CacheResult::Instrumental
+        }
+        Ok((None, _)) => {
+            debug!("Cache NEGATIVE HIT for '{}' by '{}'", track, artist);
             CacheResult::NegativeHit
         }
         Err(rusqlite::Error::QueryReturnedNoRows) => {
@@ -171,7 +189,7 @@ pub fn get_cached_lyrics(artist: &str, track: &str) -> CacheResult {
 }
 
 /// Cache lyrics for future lookups. Silently fails if cache is disabled.
-pub fn cache_lyrics(artist: &str, track: &str, lyrics: Vec<LyricLine>) {
+pub fn cache_lyrics(artist: &str, track: &str, lyrics: &[LyricLine], source: &str) {
     let guard = match DB_CONNECTION.lock() {
         Ok(g) => g,
         Err(_) => return,
@@ -185,7 +203,7 @@ pub fn cache_lyrics(artist: &str, track: &str, lyrics: Vec<LyricLine>) {
     let artist_key = normalize_key(artist);
     let track_key = normalize_key(track);
 
-    let lyrics_json = match serde_json::to_string(&lyrics) {
+    let lyrics_json = match serde_json::to_string(lyrics) {
         Ok(json) => json,
         Err(e) => {
             error!("Failed to serialize lyrics: {}", e);
@@ -194,8 +212,8 @@ pub fn cache_lyrics(artist: &str, track: &str, lyrics: Vec<LyricLine>) {
     };
 
     if let Err(e) = conn.execute(
-        "INSERT OR REPLACE INTO lyrics_cache (artist, track, lyrics_json, cached_at) VALUES (?1, ?2, ?3, ?4)",
-        params![artist_key, track_key, lyrics_json, now_timestamp()],
+        "INSERT OR REPLACE INTO lyrics_cache (artist, track, lyrics_json, cached_at, source) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![artist_key, track_key, lyrics_json, now_timestamp(), source],
     ) {
         error!("Failed to cache lyrics: {}", e);
     } else {
@@ -203,8 +221,21 @@ pub fn cache_lyrics(artist: &str, track: &str, lyrics: Vec<LyricLine>) {
     }
 }
 
+/// The `source` of a lyric-less row for an instrumental; other lyric-less rows
+/// (source NULL) mean "nothing found".
+const INSTRUMENTAL: &str = "instrumental";
+
 /// Cache a negative result (no lyrics found) to avoid repeated API calls.
 pub fn cache_no_lyrics(artist: &str, track: &str) {
+    cache_without_lyrics(artist, track, None);
+}
+
+/// Cache that the song has no words: every later lookup ends here.
+pub fn cache_instrumental(artist: &str, track: &str) {
+    cache_without_lyrics(artist, track, Some(INSTRUMENTAL));
+}
+
+fn cache_without_lyrics(artist: &str, track: &str, source: Option<&str>) {
     let guard = match DB_CONNECTION.lock() {
         Ok(g) => g,
         Err(_) => return,
@@ -219,12 +250,101 @@ pub fn cache_no_lyrics(artist: &str, track: &str) {
     let track_key = normalize_key(track);
 
     if let Err(e) = conn.execute(
-        "INSERT OR REPLACE INTO lyrics_cache (artist, track, lyrics_json, cached_at) VALUES (?1, ?2, NULL, ?3)",
-        params![artist_key, track_key, now_timestamp()],
+        "INSERT OR REPLACE INTO lyrics_cache (artist, track, lyrics_json, cached_at, source) VALUES (?1, ?2, NULL, ?3, ?4)",
+        params![artist_key, track_key, now_timestamp(), source],
     ) {
         error!("Failed to cache negative result: {}", e);
     } else {
-        debug!("Cached NEGATIVE result for '{}' by '{}'", track, artist);
+        debug!("Cached no lyrics ({}) for '{}' by '{}'", source.unwrap_or("not found"), track, artist);
+    }
+}
+
+/// Drop the song's entry, found or not: the user says it is wrong.
+pub fn forget_lyrics(artist: &str, track: &str) {
+    let guard = match DB_CONNECTION.lock() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+    let Some(conn) = guard.as_ref() else {
+        return;
+    };
+    if let Err(e) = conn.execute(
+        "DELETE FROM lyrics_cache WHERE artist = ?1 AND track = ?2",
+        params![normalize_key(artist), normalize_key(track)],
+    ) {
+        error!("Failed to forget cached lyrics: {}", e);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pre-aligned word timing (src/prealign). Keyed by the YouTube videoId and a
+// hash of the lyric text it was aligned to; kept until the user clears it.
+// `lines_json` NULL means the alignment was rejected: don't download again.
+
+/// A cached alignment for (videoId, text hash).
+#[derive(Debug, PartialEq)]
+pub enum AlignedCache {
+    /// The aligner's raw output (JSON), to be checked against the lyrics on use.
+    Hit(String),
+    /// Aligned before and rejected as a whole.
+    Rejected,
+    Miss,
+}
+
+fn create_aligned_table(conn: &Connection) {
+    if let Err(e) = conn.execute(
+        "CREATE TABLE IF NOT EXISTS aligned_cache (
+            video_id TEXT NOT NULL,
+            text_hash TEXT NOT NULL,
+            lines_json TEXT,
+            cached_at INTEGER NOT NULL,
+            PRIMARY KEY (video_id, text_hash)
+        )",
+        [],
+    ) {
+        warn!("Failed to create aligned_cache table: {}", e);
+    }
+}
+
+fn get_aligned_in(conn: &Connection, video_id: &str, text_hash: &str) -> AlignedCache {
+    let row: Result<Option<String>, _> = conn.query_row(
+        "SELECT lines_json FROM aligned_cache WHERE video_id = ?1 AND text_hash = ?2",
+        params![video_id, text_hash],
+        |row| row.get(0),
+    );
+    match row {
+        Ok(Some(json)) => AlignedCache::Hit(json),
+        Ok(None) => AlignedCache::Rejected,
+        Err(rusqlite::Error::QueryReturnedNoRows) => AlignedCache::Miss,
+        Err(e) => {
+            warn!("aligned_cache query error: {}", e);
+            AlignedCache::Miss
+        }
+    }
+}
+
+fn cache_aligned_in(conn: &Connection, video_id: &str, text_hash: &str, lines_json: Option<&str>) {
+    if let Err(e) = conn.execute(
+        "INSERT OR REPLACE INTO aligned_cache (video_id, text_hash, lines_json, cached_at) VALUES (?1, ?2, ?3, ?4)",
+        params![video_id, text_hash, lines_json, now_timestamp()],
+    ) {
+        error!("Failed to cache alignment: {}", e);
+    }
+}
+
+pub fn get_aligned(video_id: &str, text_hash: &str) -> AlignedCache {
+    match DB_CONNECTION.lock() {
+        Ok(guard) => guard.as_ref().map_or(AlignedCache::Miss, |c| get_aligned_in(c, video_id, text_hash)),
+        Err(_) => AlignedCache::Miss,
+    }
+}
+
+/// Store an alignment (`None`: rejected).
+pub fn cache_aligned(video_id: &str, text_hash: &str, lines_json: Option<&str>) {
+    if let Ok(guard) = DB_CONNECTION.lock() {
+        if let Some(conn) = guard.as_ref() {
+            cache_aligned_in(conn, video_id, text_hash, lines_json);
+        }
     }
 }
 
@@ -265,4 +385,23 @@ pub fn get_cache_stats() -> Option<(usize, i64)> {
 #[allow(dead_code)]
 pub fn is_cache_available() -> bool {
     DB_CONNECTION.lock().map(|g| g.is_some()).unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn alignments_are_keyed_by_video_and_text() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_aligned_table(&conn);
+        assert_eq!(get_aligned_in(&conn, "vid1", "h1"), AlignedCache::Miss);
+        cache_aligned_in(&conn, "vid1", "h1", Some("[1]"));
+        cache_aligned_in(&conn, "vid1", "h2", None);
+        assert_eq!(get_aligned_in(&conn, "vid1", "h1"), AlignedCache::Hit("[1]".into()));
+        assert_eq!(get_aligned_in(&conn, "vid1", "h2"), AlignedCache::Rejected, "other lyrics, same video");
+        assert_eq!(get_aligned_in(&conn, "vid2", "h1"), AlignedCache::Miss, "same lyrics, other upload");
+        cache_aligned_in(&conn, "vid1", "h1", Some("[2]"));
+        assert_eq!(get_aligned_in(&conn, "vid1", "h1"), AlignedCache::Hit("[2]".into()));
+    }
 }

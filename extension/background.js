@@ -1,6 +1,8 @@
 // Background script for Lyryc extension
 let currentTrack = null;
 let isConnectedToApp = false;
+// Last YouTube Music queue snapshot (UPCOMING_TRACKS), resent on reconnect.
+let upcoming = null;
 
 // WebSocket connection to desktop app
 let websocket = null;
@@ -25,6 +27,12 @@ function connectToDesktopApp() {
       console.log('🟢 [Background] ✅ Connected to desktop app via WebSocket');
       isConnectedToApp = true;
       reconnectAttempts = 0;
+
+      // The app may have started mid-song: tell it what is playing right now.
+      if (currentTrack) {
+        sendTrackToApp(currentTrack, currentTrack.isPlaying === false ? 'TRACK_PAUSED' : 'TRACK_DETECTED');
+      }
+      if (upcoming) sendUpcomingToApp(upcoming);
       
       // Send ping to keep connection alive (only create one interval)
       if (!pingInterval) {
@@ -108,10 +116,10 @@ async function handlePlaybackCommand(commandData) {
     // Get all tabs with music sites
     const tabs = await chrome.tabs.query({
       url: [
-        '*://open.spotify.com/*',
-        '*://music.youtube.com/*', 
-        '*://music.apple.com/*',
-        '*://soundcloud.com/*'
+        'https://open.spotify.com/*',
+        'https://music.youtube.com/*', 
+        'https://music.apple.com/*',
+        'https://soundcloud.com/*'
       ]
     });
     
@@ -185,6 +193,14 @@ function sendTrackToApp(track, messageType = 'TRACK_DETECTED') {
   }
 }
 
+// The YouTube Music queue: what plays now and next. The app ignores it unless
+// its pre-align setting is on.
+function sendUpcomingToApp(state) {
+  if (websocket && websocket.readyState === WebSocket.OPEN) {
+    websocket.send(JSON.stringify({ message_type: 'UPCOMING_TRACKS', data: state, timestamp: Date.now() }));
+  }
+}
+
 // Listen for messages from content scripts
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'TRACK_DETECTED') {
@@ -235,12 +251,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     currentTrack = null;
     
     sendResponse({ success: true });
+  } else if (message.type === 'UPCOMING_TRACKS') {
+    upcoming = message.data;
+    sendUpcomingToApp(upcoming);
+    sendResponse({ success: true });
   } else if (message.type === 'TRACK_PROGRESS') {
-    if (currentTrack) {
-      // Update current track with progress data (preserve explicit isPlaying from content script)
-      currentTrack = { ...currentTrack, ...message.data };
-      sendTrackToApp(currentTrack, 'TRACK_PROGRESS');
-    }
+    // Progress carries the full track. Adopt it even if we have none: Chrome
+    // restarts idle service workers, which wipes currentTrack mid-song.
+    currentTrack = { ...currentTrack, ...message.data };
+    sendTrackToApp(currentTrack, 'TRACK_PROGRESS');
     
     sendResponse({ success: true });
   }
@@ -274,7 +293,21 @@ chrome.runtime.onStartup.addListener(() => {
 chrome.runtime.onInstalled.addListener(() => {
   console.log('🟢 [Background] Extension installed - connecting to desktop app');
   connectToDesktopApp();
+  injectIntoOpenTabs();
 });
+
+// Manifest content scripts only reach pages loaded after install/reload. Inject
+// them into music tabs that were already open, so no page refresh is needed.
+async function injectIntoOpenTabs() {
+  for (const { matches, js, world } of chrome.runtime.getManifest().content_scripts) {
+    const tabs = await chrome.tabs.query({ url: matches });
+    for (const tab of tabs) {
+      chrome.scripting
+        .executeScript({ target: { tabId: tab.id }, files: js, world: world || 'ISOLATED' })
+        .catch((e) => console.log('🟡 [Background] Could not inject into tab', tab.id, e.message));
+    }
+  }
+}
 
 // Also try to connect when service worker starts
 console.log('🟢 [Background] Service worker started - connecting to desktop app');

@@ -3,18 +3,18 @@
   "name": "Lyryc Music Detector",
   "version": "0.1.0",
   "description": "Detects currently playing music from multiple streaming platforms",
+  "minimum_chrome_version": "111",
   
   "permissions": [
-    "activeTab",
     "storage",
-    "nativeMessaging"
+    "scripting"
   ],
   
   "host_permissions": [
-    "*://open.spotify.com/*",
-    "*://music.youtube.com/*",
-    "*://music.apple.com/*",
-    "*://soundcloud.com/*",
+    "https://open.spotify.com/*",
+    "https://music.youtube.com/*",
+    "https://music.apple.com/*",
+    "https://soundcloud.com/*",
     "ws://localhost:8765/*",
     "http://localhost:8765/*"
   ],
@@ -26,28 +26,36 @@
   "content_scripts": [
     {
       "matches": [
-        "*://open.spotify.com/*"
+        "https://open.spotify.com/*"
       ],
       "js": ["spotify-detector.js"],
       "run_at": "document_idle"
     },
     {
       "matches": [
-        "*://music.youtube.com/*"
+        "https://music.youtube.com/*"
       ],
       "js": ["youtube-detector.js"],
       "run_at": "document_idle"
     },
     {
       "matches": [
-        "*://music.apple.com/*"
+        "https://music.youtube.com/*"
+      ],
+      "js": ["youtube-queue.js"],
+      "world": "MAIN",
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://music.apple.com/*"
       ],
       "js": ["apple-music-detector.js"],
       "run_at": "document_idle"
     },
     {
       "matches": [
-        "*://soundcloud.com/*"
+        "https://soundcloud.com/*"
       ],
       "js": ["soundcloud-detector.js"],
       "run_at": "document_idle"

@@ -6,7 +6,11 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
-use tokio_tungstenite::{accept_async, tungstenite::Message};
+use tokio_tungstenite::accept_hdr_async_with_config;
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
+use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request as Handshake, Response};
+use tokio_tungstenite::tungstenite::http::StatusCode;
+use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,7 +127,7 @@ impl WebSocketServer {
             }
         }
 
-        // Remove disconnected clients
+        let failed = disconnected_clients.len();
         for client_id in disconnected_clients {
             clients.remove(&client_id);
             warn!("Removed disconnected client: {}", client_id);
@@ -132,7 +136,7 @@ impl WebSocketServer {
         info!(
             "Message broadcast complete: {} successful, {} failed",
             successful_sends,
-            clients.len() - successful_sends
+            failed
         );
         Ok(())
     }
@@ -158,13 +162,43 @@ impl WebSocketServer {
     }
 }
 
+/// Browsers let any web page open a WebSocket to localhost, and say which page
+/// in `Origin`. Only the extension may drive the app. A client without an
+/// Origin is a local program, which could forge one anyway.
+fn origin_allowed(origin: Option<&str>) -> bool {
+    const EXTENSIONS: [&str; 3] = ["chrome-extension://", "moz-extension://", "safari-web-extension://"];
+    origin.is_none_or(|o| EXTENSIONS.iter().any(|scheme| o.starts_with(scheme)))
+}
+
+#[allow(clippy::result_large_err)] // the handshake callback's signature
+fn extension_only(req: &Handshake, resp: Response) -> Result<Response, ErrorResponse> {
+    let origin = req.headers().get("origin").map(|o| o.to_str().unwrap_or("?"));
+    if origin_allowed(origin) {
+        return Ok(resp);
+    }
+    warn!("Refused a WebSocket from {}", origin.unwrap_or_default());
+    let mut refused = ErrorResponse::new(Some("Only the Lyryc extension may connect".into()));
+    *refused.status_mut() = StatusCode::FORBIDDEN;
+    Err(refused)
+}
+
 async fn handle_connection(
     raw_stream: TcpStream,
     addr: SocketAddr,
     clients: ClientConnections,
     track_callback: Option<Arc<dyn Fn(TrackUpdate) + Send + Sync>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let ws_stream = accept_async(raw_stream).await?;
+    // The extension's messages are a few KB; tungstenite would take 64 MiB.
+    let limits = WebSocketConfig { max_message_size: Some(1 << 20), max_frame_size: Some(1 << 20), ..Default::default() };
+    let ws_stream = match accept_hdr_async_with_config(raw_stream, extension_only, Some(limits)).await {
+        Ok(stream) => stream,
+        Err(e) => {
+            // Dev tools and port scanners probe local ports with plain HTTP and TLS.
+            // That is not our client and not our error.
+            debug!("Ignoring non-WebSocket connection from {}: {}", addr, e);
+            return Ok(());
+        }
+    };
     let client_id = Uuid::new_v4().to_string();
 
     info!("New WebSocket connection: {} with ID: {}", addr, client_id);
@@ -228,10 +262,13 @@ async fn handle_connection(
 
                     match extension_msg.message_type.as_str() {
                         "TRACK_DETECTED" | "TRACK_PAUSED" | "TRACK_STOPPED" | "TRACK_PROGRESS" => {
-                            if let Ok(track_update) =
+                            if let Ok(mut track_update) =
                                 serde_json::from_value::<TrackUpdate>(extension_msg.data.clone())
                             {
+                                track_update.title = crate::cleaning::canonical(&track_update.title);
+                                track_update.artist = crate::cleaning::canonical(&track_update.artist);
                                 // println!("✅ Successfully parsed TrackUpdate: {:?}", track_update);
+                                crate::prealign::on_track(&track_update.url);
                                 // Call the track callback if available
                                 if let Some(ref callback) = track_callback {
                                     callback(track_update);
@@ -239,6 +276,10 @@ async fn handle_connection(
                             } else {
                                 error!("Failed to parse TrackUpdate from: {}", extension_msg.data);
                             }
+                        }
+                        "UPCOMING_TRACKS" => {
+                            crate::lyrics::on_upcoming(&extension_msg.data);
+                            crate::prealign::on_upcoming(&extension_msg.data);
                         }
                         "ping" => {
                             let pong_msg = ExtensionMessage {
@@ -293,4 +334,19 @@ async fn handle_connection(
 // Helper function to create a default WebSocket server instance
 pub fn create_websocket_server() -> WebSocketServer {
     WebSocketServer::new(8765) // Default port
+}
+
+#[cfg(test)]
+mod origin_tests {
+    use super::origin_allowed;
+
+    #[test]
+    fn only_the_extension_or_a_local_program_may_connect() {
+        assert!(origin_allowed(Some("chrome-extension://abcdefghijklmnop")));
+        assert!(origin_allowed(Some("moz-extension://0f1e2d3c")));
+        assert!(origin_allowed(None));
+        assert!(!origin_allowed(Some("https://example.com")));
+        assert!(!origin_allowed(Some("http://localhost:3000")));
+        assert!(!origin_allowed(Some("null")));
+    }
 }

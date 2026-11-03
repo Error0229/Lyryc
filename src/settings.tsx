@@ -1,12 +1,22 @@
-import React from 'react';
-import ReactDOM from 'react-dom/client';
-import SettingsApp from './components/SettingsApp';
-import './index.css';
+import "./design/index.css";
+import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
+import { MotionConfig } from "motion/react";
+import { SettingsApp } from "./settings/SettingsApp";
+import { inTauri } from "./services/ipc/backend";
+import { TooltipProvider } from "./ui/Tooltip";
 
-const root = ReactDOM.createRoot(document.getElementById('settings-app') as HTMLElement);
+if (!inTauri) {
+  const { applySettingsScenario } = await import("./dev/scenario");
+  await applySettingsScenario();
+}
 
-root.render(
-  <React.StrictMode>
-    <SettingsApp />
-  </React.StrictMode>
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    <MotionConfig reducedMotion="user">
+      <TooltipProvider>
+        <SettingsApp />
+      </TooltipProvider>
+    </MotionConfig>
+  </StrictMode>,
 );

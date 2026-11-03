@@ -1,0 +1,28 @@
+# lang|track|artist|tag[|pinned lrclib id]
+en|Blinding Lights|The Weeknd|fast|35840837
+en|Bohemian Rhapsody|Queen|long,tempo-change|35871817
+en|Hotel California|Eagles|long-intro|23865868
+en|Billie Jean|Michael Jackson|long-intro|35840751
+en|Someone Like You|Adele|slow|7137504
+en|Lose Yourself|Eminem|rap,long-intro|35869688
+en|Shape of You|Ed Sheeran|mid|36263727
+en|Stairway to Heaven|Led Zeppelin|long,instrumental-breaks|36256841
+ja|Lemon|米津玄師|mid|1878758
+ja|夜に駆ける|YOASOBI|fast|35871655
+ja|紅蓮華|LiSA|fast|1328894
+ja|Pretender|Official髭男dism|mid|16708838
+ja|残酷な天使のテーゼ|高橋洋子|fast|35968378
+ja|アイドル|YOASOBI|fast,rap|34971523
+ja|First Love|宇多田ヒカル|slow|14844490
+ja|恋|星野源|fast|37069237
+zh|晴天|周杰倫|long-intro|34884008
+zh|稻香|周杰倫|mid|25905586
+zh|後來|劉若英|slow|36478926
+zh|光年之外|G.E.M. 鄧紫棋|mid|5863025
+zh|小幸運|田馥甄|slow|6126364
+zh|演员|薛之谦|slow|34215359
+ko|봄날|BTS|mid|942430
+ko|Celebrity|IU|mid|9075695
+ko|Ditto|NewJeans|mid|36195847
+ko|How You Like That|BLACKPINK|fast,mixed-en|36280976
+ko|Love Dive|IVE|mid|16443723

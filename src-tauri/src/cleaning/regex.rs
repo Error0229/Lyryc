@@ -1,761 +1,234 @@
-//! Regex-based track name cleaning
-//! This is the fallback when LLM cleaning is unavailable
+//! Regex cleaning of video-style titles: "Artist - Title (Official Video)",
+//! "【MV】Title", "Artist「Title」". Already-clean titles pass through unchanged.
+//! A dash only splits off the artist when the artist is known to be on one
+//! side of it; "雪国 - Snow Country" is a bilingual title, not "Artist - Title".
 //!
-//! Key design decision (from commit de7d91f):
-//! - Default: keep FIRST part before separator (handles "Japanese - Romaji", "Title - Subtitle")
-//! - Exception: "Artist feat. X - Track" pattern → keep second part
+//! One pass, in order: drop noise brackets, find a quoted/bracketed title,
+//! cut description tails, split off the artist, drop credits, tidy.
 
-use log::debug;
 use regex::Regex;
+use std::sync::LazyLock;
 
-// Pre-compiled regex patterns (compiled once at first use)
-lazy_static::lazy_static! {
-    // Quote/bracket extraction patterns
-    static ref RE_JAPANESE_QUOTES: Regex = Regex::new(r"「([^」]+)」").unwrap();
-    static ref RE_BRACKET_MIDDLE: Regex = Regex::new(r"【[^】]*】([^【】]+)【[^】]*】").unwrap();
-    static ref RE_BRACKET_SINGLE: Regex = Regex::new(r"【([^】]+)】").unwrap();
-    static ref RE_CORNER_BRACKETS: Regex = Regex::new(r"『([^』]+)』").unwrap();
-    static ref RE_CJK_ANGLE: Regex = Regex::new(r"《([^》]+)》").unwrap();
-    static ref RE_SQUARE_BRACKETS: Regex = Regex::new(r"\[([^\]]+)\]").unwrap();
-    static ref RE_SEPARATOR_CLEANUP: Regex = Regex::new(r"[\-/｜／|:：‐‑‒–—―]+.*$").unwrap();
-
-    // Feat pattern
-    static ref RE_FEAT_PATTERN: Regex = Regex::new(r"(?i)^[^-]*\s+feat\.?\s+[^-]*\s*-\s*(.+)$").unwrap();
-
-    // Special case patterns
-    static ref RE_ARTIST_TRACK_BRACKET: Regex = Regex::new(r"^([^-]+)-([^【]+)【.*?】").unwrap();
-    static ref RE_VIDEO_PARENS: Regex = Regex::new(r"(?i)（.*?(video|mv).*?）").unwrap();
-    static ref RE_JAPANESE_BRACKETS: Regex = Regex::new(r"【.*?】").unwrap();
-    static ref RE_WHITESPACE: Regex = Regex::new(r"\s+").unwrap();
-    static ref RE_FULLWIDTH_PARENS: Regex = Regex::new(r"（.*?）").unwrap();
-    static ref RE_FT_SUFFIX: Regex = Regex::new(r"(?i)\s+ft\.?\s*[^(),-]*$").unwrap();
-    static ref RE_FEAT_SUFFIX: Regex = Regex::new(r"(?i)\s+feat\.?\s*[^(),-]*$").unwrap();
-    static ref RE_FT_FEAT_BEFORE_PARENS: Regex =
-        Regex::new(r"(?i)\s+(?:ft|feat)\.?\s+[^()]*\s*\(").unwrap();
-    static ref RE_LYRICS_SUFFIX: Regex = Regex::new(r"(?i)\s*[|∣]\s*lyrics.*$").unwrap();
-    static ref RE_BRACKET_TAGS: Regex =
-        Regex::new(r"(?i)\s*\[[^\]]*(?:4k|hd|remaster)[^\]]*\]").unwrap();
-    static ref RE_ASCII_PARENS: Regex = Regex::new(r"\([^)]*\)").unwrap();
-    static ref RE_OFFICIAL_VIDEO: Regex = Regex::new(r"(?i)\s+Official\s+Video\s*$").unwrap();
-    static ref RE_FULL_ALBUM: Regex = Regex::new(r"^([^-]+)\(Full Album\)\s*-.*$").unwrap();
-    static ref RE_LOOSE_DASH_SEPARATOR: Regex = Regex::new(r"^(.+?)\s*-\s*(.+)$").unwrap();
-    static ref RE_FEAT_PARENS: Regex =
-        Regex::new(r"(?i)\s*\((?:feat|ft|featuring)\.?\s+[^)]*\)").unwrap();
-    static ref RE_FEAT_PARENS_CAPTURE: Regex =
-        Regex::new(r"(?i)\s*\((?:feat|ft|featuring)\.?\s+([^)]*)\)").unwrap();
-    static ref RE_QUOTED_TITLE_WITH_SUFFIX: Regex =
-        Regex::new(r#"^'([^']+)'\s+(.+)$"#).unwrap();
-    static ref RE_DOUBLE_QUOTED_TITLE_WITH_SUFFIX: Regex =
-        Regex::new(r#"^"([^"]+)"\s+(.+)$"#).unwrap();
-
-    // Cleanup patterns (case-insensitive)
-    static ref CLEANUP_PATTERNS: Vec<Regex> = vec![
-        Regex::new(r"(?i)\s*-\s*YouTube\s*Music\s*$").unwrap(),
-        Regex::new(r"(?i)\s*-\s*YouTube\s*$").unwrap(),
-        Regex::new(r"(?i)\s*\([^)]*(?:official|music|lyric)[^)]*(?:video|audio)[^)]*\)").unwrap(),
-        Regex::new(r"(?i)\s*【[^】]*(?:official|music|lyric)[^】]*(?:video|audio)[^】]*】").unwrap(),
-        Regex::new(r"(?i)\s*\[[^\]]*(?:official|music|lyric)[^\]]*(?:video|audio)[^\]]*\]").unwrap(),
-        Regex::new(r"(?i)\s*\(.*?mv.*?\)").unwrap(),
-        Regex::new(r"(?i)\s*【.*?mv.*?】").unwrap(),
-        Regex::new(r"(?i)\s*\[.*?mv.*?\]").unwrap(),
-        Regex::new(r"(?i)\.(?:flv|mp4|avi|mov|wmv|mkv)$").unwrap(),
-        Regex::new(r"(?i)\s*\[.*?playlist.*?\]").unwrap(),
-        Regex::new(r"(?i)\s*\(.*?(?:中文|日本語|한국어|english\s+sub|lyrics?).*?\)").unwrap(),
-        Regex::new(r"(?i)\s*【.*?(?:中文|日本語|한국어|english\s+sub|lyrics?).*?】").unwrap(),
-        Regex::new(r"(?i)\s*\[.*?(?:4k|hd|remaster).*?\]").unwrap(),
-        Regex::new(r"(?i)\s*\(.*?4k.*?\)").unwrap(),
-        Regex::new(r"(?i)\s+ft\.?\s+@?[^()]*$").unwrap(),
-        Regex::new(r"(?i)\s+feat\.?\s+[^()]*$").unwrap(),
-        Regex::new(r"(?i)\s*\(prod\.\s*[^)]*\)").unwrap(),
-        Regex::new(r"(?i)\s*\((?:visualizer|video|audio)\)").unwrap(),
-        Regex::new(r"(?i)\s*\((?:acoustic\s+video)\)").unwrap(),
-        Regex::new(r"(?i)\s*\(lyrics\)").unwrap(),
-        Regex::new(r"(?i)\s*\([^)]*(?:中文|chinese|中字版|华纳官方|華納官方)[^)]*\)").unwrap(),
-        Regex::new(r"(?i)\s*\([^)]*(?:english\s+sub|eng\s+sub|subtitle)[^)]*\)").unwrap(),
-        Regex::new(r"(?i)\s*\(from the series[^)]*\)").unwrap(),
-        Regex::new(r"(?i)\s*\([^)]*BGM[^)]*\)").unwrap(),
-        Regex::new(r"\s*\([^)]*(?:插曲|片尾曲|片頭曲)[^)]*\)").unwrap(),
-        Regex::new(r"(?i)\s*\(where darkness ends\)").unwrap(),
-        Regex::new(r"を\s*歌ってみた.*$").unwrap(),
-        Regex::new(r"\s*歌ってみた.*$").unwrap(),
-        Regex::new(r"(?i)\s*-\s*arrange.*$").unwrap(),
-        Regex::new(r"(?i)\s+music\s+video\s*$").unwrap(),
-        Regex::new(r"(?i)\s*\|+\s*official\s+video\s*$").unwrap(),
-        Regex::new(r"(?i)\s*[|∣]\s*lyrics.*$").unwrap(),
-        Regex::new(r"(?i)\s*\((?:original)\)").unwrap(),
-    ];
+fn re(pattern: &str) -> Regex {
+    Regex::new(pattern).unwrap()
 }
 
-/// Split text by common separators (-, ·, ×). Returns (first_part, second_part) or None.
-fn split_by_separator(text: &str) -> Option<(&str, &str)> {
-    for sep in &[" - ", " – ", " — ", " · ", " × ", " • "] {
-        if let Some(pos) = text.find(sep) {
-            let first = text[..pos].trim();
-            let second = text[pos + sep.len()..].trim();
-            if !first.is_empty() && !second.is_empty() {
-                return Some((first, second));
-            }
-        }
-    }
-    None
+/// Bracket contents that are packaging, not part of the title. "(feat. X)" is
+/// a credit, so it goes too; version markers like "(Acoustic)" stay.
+static NOISE: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"(?i)official|video|audio|\bmv\b|lyric|visuali[sz]er|\b4k\b|\bhd\b|remaster|playlist|\bsub\b|中文|中字|字幕|歌詞|官方|公式|\bprod\b|from the series|bgm|插曲|片尾曲|片頭曲|original|オリジナル|原创|原創|翻唱|歌ってみた|self cover|^\s*(?:feat|ft|featuring)\b")
+});
+/// (...), [...] and 【...】 groups; fullwidth parentheses are normalized first.
+static BRACKETS: LazyLock<Regex> = LazyLock::new(|| re(r"\(([^()]*)\)|\[([^\[\]]*)\]|【([^【】]*)】"));
+/// Japanese/Chinese title quotes: the song name in a video title.
+static QUOTED: LazyLock<Regex> = LazyLock::new(|| re(r"「([^」]+)」|『([^』]+)』|《([^》]+)》"));
+/// Packaging after the title: "Official Music Video", "- YouTube Music", ".mp4".
+static TAIL: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"(?i)(?:\s*-\s*youtube(?:\s*music)?|(?:\s*-)?\s+(?:official\s+|music\s+|lyrics?\s+|官方版\s*)*(?:video|mv|audio)\b[\s-]*|\.(?:flv|mp4|avi|mov|wmv|mkv)|を?\s*歌ってみた.*)$")
+});
+/// Credits outside brackets: "feat. X" up to the next bracket, a trailing "cover".
+static CREDIT: LazyLock<Regex> = LazyLock::new(|| re(r"(?i)\s+(?:feat|ft|featuring)\b\.?[^(\[]*|\s+cover$"));
+/// What follows a slash when it is a credit rather than part of the title.
+static SLASH_CREDIT: LazyLock<Regex> = LazyLock::new(|| re(r"(?i)\bfeat|\bft\.|×|\bcover\b|first take|歌ってみた"));
+/// "'Title' Suffix" or "\"Title\" (Suffix)".
+static QUOTED_ASCII: LazyLock<Regex> = LazyLock::new(|| re(r#"^(?:'([^']+)'|"([^"]+)")\s*(.*)$"#));
+static SPACES: LazyLock<Regex> = LazyLock::new(|| re(r"\s+"));
+
+/// Best guess at the song title when the artist is unknown: "A - B" is
+/// taken to be "Artist - Title".
+pub fn clean_track_name_sync(title: &str) -> String {
+    clean_title(title, "")
 }
 
-fn is_cjk_char(c: char) -> bool {
-    matches!(
-        c as u32,
-        0x3040..=0x30ff // Hiragana + Katakana
-            | 0x4e00..=0x9fff // CJK Unified Ideographs
-            | 0x3400..=0x4dbf // CJK Unified Ideographs Extension A
-            | 0xac00..=0xd7af // Hangul Syllables
-    )
+/// Best guess at the song title in `title` by `artist`. With an artist, a
+/// separator splits off only a part that names the artist; otherwise the
+/// title stays whole ("雪国 - Snow Country" by Yorushika).
+pub fn clean_title(title: &str, artist: &str) -> String {
+    let s = title
+        .replace('（', " (")
+        .replace('）', ") ")
+        .replace('［', " [")
+        .replace('］', "] ");
+    let s = drop_noise_brackets(&SPACES.replace_all(&s, " "));
+    let s = match title_in_brackets(&s) {
+        Some(t) => t,
+        None => {
+            let s = drop_tag_brackets(TAIL.replace(&s, "").trim());
+            match QUOTED.captures(&s) {
+                Some(c) => first_group(&c).to_string(),
+                None => drop_artist(cut_description(&s), artist).to_string(),
+            }
+        }
+    };
+    let s = drop_slash_credit(&s);
+    let s = CREDIT.replace_all(&s, "");
+    let s = TAIL.replace(s.trim(), "");
+    tidy(s.trim())
 }
 
-fn contains_cjk(s: &str) -> bool {
-    s.chars().any(is_cjk_char)
-}
-
-fn is_mostly_ascii(s: &str) -> bool {
-    let mut total = 0usize;
-    let mut ascii = 0usize;
-    for c in s.chars() {
-        if c.is_whitespace() {
-            continue;
-        }
-        total += 1;
-        if c.is_ascii() {
-            ascii += 1;
-        }
-    }
-    total > 0 && ascii * 100 / total >= 90
-}
-
-/// Synchronous regex-based track name cleaning
-pub fn clean_track_name_sync(track_name: &str) -> String {
-    let mut cleaned = track_name.to_string();
-    let original = track_name;
-    debug!("Cleaning track name: '{}'", track_name);
-
-    // First try to extract song title from quotes or brackets
-    if let Some(extracted) = try_extract_from_quotes(&cleaned) {
-        let original_trim = track_name.trim_start();
-        if contains_cjk(&extracted)
-            && !extracted.contains(" / ")
-            && !extracted.contains('／')
-            && !extracted.contains(" - ")
-            && !original_trim.starts_with('【')
-        {
-            return extracted;
-        }
-        cleaned = extracted;
-    }
-
-    // Apply cleanup patterns
-    cleaned = apply_cleanup_patterns(&cleaned);
-
-    // Handle "Artist feat. X - Track" patterns
-    if let Some(captures) = RE_FEAT_PATTERN.captures(original) {
-        if let Some(track_part) = captures.get(1) {
-            let candidate = track_part.as_str().trim();
-            if !candidate.is_empty() {
-                debug!("Extracted track from feat pattern: '{}'", candidate);
-                cleaned = candidate.to_string();
-            }
-        }
-    }
-
-    // Handle separator patterns
-    cleaned = handle_separator_patterns(&cleaned);
-
-    // Handle special cases
-    cleaned = handle_special_cases(&cleaned, original);
-
-    // Final cleanup
-    cleaned = final_cleanup(&cleaned, original);
-
-    debug!("Cleaned result: '{}'", cleaned);
-    cleaned
-}
-
-fn try_extract_from_quotes(text: &str) -> Option<String> {
-    // Try Japanese quotes 「」
-    if let Some(captures) = RE_JAPANESE_QUOTES.captures(text) {
-        if let Some(quoted) = captures.get(1) {
-            let extracted = quoted.as_str().trim();
-            if !extracted.is_empty() && extracted.len() > 2 {
-                debug!("Extracted from 「」quotes: '{}'", extracted);
-                return Some(extracted.to_string());
-            }
-        }
-    }
-
-    // Try Japanese brackets with internal content extraction
-    if let Some(captures) = RE_BRACKET_MIDDLE.captures(text) {
-        if let Some(middle) = captures.get(1) {
-            let mut extracted = middle.as_str().trim().to_string();
-            if !extracted.is_empty() && extracted.len() > 1 {
-                let cleaned = RE_SEPARATOR_CLEANUP.replace_all(&extracted, "").trim().to_string();
-                if !cleaned.is_empty() && cleaned.len() > 1 {
-                    extracted = cleaned;
-                }
-                debug!("Extracted from 【】 middle content: '{}'", extracted);
-                return Some(extracted);
-            }
-        }
-    }
-
-    // Try single Japanese brackets 【content】
-    if let Some(captures) = RE_BRACKET_SINGLE.captures(text) {
-        if let Some(bracketed) = captures.get(1) {
-            let mut extracted = bracketed.as_str().trim().to_string();
-            let lower = extracted.to_lowercase();
-            let extracted_len = extracted.chars().count();
-            let match_end = captures.get(0).map(|m| m.end()).unwrap_or(0);
-            let match_start = captures.get(0).map(|m| m.start()).unwrap_or(0);
-            let has_trailing_text = text[match_end..].trim().len() > 0;
-            let has_prefix_text = text[..match_start].trim().len() > 0;
-            if !extracted.is_empty()
-                && extracted_len > 2
-                && !(has_trailing_text && !has_prefix_text && extracted_len <= 6)
-                && !(has_prefix_text && !has_trailing_text && extracted_len <= 6)
-                && !extracted.contains(':')
-                && !extracted.contains('×')
-                && !extracted.contains('&')
-                && !lower.contains("cover")
-                && !lower.contains("mv")
-                && !lower.contains("video")
-                && !lower.contains("official")
-                && !lower.contains("歌ってみた")
-                && !lower.contains("原创")
-                && !lower.contains("原創")
-                && !lower.contains("歌詞")
-                && !lower.contains("lyrics")
-            {
-                let cleaned = RE_SEPARATOR_CLEANUP.replace_all(&extracted, "").trim().to_string();
-                if !cleaned.is_empty() && cleaned.len() > 1 {
-                    extracted = cleaned;
-                }
-                debug!("Extracted from 【】brackets: '{}'", extracted);
-                return Some(extracted);
-            }
-        }
-    }
-
-    // Try Japanese corner brackets 『』
-    if let Some(captures) = RE_CORNER_BRACKETS.captures(text) {
-        if let Some(bracketed) = captures.get(1) {
-            let extracted = bracketed.as_str().trim();
-            if !extracted.is_empty() && extracted.len() > 2 {
-                debug!("Extracted from 『』brackets: '{}'", extracted);
-                return Some(extracted.to_string());
-            }
-        }
-    }
-
-    // Try CJK angle brackets 《》
-    if let Some(captures) = RE_CJK_ANGLE.captures(text) {
-        if let Some(bracketed) = captures.get(1) {
-            let match_start = captures.get(0).map(|m| m.start()).unwrap_or(0);
-            let match_end = captures.get(0).map(|m| m.end()).unwrap_or(0);
-            let before_paren = text[..match_start].rfind('(');
-            let after_paren = text[match_end..].find(')');
-            if before_paren.is_none() || after_paren.is_none() {
-                let extracted = bracketed.as_str().trim();
-                if !extracted.is_empty() && extracted.len() > 2 {
-                    debug!("Extracted from 《》brackets: '{}'", extracted);
-                    return Some(extracted.to_string());
-                }
-            }
-        }
-    }
-
-    // Try square brackets []
-    if let Some(captures) = RE_SQUARE_BRACKETS.captures(text) {
-        if let Some(bracketed) = captures.get(1) {
-            let extracted = bracketed.as_str().trim();
-            let lower = extracted.to_lowercase();
-            let first_dash = text.find('-');
-            let bracket_end = captures.get(0).map(|m| m.end()).unwrap_or(0);
-            let before_dash = first_dash.map_or(false, |pos| bracket_end <= pos);
-            if !extracted.is_empty()
-                && extracted.len() > 2
-                && !lower.contains("official")
-                && !lower.contains("mv")
-                && !lower.contains("video")
-                && !lower.contains("playlist")
-                && !lower.contains("remaster")
-                && !lower.contains("4k")
-                && !before_dash
-            {
-                if contains_cjk(extracted) && extracted.chars().any(|c| c.is_ascii_alphabetic()) {
-                    let cjk_only: String = extracted
-                        .chars()
-                        .filter(|c| is_cjk_char(*c) || c.is_whitespace())
-                        .collect();
-                    let cjk_only = cjk_only.trim();
-                    if !cjk_only.is_empty() {
-                        debug!("Extracted CJK from []: '{}'", cjk_only);
-                        return Some(cjk_only.to_string());
-                    }
-                }
-                debug!("Extracted from [] brackets: '{}'", extracted);
-                return Some(extracted.to_string());
-            }
-        }
-    }
-
-    None
-}
-
-fn apply_cleanup_patterns(text: &str) -> String {
-    let original = text.trim();
-    let mut best = original.to_string();
-    let mut best_reduction = 0usize;
-
-    for re in CLEANUP_PATTERNS.iter() {
-        let candidate = re.replace_all(original, "").trim().to_string();
-        if candidate.len() <= 1 || !candidate.chars().any(|c| c.is_alphanumeric()) {
-            continue;
-        }
-
-        let reduction = original.len().saturating_sub(candidate.len());
-        if reduction > best_reduction {
-            best_reduction = reduction;
-            best = candidate;
-        }
-    }
-
-    best
-}
-
-fn handle_separator_patterns(text: &str) -> String {
-    let mut cleaned = text.to_string();
-    let lower = cleaned.to_lowercase();
-
-    // For "/" separators - keep first part only for known tag-like suffixes
-    if cleaned.contains(" / ") && !lower.contains("feat") && !lower.contains("ft.") {
-        if let Some(slash_pos) = cleaned.find(" / ") {
-            let open_paren = cleaned[..slash_pos].rfind('(');
-            let close_paren = cleaned[slash_pos + 3..].find(')');
-            if open_paren.is_none() || close_paren.is_none() {
-                let parts: Vec<&str> = cleaned.split(" / ").collect();
-                if parts.len() == 2 {
-                    let first = parts[0].trim();
-                    let second = parts[1].trim();
-                    let second_lower = second.to_lowercase();
-                    let is_year_suffix =
-                        second.len() == 4 && second.chars().all(|c| c.is_ascii_digit());
-                    let is_tag_suffix = second_lower.contains("first take");
-                    let is_feat_suffix = second_lower.contains("feat") || second_lower.contains("ft.");
-                    let is_compact_suffix = !second.contains(' ') && second.chars().count() <= 6;
-                    let is_official_suffix =
-                        second_lower.contains("official") && contains_cjk(first) && contains_cjk(second);
-                    let is_cover_suffix = second_lower.contains("歌ってみた");
-                    let is_cjk_pair = contains_cjk(first) && contains_cjk(second);
-                    if (is_year_suffix
-                        || is_tag_suffix
-                        || is_feat_suffix
-                        || is_compact_suffix
-                        || is_official_suffix
-                        || is_cover_suffix
-                        || is_cjk_pair)
-                        && !first.is_empty()
-                        && first.len() > 2
-                    {
-                        debug!("Extracted track before /: '{}'", first);
-                        cleaned = first.to_string();
-                    }
-                }
-            }
-        }
-    }
-
-    // Handle separators: "-", "·", "×"
-    let split = split_by_separator(&cleaned).or_else(|| {
-        RE_LOOSE_DASH_SEPARATOR.captures(&cleaned).map(|captures| {
-            let first = captures.get(1).map(|m| m.as_str().trim()).unwrap_or("");
-            let second = captures.get(2).map(|m| m.as_str().trim()).unwrap_or("");
-            (first, second)
+/// Lowercase words, with fullwidth ASCII folded and punctuation dropped:
+/// "ＤＡＯＫＯ", "Daoko" and "daoko!" are all "daoko".
+pub fn normalize_name(s: &str) -> String {
+    let folded: String = s
+        .chars()
+        .map(|c| match c as u32 {
+            0xff01..=0xff5e => char::from_u32(c as u32 - 0xfee0).unwrap_or(c),
+            _ => c,
         })
-    });
+        .flat_map(char::to_lowercase)
+        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+        .collect();
+    SPACES.replace_all(folded.trim(), " ").into_owned()
+}
 
-    if let Some((first, second)) = split {
-        let first_lower = first.to_lowercase();
-        let second_lower = second.to_lowercase();
+/// Whether a title part names the artist: equal, or one holds the other
+/// ("Tsumiki feat. KAFU" / "Tsumiki", "ヨルシカ" / "ヨルシカ / n-buna Official").
+fn names_artist(part: &str, artist: &str) -> bool {
+    let (p, a) = (normalize_name(part).replace(' ', ""), normalize_name(artist).replace(' ', ""));
+    let long_enough = |s: &str| s.chars().count() >= 2;
+    !p.is_empty() && !a.is_empty() && (p == a || (long_enough(&a) && p.contains(&a)) || (long_enough(&p) && a.contains(&p)))
+}
 
-        let is_featuring = first_lower.contains("feat") || first_lower.contains("ft.");
-        let second_is_lyrics = second_lower.contains("lyrics");
-        let second_is_junk = second_lower.contains("youtube") || second_lower.contains("cover by");
-        let prefer_first_for_lyrics = second_is_lyrics && first.len() <= 20;
-        let prefer_first = contains_cjk(first)
-            && !contains_cjk(second)
-            && is_mostly_ascii(second)
-            && second.len() >= 12
-            && !second.contains(' ');
+fn first_group<'a>(c: &regex::Captures<'a>) -> &'a str {
+    c.iter().skip(1).flatten().next().map_or("", |m| m.as_str()).trim()
+}
 
-        cleaned = if is_featuring && !second.is_empty() && !second_is_junk {
-            debug!("Feat pattern: keeping '{}'", second);
-            second.to_string()
-        } else if prefer_first {
-            debug!("Separator: keeping first part '{}'", first);
-            first.to_string()
-        } else if prefer_first_for_lyrics {
-            debug!("Separator: keeping first part '{}'", first);
-            first.to_string()
-        } else if !second.is_empty() && !second_is_junk {
-            debug!("Separator: keeping second part '{}'", second);
-            second.to_string()
-        } else if !first.is_empty() && first.len() > 1 {
-            debug!("Separator: keeping first part '{}'", first);
-            first.to_string()
-        } else {
-            cleaned
+fn drop_noise_brackets(s: &str) -> String {
+    BRACKETS
+        .replace_all(s, |c: &regex::Captures| {
+            if NOISE.is_match(first_group(c)) { " ".to_string() } else { c[0].to_string() }
+        })
+        .trim()
+        .to_string()
+}
+
+/// "魏如萱【晚安晚安】 Official Music Video": a bracket between the artist and
+/// the packaging holds the title.
+fn title_in_brackets(s: &str) -> Option<String> {
+    BRACKETS.captures_iter(s).find_map(|c| {
+        let m = c.get(0)?;
+        let (before, after) = (s[..m.start()].trim(), s[m.end()..].trim());
+        let boxed = !m.as_str().starts_with('(');
+        (boxed && !before.is_empty() && !after.is_empty() && TAIL.replace(&format!(" {after}"), "").trim().is_empty())
+            .then(|| first_group(&c).to_string())
+    })
+}
+
+/// A leading 【tag】 or a trailing 【singer】 / [credit] is not the title.
+fn drop_tag_brackets(s: &str) -> String {
+    let mut s = s.to_string();
+    while let Some(m) = BRACKETS.find(&s).filter(|m| m.start() == 0 && !m.as_str().starts_with('(')) {
+        s = s[m.end()..].trim().to_string();
+    }
+    if let Some(m) = BRACKETS.find_iter(&s).last().filter(|m| m.end() == s.len() && m.start() > 0 && !m.as_str().starts_with('(')) {
+        s = s[..m.start()].trim().to_string();
+    }
+    s
+}
+
+/// "Title | album | track 1", "Title // Official Music Video": the rest is description.
+fn cut_description(s: &str) -> &str {
+    let end = ["|", "∣", " // "]
+        .iter()
+        .filter_map(|sep| split_outside_brackets(s, sep, |_, _| true))
+        .map(|(first, _)| first.len())
+        .min();
+    end.map_or(s, |n| s[..n].trim_end_matches(['-', '–', '—', ' ']))
+}
+
+/// "Artist - Title" -> "Title". With an artist, only a part naming it goes.
+/// Without one, three or more parts are "Title - Artist - extra".
+fn drop_artist<'a>(s: &'a str, artist: &str) -> &'a str {
+    let dash = |prev: Option<char>, next: Option<char>| {
+        next.is_some_and(char::is_whitespace) || prev.is_some_and(is_cjk) || next.is_some_and(is_cjk)
+    };
+    let split = [" - ", " – ", " — ", " · ", " × ", " • ", " _ "]
+        .iter()
+        .find_map(|sep| split_outside_brackets(s, sep, |_, _| true).map(|p| (p, *sep)))
+        .or_else(|| ["-", "–", "—"].iter().find_map(|sep| split_outside_brackets(s, sep, dash).map(|p| (p, *sep))));
+    let Some(((first, second), sep)) = split else {
+        return s;
+    };
+    if !artist.trim().is_empty() {
+        return match (names_artist(first, artist), names_artist(second, artist)) {
+            (true, _) => second,
+            (_, true) => first,
+            _ => s,
         };
     }
-
-    cleaned
+    if split_outside_brackets(second, sep, |_, _| true).is_some() {
+        return first;
+    }
+    // "私じゃなかったんだね。 - Watashijyanakattandane.": a romanization, not a title.
+    let romaji = second.len() >= 12 && !second.contains(' ') && second.is_ascii();
+    if romaji && first.chars().any(is_cjk) {
+        first
+    } else {
+        second
+    }
 }
 
-fn handle_special_cases(text: &str, original: &str) -> String {
-    let mut cleaned = text.to_string();
-
-    // Handle "Artist-Track【...】" pattern
-    if let Some(captures) = RE_ARTIST_TRACK_BRACKET.captures(original) {
-        if let Some(track_part) = captures.get(2) {
-            let candidate = track_part.as_str().trim();
-            if !candidate.is_empty() && candidate.len() > 2 {
-                debug!("Extracted from Artist-Track【】: '{}'", candidate);
-                cleaned = candidate.to_string();
-            }
-        }
-    }
-
-    // Remove video parentheses
-    let result = RE_VIDEO_PARENS.replace_all(&cleaned, "").trim().to_string();
-    if !result.is_empty() && result.len() > 1 {
-        cleaned = result;
-    }
-
-    // Remove Japanese brackets
-    let result = RE_JAPANESE_BRACKETS.replace_all(&cleaned, "").trim().to_string();
-    if !result.is_empty() && result.len() > 1 {
-        cleaned = result;
-    }
-
-    // Handle pipe separators
-    if cleaned.contains(" | ") {
-        let parts: Vec<&str> = cleaned.split(" | ").collect();
-        if parts.len() > 1 {
-            let first = parts[0].trim();
-            if !first.is_empty() && first.len() > 2 {
-                cleaned = first.to_string();
-            }
-        }
-    }
-
-    // Remove quotes around entire string
-    if cleaned.len() > 2 {
-        if (cleaned.starts_with('"') && cleaned.ends_with('"'))
-            || (cleaned.starts_with('\'') && cleaned.ends_with('\''))
-            || (cleaned.starts_with('「') && cleaned.ends_with('」'))
-        {
-            cleaned = cleaned[1..cleaned.len() - 1].to_string();
-        }
-    }
-
-    // Normalize whitespace
-    cleaned = cleaned.replace('（', "(").replace('）', ")");
-    cleaned = RE_WHITESPACE.replace_all(&cleaned, " ").trim().to_string();
-
-    cleaned
-}
-
-fn final_cleanup(text: &str, original: &str) -> String {
-    let mut cleaned = text.to_string();
-
-    // Handle Japanese full-width slash
-    if cleaned.contains("／") {
-        let parts: Vec<&str> = cleaned.split("／").collect();
-        if parts.len() == 2 {
-            let first = parts[0].trim();
-            let second = parts[1].trim();
-            let second_lower = second.to_lowercase();
-            let is_tag_suffix = second_lower.contains("first take");
-            let is_feat_suffix = second_lower.contains("feat") || second_lower.contains("ft.");
-            let is_compact_suffix = !second.contains(' ') && second.chars().count() <= 6;
-            let is_cover_suffix = second_lower.contains("歌ってみた") || second_lower.contains("cover");
-            let has_spaced_slash = cleaned.contains(" ／ ");
-            let both_cjk = contains_cjk(first) && contains_cjk(second);
-            if !(both_cjk && !has_spaced_slash && !is_cover_suffix) {
-                if (has_spaced_slash
-                    || is_tag_suffix
-                    || is_feat_suffix
-                    || is_cover_suffix
-                    || (is_compact_suffix && !both_cjk))
-                    && !first.is_empty()
-                    && first.len() > 2
-                {
-                    cleaned = first.to_string();
-                }
-            }
-        }
-    }
-
-    if let Some((first, second)) = cleaned.split_once('／') {
-        let second_lower = second.to_lowercase();
-        let has_digits = second.chars().any(|c| c.is_ascii_digit());
-        if (second_lower.contains("feat") || second_lower.contains("ft."))
-            && (has_digits || !contains_cjk(second))
-            && !first.trim().is_empty()
-        {
-            cleaned = first.trim().to_string();
-        }
-    }
-
-    if let Some((first, second)) = cleaned.split_once(" / ") {
-        if contains_cjk(first) && contains_cjk(second) {
-            cleaned = first.trim().to_string();
-        }
-    }
-
-    if original.contains("歌ってみた") {
-        if let Some((first, _second)) = cleaned.split_once('／') {
-            if !first.trim().is_empty() {
-                cleaned = first.trim().to_string();
-            }
-        }
-    }
-
-    // Handle remaining full-width parentheses for obvious video tags
-    if cleaned.contains('（') {
-        let lower = cleaned.to_lowercase();
-        if lower.contains("video") || lower.contains("mv") || lower.contains("official") {
-            let result = RE_FULLWIDTH_PARENS.replace_all(&cleaned, "").trim().to_string();
-            if !result.is_empty() && result.len() > 3 {
-                cleaned = result;
-            }
-        }
-    }
-
-    // Handle dot separators
-    if cleaned.contains(" · ") && !cleaned.contains(" - ") {
-        let parts: Vec<&str> = cleaned.split(" · ").collect();
-        if parts.len() >= 2 {
-            if let Some(last) = parts.last() {
-                let last = last.trim();
-                if !last.is_empty() && last.len() < 50 {
-                    cleaned = last.to_string();
-                }
-            }
-        }
-    }
-
-    // Handle ft. suffix
-    let result = RE_FT_SUFFIX.replace_all(&cleaned, "").trim().to_string();
-    if !result.is_empty() && result.len() > 1 {
-        cleaned = result;
-    }
-
-    // Handle feat. suffix
-    let result = RE_FEAT_SUFFIX.replace_all(&cleaned, "").trim().to_string();
-    if !result.is_empty() && result.len() > 1 {
-        cleaned = result;
-    }
-
-    // Remove feat/ft when it appears before parentheses
-    let result = RE_FT_FEAT_BEFORE_PARENS
-        .replace_all(&cleaned, " (")
-        .trim()
-        .to_string();
-    if !result.is_empty() && result.len() > 1 {
-        cleaned = result;
-    }
-
-    // Remove Official Video suffix
-    let result = RE_OFFICIAL_VIDEO.replace_all(&cleaned, "").trim().to_string();
-    if !result.is_empty() && result.len() > 1 {
-        cleaned = result;
-    }
-
-    // Remove feat/ft parentheses unless it looks intentional in the title
-    let mut keep_feat = false;
-    if let Some(captures) = RE_FEAT_PARENS_CAPTURE.captures(&cleaned) {
-        if let Some(feat_text) = captures.get(1) {
-            let feat_text = feat_text.as_str();
-            if feat_text.contains('.') {
-                keep_feat = true;
-            }
-            if feat_text.contains('&') && contains_cjk(&cleaned) {
-                keep_feat = true;
-            }
-        }
-    }
-    if original.to_lowercase().contains("[official video]") {
-        keep_feat = true;
-    }
-    if !keep_feat {
-        let result = RE_FEAT_PARENS.replace_all(&cleaned, "").trim().to_string();
-        if !result.is_empty() && result.len() > 1 {
-            cleaned = result;
-        }
-    }
-
-    // Remove trailing lyrics tags after separators
-    let result = RE_LYRICS_SUFFIX.replace_all(&cleaned, "").trim().to_string();
-    if !result.is_empty() && result.len() > 1 {
-        cleaned = result;
-    }
-
-    let lower = cleaned.to_lowercase();
-    if lower.ends_with(" cover") && !lower.ends_with("japanese cover") {
-        cleaned = cleaned[..cleaned.len() - 6].trim().to_string();
-    }
-
-    let result = RE_BRACKET_TAGS.replace_all(&cleaned, "").trim().to_string();
-    if !result.is_empty() && result.len() > 1 {
-        cleaned = result;
-    }
-
-    if original.to_lowercase().contains("lyrics") {
-        if let Some((first, _second)) = original.split_once(" - ") {
-            if first.chars().count() <= 20 {
-                cleaned = first.trim().to_string();
-            }
-        }
-    }
-
-    let original_lower = original.to_lowercase();
-
-    if original_lower.contains("english sub") && contains_cjk(&cleaned) {
-        let cjk_only: String = cleaned
-            .chars()
-            .filter(|c| is_cjk_char(*c) || c.is_whitespace())
-            .collect();
-        if !cjk_only.trim().is_empty() {
-            cleaned = cjk_only.trim().to_string();
-        }
-    }
-
-    // Remove trailing ASCII translation when official tags were present
-    if original_lower.contains("official") && contains_cjk(&cleaned) {
-        if let Some((left, right)) = cleaned.rsplit_once(' ') {
-            if right.chars().all(|c| c.is_ascii_alphabetic()) {
-                cleaned = left.trim().to_string();
-            }
-        }
-    }
-
-    if original_lower.contains("歌ってみた") && cleaned.ends_with('を') {
-        cleaned = cleaned.trim_end_matches('を').trim().to_string();
-    }
-
-    if original_lower.contains("arrange") {
-        if let Some((first, _second)) = original.split_once('-') {
-            cleaned = first.trim().to_string();
-        }
-        cleaned = RE_FULLWIDTH_PARENS.replace_all(&cleaned, "").trim().to_string();
-        cleaned = RE_ASCII_PARENS.replace_all(&cleaned, "").trim().to_string();
-    }
-
-    // Normalize quoted title with suffix into title + (suffix)
-    let normalize_quoted = |title: &str, suffix: &str| -> Option<String> {
-        let suffix_text = suffix.trim();
-        if suffix_text.is_empty() {
-            return None;
-        }
-        if suffix_text.starts_with('(') || suffix_text.starts_with('[') {
-            return Some(format!("{} {}", title.trim(), suffix_text));
-        }
-        Some(format!("{} ({})", title.trim(), suffix_text))
+/// "夜明けと蛍 / ナブナ", "Title／cover Singer": keep what precedes a credit.
+/// "Television / So Far So Good" and "ハロ／ハワユ" are titles and stay.
+fn drop_slash_credit(s: &str) -> String {
+    let split = [" / ", "／"].iter().find_map(|sep| split_outside_brackets(s, sep, |_, _| true));
+    let Some((first, second)) = split else {
+        return s.to_string();
     };
-
-    if let Some(captures) = RE_QUOTED_TITLE_WITH_SUFFIX.captures(&cleaned) {
-        if let (Some(title), Some(suffix)) = (captures.get(1), captures.get(2)) {
-            if let Some(normalized) = normalize_quoted(title.as_str(), suffix.as_str()) {
-                cleaned = normalized;
-            }
-        }
+    let lower = second.to_lowercase();
+    if lower.ends_with(" cover") && !lower.starts_with("cover") {
+        // "STAY / Japanese Cover" is a version of the song.
+        return format!("{first} ({second})");
     }
-
-    if let Some(captures) = RE_DOUBLE_QUOTED_TITLE_WITH_SUFFIX.captures(&cleaned) {
-        if let (Some(title), Some(suffix)) = (captures.get(1), captures.get(2)) {
-            if let Some(normalized) = normalize_quoted(title.as_str(), suffix.as_str()) {
-                cleaned = normalized;
-            }
-        }
+    let spaced = s.contains(" / ") || s.contains(" ／ ");
+    let cjk_pair = first.chars().any(is_cjk) && second.chars().any(is_cjk);
+    if SLASH_CREDIT.is_match(second) || (spaced && cjk_pair) {
+        first.to_string()
+    } else {
+        s.to_string()
     }
-
-    // Handle multi-dash cases
-    if cleaned.contains(" - ") && cleaned.split(" - ").count() > 2 {
-        let parts: Vec<&str> = cleaned.split(" - ").collect();
-        if parts.len() >= 3 {
-            let first = parts[0].trim();
-            if !first.is_empty() && first.len() > 2 && first.len() < 50 {
-                cleaned = first.to_string();
-            }
-        }
-    }
-
-    // Handle Japanese cover suffix
-    if cleaned.contains("/ Japanese Cover") {
-        cleaned = cleaned.replace("/ Japanese Cover", " (Japanese Cover)");
-    }
-
-    // Last attempt for Artist - Track
-    if cleaned == original && cleaned.contains(" - ") {
-        let parts: Vec<&str> = cleaned.split(" - ").collect();
-        if parts.len() == 2 {
-            let track = parts[1].trim();
-            if !track.is_empty() {
-                cleaned = track.to_string();
-            }
-        }
-    }
-
-    // Handle (Full Album)
-    if original.contains("(Full Album) -") {
-        if let Some(captures) = RE_FULL_ALBUM.captures(original) {
-            if let Some(artist) = captures.get(1) {
-                cleaned = format!("{} (Full Album)", artist.as_str().trim());
-            }
-        }
-    }
-
-    cleaned = cleaned.trim_start_matches('「').trim_end_matches('」').trim().to_string();
-    cleaned = cleaned.replace('（', "(").replace('）', ")");
-    if let Some(pos) = cleaned.find('(') {
-        if pos > 0 && !cleaned[..pos].ends_with(' ') {
-            cleaned = format!("{} {}", &cleaned[..pos], &cleaned[pos..]);
-        }
-    }
-    cleaned = RE_WHITESPACE.replace_all(&cleaned, " ").trim().to_string();
-
-    cleaned
 }
 
-/// Remove artist name from track title if present
-pub fn remove_artist_from_track(track_name: &str, artist_name: &str) -> String {
-    if artist_name.trim().is_empty() {
-        return track_name.to_string();
-    }
+/// First split at `sep` outside brackets with text on both sides, where
+/// `ok(char before, char after)` accepts the position.
+fn split_outside_brackets<'a>(
+    s: &'a str,
+    sep: &str,
+    ok: impl Fn(Option<char>, Option<char>) -> bool,
+) -> Option<(&'a str, &'a str)> {
+    s.match_indices(sep)
+        .filter(|&(i, _)| bracket_depth(&s[..i]) == 0)
+        .filter(|&(i, _)| ok(s[..i].chars().next_back(), s[i + sep.len()..].chars().next()))
+        .map(|(i, _)| (s[..i].trim(), s[i + sep.len()..].trim()))
+        .find(|(a, b)| !a.is_empty() && !b.is_empty())
+}
 
-    let escaped = regex::escape(artist_name);
-    let mut result = track_name.to_string();
+fn bracket_depth(prefix: &str) -> usize {
+    prefix.chars().fold(0, |depth, c| match c {
+        '(' | '[' | '【' | '「' | '『' | '《' => depth + 1,
+        ')' | ']' | '】' | '」' | '』' | '》' => depth.saturating_sub(1),
+        _ => depth,
+    })
+}
 
-    // Build patterns with escaped artist name
-    let patterns = [
-        format!(r"(?i)^{}\s*[-–—]\s*", escaped),
-        format!(r"(?i)\s*[-–—]\s*{}$", escaped),
-    ];
+fn is_cjk(c: char) -> bool {
+    matches!(c as u32, 0x3040..=0x30ff | 0x3400..=0x4dbf | 0x4e00..=0x9fff | 0xac00..=0xd7af)
+}
 
-    for pattern in &patterns {
-        if let Ok(re) = Regex::new(pattern) {
-            let new_result = re.replace_all(&result, "").trim().to_string();
-            if new_result.len() < result.len() && !new_result.is_empty() {
-                result = new_result;
-                debug!("Removed artist '{}', result: '{}'", artist_name, result);
+/// Unwrap quotes ("'Title' Remix" -> "Title (Remix)"), one space before "(".
+fn tidy(s: &str) -> String {
+    let s = s.trim_matches(['「', '」']).trim();
+    let s = match QUOTED_ASCII.captures(s) {
+        Some(c) => {
+            let (title, rest) = (first_group(&c), c[3].trim());
+            match rest {
+                "" => title.to_string(),
+                r if r.starts_with(['(', '[']) => format!("{title} {r}"),
+                r => format!("{title} ({r})"),
             }
         }
-    }
-
-    result
+        None => s.to_string(),
+    };
+    let s = s.replace('(', " (").replace("( ", "(");
+    SPACES.replace_all(&s, " ").replace(" )", ")").trim().to_string()
 }

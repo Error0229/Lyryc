@@ -2,10 +2,8 @@
 
 use log::{debug, info, warn};
 
-use super::providers::{try_gemini_alignment, try_github_alignment};
-use super::types::{
-    LyricLine, MismatchResolution, MismatchType, TranslatedLyricLine, TranslationConfig,
-};
+use super::types::{LyricLine, MismatchResolution, MismatchType, TranslatedLyricLine};
+use crate::llm::{self, ChatRequest, Target};
 
 /// Classify the type of line count mismatch
 pub fn classify_mismatch(translated_count: usize, original_count: usize) -> MismatchType {
@@ -21,7 +19,7 @@ pub async fn resolve_line_count_mismatch(
     translated_lines: &[&str],
     original_lyrics: &[LyricLine],
     detected_language: &str,
-    config: Option<&TranslationConfig>,
+    target: Option<&Target>,
 ) -> Result<(Vec<TranslatedLyricLine>, bool), String> {
     let mismatch_type = classify_mismatch(translated_lines.len(), original_lyrics.len());
 
@@ -33,9 +31,9 @@ pub async fn resolve_line_count_mismatch(
     );
 
     // Strategy 1: LLM-based alignment resolution
-    if let Some(config) = config {
+    if let Some(target) = target {
         if let Ok((resolved_lines, is_same)) =
-            resolve_alignment_with_llm(translated_lines, original_lyrics, detected_language, config)
+            resolve_alignment_with_llm(translated_lines, original_lyrics, detected_language, target)
                 .await
         {
             info!("LLM-based alignment resolution successful");
@@ -264,7 +262,7 @@ async fn resolve_alignment_with_llm(
     translated_lines: &[&str],
     original_lyrics: &[LyricLine],
     detected_language: &str,
-    config: &TranslationConfig,
+    target: &Target,
 ) -> Result<(Vec<TranslatedLyricLine>, bool), String> {
     info!(
         "Attempting LLM-based alignment resolution for {} -> {} line mismatch",
@@ -275,26 +273,24 @@ async fn resolve_alignment_with_llm(
     let original_text: Vec<String> = original_lyrics.iter().map(|l| l.text.clone()).collect();
     let alignment_prompt = super::prompt::build_alignment_prompt(&original_text, translated_lines);
 
-    let alignment_result = match config.provider.as_str() {
-        "gemini" => {
-            if let Some(api_key) = &config.gemini_api_key {
-                try_gemini_alignment(&alignment_prompt, api_key).await
-            } else if let Ok(env_key) = std::env::var("GEMINI_API_KEY") {
-                try_gemini_alignment(&alignment_prompt, &env_key).await
-            } else {
-                Err("No Gemini API key available".to_string())
-            }
-        }
-        "github" | _ => {
-            if let Some(api_key) = &config.github_api_key {
-                try_github_alignment(&alignment_prompt, api_key).await
-            } else if let Ok(env_key) = std::env::var("GITHUB_TOKEN") {
-                try_github_alignment(&alignment_prompt, &env_key).await
-            } else {
-                Err("No GitHub token available".to_string())
-            }
-        }
-    };
+    let alignment_result = llm::complete(
+        target,
+        &ChatRequest {
+            system: None,
+            user: &alignment_prompt,
+            temperature: Some(0.1),
+            max_tokens: 4096,
+            json: false,
+        },
+    )
+    .await
+    .map(|text| {
+        text.lines()
+            .map(|line| line.trim().to_string())
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+    })
+    .map_err(String::from);
 
     match alignment_result {
         Ok(corrected_lines) => {

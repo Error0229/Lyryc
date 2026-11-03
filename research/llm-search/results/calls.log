@@ -1,0 +1,9 @@
+2026-11-02 smoke: gemini-3.5-flash-lite search on case 1 -> 429 quota (2 HTTP incl. retry); search off case 1 -> ok (1)
+2026-11-02 diag: gemini-2.5-flash-lite search case 1 -> 404 retired (1); models list GET (0 gen); raw grounding probe 3.5-flash-lite (1)
+2026-11-02 diag: raw grounding probe gemini-2.5-flash (1)
+2026-11-02 diag: raw grounding probe gemini-3.8-flash (1)
+2026-11-02 B search=off gemini-3.5-flash-lite: 23 ok, 4 x 429 RPM (8 HTTP incl. retries)
+2026-11-02 A search=on case 1 gemini-3.5-flash-lite after >2 min idle (1)
+2026-11-02 A search=off gemini-3.5-flash-lite: 28 calls
+2026-11-02 B search=off gemini-3.5-flash-lite: rerun cases 25-28 with 5 s gap (4)
+TOTAL generateContent requests: 71 = 56 answered + 13 x 429 (incl. the transport's automatic retry) + 2 x 404. Billed: 0 (free-tier key); at paid list prices about USD 0.09.

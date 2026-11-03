@@ -7,13 +7,18 @@ use tokio::sync::Mutex;
 mod cleaning;
 mod commands;
 mod furigana;
+mod llm;
 mod lyrics;
 mod lyrics_cache;
+mod prealign;
+mod sources;
+mod timing;
 mod translation;
 mod types;
 mod websocket;
 mod websocket_commands;
 mod window_management;
+mod ytmusic;
 
 // Import types and functions from modules
 use commands::{
@@ -21,7 +26,12 @@ use commands::{
     get_supported_languages, set_current_track, translate_lyrics_command,
 };
 use furigana::generate_furigana_command;
-use lyrics::{fetch_lrclib_raw, fetch_lyrics};
+use llm::commands::{
+    llm_get_settings, llm_import_legacy_keys, llm_list_models, llm_list_presets, llm_remove_provider,
+    llm_set_route, llm_test, llm_upsert_provider,
+};
+use lyrics::{fetch_lrclib_raw, fetch_lyrics, fetch_lyrics_timed, lookahead_configure, mark_instrumental};
+use prealign::{prealign_configure, prealign_remove_files, prealign_status};
 use types::{ClickThroughState, TrackState, WebSocketState};
 use websocket_commands::{
     control_playback, debug_websocket_server, get_websocket_clients_count, get_websocket_status,
@@ -40,15 +50,20 @@ pub fn run() {
     }
 
     // Initialize logger
-    env_logger::Builder::from_default_env()
-        .filter_level(log::LevelFilter::Debug)
-        .init();
+    // RUST_LOG overrides. tao's event-loop warnings are upstream noise.
+    env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("info,lyryc_lib=debug,tao=error"),
+    )
+    .init();
 
     info!("Starting Lyryc application...");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            app.manage(llm::store::init(app.path().app_config_dir().ok()));
+            prealign::init(app.handle());
+
             #[cfg(desktop)]
             {
                 use tauri_plugin_global_shortcut::{
@@ -163,6 +178,9 @@ pub fn run() {
             translate_lyrics_command,
             get_supported_languages,
             fetch_lyrics,
+            fetch_lyrics_timed,
+            lookahead_configure,
+            mark_instrumental,
             fetch_lrclib_raw,
             init_extension_connection,
             get_websocket_status,
@@ -179,7 +197,18 @@ pub fn run() {
             toggle_window_visibility,
             quit_app,
             enable_drag_mode,
-            generate_furigana_command
+            generate_furigana_command,
+            llm_list_presets,
+            llm_get_settings,
+            llm_upsert_provider,
+            llm_remove_provider,
+            llm_set_route,
+            llm_list_models,
+            llm_test,
+            llm_import_legacy_keys,
+            prealign_configure,
+            prealign_status,
+            prealign_remove_files
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

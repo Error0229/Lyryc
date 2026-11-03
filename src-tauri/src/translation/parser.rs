@@ -5,14 +5,15 @@ use std::collections::{HashMap, HashSet};
 
 use super::alignment::resolve_line_count_mismatch;
 use super::prompt::TRANSLATION_SEPARATOR;
-use super::types::{LyricLine, TranslatedLyricLine, TranslationConfig};
+use super::types::{LyricLine, TranslatedLyricLine};
+use crate::llm::Target;
 
 /// Parse translation response and align with original lyrics
 pub async fn parse_translation_response(
     response_text: &str,
     original_lyrics: &[LyricLine],
     detected_language: &str,
-    config: Option<&TranslationConfig>,
+    target: Option<&Target>,
 ) -> Result<(Vec<TranslatedLyricLine>, bool), String> {
     let response_text = response_text.trim();
 
@@ -44,7 +45,7 @@ pub async fn parse_translation_response(
         &cleaned_response,
         original_lyrics,
         detected_language,
-        config,
+        target,
     )
     .await
 }
@@ -174,7 +175,7 @@ async fn parse_legacy_format(
     cleaned_response: &[&str],
     original_lyrics: &[LyricLine],
     detected_language: &str,
-    config: Option<&TranslationConfig>,
+    target: Option<&Target>,
 ) -> Result<(Vec<TranslatedLyricLine>, bool), String> {
     // Handle line count mismatch
     if cleaned_response.len() != original_lyrics.len() {
@@ -188,7 +189,7 @@ async fn parse_legacy_format(
             cleaned_response,
             original_lyrics,
             detected_language,
-            config,
+            target,
         )
         .await;
     }
