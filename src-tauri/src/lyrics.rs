@@ -1,7 +1,8 @@
 //! Lyrics lookup: a short, sequential conversation with LRCLIB, then the
 //! opt-in extra sources, then one LLM-assisted retry.
 //!
-//! 1. Cache.
+//! 1. Cache, then YouTube Music's own lyrics when the track plays there and
+//!    extra sources are on (`from_ytmusic`).
 //! 2. `/api/get` with the player's title, then with the regex-cleaned title.
 //! 3. One structured `/api/search` for the cleaned title; one full-text `q=`
 //!    search only if nothing so far found the song.
@@ -15,9 +16,10 @@
 use crate::cleaning::{clean_title, normalize_name, Names};
 use crate::llm;
 use crate::lyrics_cache::{cache_lyrics, cache_no_lyrics, get_cached_lyrics, CacheResult};
-use crate::sources::{self, Found, Provider};
+use crate::sources::{self, align, Found, Provider};
 use crate::timing;
 use crate::types::LyricLine;
+use crate::ytmusic::{self, YtLyrics};
 use anyhow::Result;
 use log::{debug, info, warn};
 use regex::Regex;
@@ -385,6 +387,10 @@ pub enum TimingSource {
     Qq,
     Netease,
     Kugou,
+    /// YouTube Music's own timed lyrics.
+    Ytmusic,
+    /// YouTube Music's plain lyrics spread over the track by syllables.
+    YtmusicEstimate,
 }
 
 impl TimingSource {
@@ -396,6 +402,8 @@ impl TimingSource {
             TimingSource::Qq => "qq",
             TimingSource::Netease => "netease",
             TimingSource::Kugou => "kugou",
+            TimingSource::Ytmusic => "ytmusic",
+            TimingSource::YtmusicEstimate => "ytmusic-estimate",
         }
     }
 
@@ -405,6 +413,7 @@ impl TimingSource {
             Some("qq") => TimingSource::Qq,
             Some("netease") => TimingSource::Netease,
             Some("kugou") => TimingSource::Kugou,
+            Some("ytmusic") => TimingSource::Ytmusic,
             _ => TimingSource::Lrclib,
         }
     }
@@ -447,12 +456,14 @@ struct Request {
     artist: String,
     /// Player length in seconds, if plausible.
     duration: Option<f64>,
+    /// The YouTube Music track being played, if that is the player.
+    video_id: Option<String>,
 }
 
 impl Request {
     fn new(title: String, artist: String, duration: Option<f64>) -> Self {
         let duration = duration.filter(|d| (1.0..=3600.0).contains(d));
-        Self { title, artist, duration }
+        Self { title, artist, duration, video_id: None }
     }
 }
 
@@ -472,6 +483,8 @@ trait Effects: Send + Sync {
     /// The LLM's names for the song; None when it is not set up, failed or is unsure.
     fn names(&self, req: &Request) -> impl Future<Output = Option<Names>> + Send;
     fn sources(&self, q: &sources::Query, plain: Option<&[String]>) -> impl Future<Output = Option<Found>> + Send;
+    /// YouTube Music's lyrics for the track; None when it has none or failed.
+    fn ytmusic(&self, video_id: &str) -> impl Future<Output = Option<YtLyrics>> + Send;
     fn save(&self, artist: &str, track: &str, lines: &[LyricLine], source: TimingSource);
     fn save_none(&self, artist: &str, track: &str);
 }
@@ -509,6 +522,12 @@ impl Effects for Live {
     fn sources(&self, q: &sources::Query, plain: Option<&[String]>) -> impl Future<Output = Option<Found>> + Send {
         sources::find(q, plain)
     }
+    async fn ytmusic(&self, video_id: &str) -> Option<YtLyrics> {
+        ytmusic::lyrics(video_id).await.unwrap_or_else(|e| {
+            warn!("YouTube Music lyrics for {}: {}", video_id, e);
+            None
+        })
+    }
     fn save(&self, artist: &str, track: &str, lines: &[LyricLine], source: TimingSource) {
         cache_lyrics(artist, track, lines, source.as_str());
     }
@@ -539,8 +558,10 @@ pub async fn fetch_lyrics_timed(
     artist_name: String,
     duration: Option<f64>,
     extra_sources: bool,
+    video_id: Option<String>, // YouTube Music's id for the track, if it plays there
 ) -> Result<TimedLyrics, String> {
-    let req = Request::new(track_name, artist_name, duration);
+    let mut req = Request::new(track_name, artist_name, duration);
+    req.video_id = video_id.filter(|id| ytmusic::is_video_id(id));
     let (timed, upgrade) = fetch_timed(&Live, &req, extra_sources).await?;
     if let Some(job) = upgrade {
         tauri::async_runtime::spawn(async move {
@@ -569,6 +590,9 @@ async fn fetch_timed<E: Effects>(
         CacheResult::NegativeHit => true,
         CacheResult::Miss => false,
     };
+    if let Some(answer) = from_ytmusic(fx, req, extra, negative).await {
+        return Ok(answer);
+    }
 
     let started = std::time::Instant::now();
     let mut run = Lookup { fx, req, asked: HashMap::new(), incomplete: false };
@@ -625,6 +649,63 @@ async fn from_sources<E: Effects>(fx: &E, req: &Request, extra: bool) -> Option<
     info!("LRCLIB had nothing for '{}'; {} did", req.title, source.as_str());
     fx.save(&req.artist, &req.title, &found.lines, source);
     Some(TimedLyrics { lines: found.lines, source, pending: false })
+}
+
+/// Share of YouTube Music's lines that must pair with LRCLIB's to borrow its times.
+const MIN_MAPPED: f64 = 0.5;
+
+/// Step 1b: with the setting on and the track playing in YouTube Music, its own
+/// lyrics, before LRCLIB: the exact track, so no wrong-song risk. Timed lines
+/// are the answer. Plain lines stay the text and borrow times from LRCLIB's
+/// synced entry, else are estimated while the extra sources look for timing in
+/// the background. None: carry on as if YouTube Music did not exist.
+async fn from_ytmusic<E: Effects>(
+    fx: &E,
+    req: &Request,
+    extra: bool,
+    negative: bool,
+) -> Option<(TimedLyrics, Option<Upgrade>)> {
+    let yt = fx.ytmusic(req.video_id.as_deref().filter(|_| extra)?).await?;
+    info!("YouTube Music has {} line(s) for '{}' (timed: {}, {:?})", yt.lines.len(), req.title, yt.timed, yt.source);
+    let timed: Option<Vec<(f64, String)>> = yt.lines.iter().map(|(t, s)| t.map(|t| (t, s.clone()))).collect();
+    if let Some(timed) = timed {
+        return Some((save_real(fx, req, timed, TimingSource::Ytmusic), None));
+    }
+
+    let text: Vec<String> = yt.lines.into_iter().map(|(_, s)| s).collect();
+    let mut run = Lookup { fx, req, asked: HashMap::new(), incomplete: false };
+    let synced = if negative { None } else { run.regex_pass().await };
+    if let Some(Lrclib::Synced(synced)) = synced {
+        if let Some(times) = map_onto(&text, &synced, req.duration) {
+            info!("Timed YouTube Music's lines for '{}' with LRCLIB's", req.title);
+            return Some((save_real(fx, req, times, TimingSource::Lrclib), None));
+        }
+    }
+    let estimate = timing::estimate_plain(&text.join("\n"), req.duration.unwrap_or(0.0));
+    let upgrade = req.duration.map(|duration| Upgrade {
+        query: sources::Query { track: clean_title(&req.title, &req.artist), artist: req.artist.clone(), duration },
+        plain: text,
+    });
+    let pending = upgrade.is_some();
+    Some((TimedLyrics { lines: estimate, source: TimingSource::YtmusicEstimate, pending }, upgrade))
+}
+
+/// LRCLIB's times on `text`, if at least `MIN_MAPPED` of its lines pair up.
+fn map_onto(text: &[String], synced: &[LyricLine], duration: Option<f64>) -> Option<Vec<(f64, String)>> {
+    let src: Vec<(f64, String)> = synced.iter().map(|l| (l.time, l.text.clone())).collect();
+    let mapped = align::map_lines(text, &src);
+    if (mapped.iter().flatten().count() as f64) < MIN_MAPPED * text.len() as f64 {
+        return None;
+    }
+    let end = duration.unwrap_or(0.0).max(src.last()?.0 + LAST_LINE_SECS);
+    Some(align::interpolate(&mapped, end).into_iter().zip(text.iter().cloned()).collect())
+}
+
+/// Real timing as the answer, cached.
+fn save_real<E: Effects>(fx: &E, req: &Request, timed: Vec<(f64, String)>, source: TimingSource) -> TimedLyrics {
+    let lines = with_durations(timed.into_iter().map(|(time, text)| LyricLine { time, text, duration: None }).collect());
+    fx.save(&req.artist, &req.title, &lines, source);
+    TimedLyrics { lines, source, pending: false }
 }
 
 /// Look up LRCLIB's spelling of the song, for the length being played.
@@ -702,12 +783,19 @@ pub fn parse_lrc_format(lrc_content: &str) -> Vec<LyricLine> {
         .collect();
 
     lyrics.sort_by(|a, b| a.time.total_cmp(&b.time));
+    with_durations(lyrics)
+}
+
+/// What the last line of a lyric list is given.
+const LAST_LINE_SECS: f64 = 3.0;
+
+/// Each line lasts until the next starts; the last gets `LAST_LINE_SECS`.
+fn with_durations(mut lyrics: Vec<LyricLine>) -> Vec<LyricLine> {
     for i in 0..lyrics.len().saturating_sub(1) {
         lyrics[i].duration = Some(lyrics[i + 1].time - lyrics[i].time);
     }
-    // The last line gets 3 seconds.
     if let Some(last) = lyrics.last_mut() {
-        last.duration = Some(3.0);
+        last.duration = Some(LAST_LINE_SECS);
     }
     lyrics
 }
@@ -776,6 +864,8 @@ mod tests {
         calls: Mutex<Vec<Option<usize>>>,
         saved: Mutex<Vec<TimingSource>>,
         saved_none: Mutex<u32>,
+        yt: Option<YtLyrics>,
+        yt_calls: Mutex<u32>,
     }
 
     impl Fake {
@@ -824,6 +914,11 @@ mod tests {
             self.calls.lock().unwrap().push(plain.map(<[String]>::len));
             let answer = self.answer.clone();
             async move { answer }
+        }
+        fn ytmusic(&self, _video_id: &str) -> impl Future<Output = Option<YtLyrics>> + Send {
+            *self.yt_calls.lock().unwrap() += 1;
+            let yt = self.yt.clone();
+            async move { yt }
         }
         fn save(&self, _artist: &str, _track: &str, _lines: &[LyricLine], source: TimingSource) {
             self.saved.lock().unwrap().push(source);
@@ -1029,6 +1124,85 @@ mod tests {
         assert!(fx.saved().is_empty());
     }
 
+    /// YouTube Music's answer: lines with times when `timed`.
+    fn yt(texts: &[&str], timed: bool) -> YtLyrics {
+        let lines = texts.iter().enumerate().map(|(i, t)| (timed.then_some(5.0 * (i + 1) as f64), t.to_string())).collect();
+        YtLyrics { lines, timed, source: Some("Source: Test".into()) }
+    }
+
+    fn on_ytmusic(fx: Fake, lyrics: YtLyrics) -> (Fake, Request) {
+        let mut req = req();
+        req.video_id = Some("abcDEF12_-x".into());
+        (Fake { yt: Some(lyrics), ..fx }, req)
+    }
+
+    #[tokio::test]
+    async fn ytmusic_timed_lyrics_answer_before_lrclib() {
+        let (fx, req) = on_ytmusic(Fake::answering(Provider::Qq), yt(&["one", "two", "three"], true));
+        let (timed, upgrade) = fetch_timed(&fx, &req, true).await.unwrap();
+        assert_eq!((timed.source, timed.pending), (TimingSource::Ytmusic, false));
+        assert!(upgrade.is_none());
+        let got: Vec<(f64, Option<f64>)> = timed.lines.iter().map(|l| (l.time, l.duration)).collect();
+        assert_eq!(got, vec![(5.0, Some(5.0)), (10.0, Some(5.0)), (15.0, Some(3.0))]);
+        assert!(fx.urls().is_empty(), "no LRCLIB request");
+        assert!(fx.calls().is_empty());
+        assert_eq!(fx.saved(), vec![TimingSource::Ytmusic]);
+    }
+
+    #[tokio::test]
+    async fn ytmusic_plain_lines_take_lrclib_times() {
+        let lines = ["One!", "an extra line", "two", "three"];
+        let fx = Fake::default().rule("/get?", json_reply(record("Koi", "Minori", 265.0, true)));
+        let (fx, req) = on_ytmusic(fx, yt(&lines, false));
+        let (timed, upgrade) = fetch_timed(&fx, &req, true).await.unwrap();
+        assert_eq!((timed.source, timed.pending), (TimingSource::Lrclib, false), "the timing is LRCLIB's");
+        assert!(upgrade.is_none());
+        let got: Vec<(f64, &str)> = timed.lines.iter().map(|l| (l.time, l.text.as_str())).collect();
+        assert_eq!(got, vec![(10.0, "One!"), (15.0, "an extra line"), (20.0, "two"), (30.0, "three")], "YouTube Music's text");
+        assert_eq!(fx.saved(), vec![TimingSource::Lrclib]);
+        assert_eq!(fx.urls().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn ytmusic_plain_lines_without_lrclib_timing_are_estimated_then_upgraded() {
+        // LRCLIB has the song, but its synced text is some other song's.
+        let fx = Fake::answering(Provider::Netease).rule("/get?", json_reply(record("Koi", "Minori", 265.0, true)));
+        let (fx, req) = on_ytmusic(fx, yt(&["alpha line", "beta line", "gamma line", "delta line"], false));
+        let (timed, upgrade) = fetch_timed(&fx, &req, true).await.unwrap();
+        assert_eq!((timed.source, timed.pending, timed.lines.len()), (TimingSource::YtmusicEstimate, true, 4));
+        assert_eq!(timed.lines[0].text, "alpha line");
+        assert!(fx.saved().is_empty(), "estimates are not cached");
+        assert_eq!(fx.saved_none(), 0);
+
+        let update = run_upgrade(&fx, &req, upgrade.unwrap()).await.unwrap();
+        assert_eq!(update.source, TimingSource::Netease);
+        assert_eq!(fx.calls(), vec![Some(4)], "sources get YouTube Music's lines");
+
+        // Without a length there is nothing for the sources to match: no upgrade.
+        let (fx, mut req) = on_ytmusic(Fake::default(), yt(&["alpha line", "beta line"], false));
+        req.duration = None;
+        let (timed, upgrade) = fetch_timed(&fx, &req, true).await.unwrap();
+        assert_eq!((timed.source, timed.pending), (TimingSource::YtmusicEstimate, false));
+        assert!(upgrade.is_none());
+    }
+
+    #[tokio::test]
+    async fn without_ytmusic_lyrics_the_pipeline_is_unchanged() {
+        let exact = || json_reply(record("Koi", "Minori", 265.0, true));
+        let mut req = req();
+        req.video_id = Some("abcDEF12_-x".into());
+        let fx = Fake::default().rule("/get?", exact());
+        let (timed, _) = fetch_timed(&fx, &req, true).await.unwrap();
+        assert_eq!(timed.source, TimingSource::Lrclib);
+        assert_eq!((*fx.yt_calls.lock().unwrap(), fx.urls().len()), (1, 1));
+
+        // Setting off, or no videoId: YouTube Music is never asked.
+        let (fx, req) = on_ytmusic(Fake::default().rule("/get?", exact()), yt(&["one", "two", "three"], true));
+        assert_eq!(fetch_timed(&fx, &req, false).await.unwrap().0.source, TimingSource::Lrclib);
+        assert_eq!(fetch_timed(&fx, &self::req(), true).await.unwrap().0.source, TimingSource::Lrclib);
+        assert_eq!(*fx.yt_calls.lock().unwrap(), 0);
+    }
+
     #[test]
     fn contract_names() {
         let names: Vec<String> = [
@@ -1037,16 +1211,19 @@ mod tests {
             TimingSource::Qq,
             TimingSource::Netease,
             TimingSource::Kugou,
+            TimingSource::Ytmusic,
+            TimingSource::YtmusicEstimate,
         ]
         .iter()
         .map(|s| {
             let json = serde_json::to_value(s).unwrap();
             assert_eq!(json, s.as_str());
-            assert!(*s == TimingSource::LrclibEstimate || TimingSource::from_cache(Some(s.as_str())) == *s);
+            let estimate = matches!(s, TimingSource::LrclibEstimate | TimingSource::YtmusicEstimate);
+            assert!(estimate || TimingSource::from_cache(Some(s.as_str())) == *s);
             s.as_str().to_string()
         })
         .collect();
-        assert_eq!(names, ["lrclib", "lrclib-estimate", "qq", "netease", "kugou"]);
+        assert_eq!(names, ["lrclib", "lrclib-estimate", "qq", "netease", "kugou", "ytmusic", "ytmusic-estimate"]);
         assert_eq!(TimingSource::from_cache(None), TimingSource::Lrclib);
         let timed = TimedLyrics { lines: vec![], source: TimingSource::Qq, pending: true };
         assert_eq!(serde_json::to_value(timed).unwrap(), json!({"lines": [], "source": "qq", "pending": true}));
@@ -1082,6 +1259,9 @@ mod tests {
         }
         fn sources(&self, q: &sources::Query, plain: Option<&[String]>) -> impl Future<Output = Option<Found>> + Send {
             sources::find(q, plain)
+        }
+        async fn ytmusic(&self, _video_id: &str) -> Option<YtLyrics> {
+            None
         }
         fn save(&self, _artist: &str, _track: &str, _lines: &[LyricLine], _source: TimingSource) {}
         fn save_none(&self, _artist: &str, _track: &str) {}

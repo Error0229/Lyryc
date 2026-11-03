@@ -42,6 +42,7 @@ pub async fn init_extension_connection(
                     album: None,
                     duration: track_update.duration.filter(|d| *d > 0.0), // 0 = unknown
                     thumbnail: track_update.thumbnail.clone(),
+                    video_id: crate::ytmusic::video_id_from_url(&track_update.url),
                 };
                 info!("Track changed: '{}' by '{}'", track_info.title, track_info.artist);
                 if let Err(e) = app_handle_clone.emit("track-updated", &track_info) {

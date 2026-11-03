@@ -11,6 +11,9 @@ pub struct TrackInfo {
     pub album: Option<String>,
     pub duration: Option<f64>,
     pub thumbnail: Option<String>,
+    /// YouTube Music's id for the track, when it plays there.
+    #[serde(rename = "videoId", default)]
+    pub video_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

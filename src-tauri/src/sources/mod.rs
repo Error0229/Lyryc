@@ -11,7 +11,7 @@
 //! and either >= 50% of the known lines text-matched or, with no known text, a
 //! matching title.
 
-mod align;
+pub(crate) mod align;
 mod breaker;
 mod kugou;
 mod netease;
