@@ -33,6 +33,8 @@ log = "0.4"
 env_logger = "0.11"
 dotenv = "0.15"
 autoruby = { version = "0.5.1", features = ["integrated"] }
+base64 = "0.22"
+flate2 = "1"
 
 [dev-dependencies]
 csv = "1"
