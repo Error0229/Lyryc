@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use super::dialect::{self, HttpCall, OpenAiOpts};
 use super::presets::Dialect;
-use super::{ChatRequest, LlmError, Target};
+use super::{ChatRequest, Completion, LlmError, Target, Tools};
 
 /// Longest server-requested wait we sit through before giving up.
 const MAX_RETRY_WAIT: Duration = Duration::from_secs(20);
@@ -152,22 +152,47 @@ async fn send_with_retry(ctx: &Ctx<'_>, build: impl Fn() -> HttpCall) -> Result<
 
 /// Run one chat completion against `target`.
 pub async fn complete(target: &Target, req: &ChatRequest<'_>) -> Result<String, LlmError> {
+    complete_with(target, req, Tools::default())
+        .await
+        .map(|c| c.text)
+}
+
+/// [`complete`] with the provider's web search and/or a JSON schema.
+pub async fn complete_with(
+    target: &Target,
+    req: &ChatRequest<'_>,
+    tools: Tools<'_>,
+) -> Result<Completion, LlmError> {
     let ctx = Ctx(target);
     ctx.check_key()?;
+    if tools.web_search && target.preset.web_search.is_none() {
+        return Err(ctx.err(
+            None,
+            format!(
+                "{} has no built-in web search (supported: OpenAI, xAI, OpenRouter, Anthropic, Gemini)",
+                target.preset.name
+            ),
+        ));
+    }
     let mut opts = OpenAiOpts::default();
     loop {
         debug!("LLM request to {} ({})", target.label, target.model);
-        let reply = send_with_retry(&ctx, || dialect::chat_call(target, req, opts)).await?;
+        let reply = send_with_retry(&ctx, || dialect::call(target, req, tools, opts)).await?;
         if (200..300).contains(&reply.status) {
             let body: Value = serde_json::from_str(&reply.body)
                 .map_err(|e| ctx.err(Some(reply.status), format!("invalid JSON reply: {e}")))?;
-            return dialect::parse_chat(target.preset.dialect, &body)
+            return dialect::parse_completion(target, tools, &body)
                 .map_err(|m| ctx.err(Some(reply.status), m));
         }
+        let error = dialect::parse_error(&reply.body);
         let relaxed = match (target.preset.dialect, reply.status) {
-            (Dialect::Openai, 400 | 422) => opts.relax(&dialect::parse_error(&reply.body)),
+            (Dialect::Openai, 400 | 422) => opts.relax(&error),
             _ => None,
-        };
+        }
+        .or_else(|| match reply.status {
+            400 | 422 if tools.web_search || tools.schema.is_some() => opts.relax_schema(&error),
+            _ => None,
+        });
         match relaxed {
             Some(next) => {
                 debug!(
@@ -289,6 +314,32 @@ mod tests {
         };
         let e = complete(&t, &req).await.unwrap_err();
         assert!(e.to_string().contains("no API key"));
+    }
+
+    #[tokio::test]
+    async fn search_on_a_provider_without_one_fails_before_network() {
+        let p = super::super::presets::find("groq").unwrap();
+        let t = Target {
+            label: "Groq".into(),
+            preset: p,
+            base_url: p.base_url.into(),
+            api_key: Some("k".into()),
+            model: "llama".into(),
+        };
+        let req = ChatRequest {
+            system: None,
+            user: "hi",
+            temperature: None,
+            max_tokens: 8,
+            json: false,
+        };
+        let tools = Tools {
+            web_search: true,
+            schema: None,
+        };
+        let e = complete_with(&t, &req, tools).await.unwrap_err();
+        assert!(e.to_string().contains("no built-in web search"), "{e}");
+        assert!(e.status.is_none());
     }
 
     #[tokio::test]

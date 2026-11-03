@@ -17,6 +17,18 @@ pub enum Dialect {
     Gemini,
 }
 
+/// How a preset exposes its provider's built-in web search tool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WebSearch {
+    /// Responses API (`POST {base}/responses`) with `tools: [{type: "web_search"}]`.
+    /// OpenAI and xAI; Chat Completions has no search tool on either.
+    Responses,
+    /// OpenRouter's `openrouter:web_search` server tool on Chat Completions.
+    OpenRouter,
+    /// The dialect's own tool: Anthropic `web_search_20250305`, Gemini `google_search`.
+    Native,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Preset {
@@ -31,6 +43,9 @@ pub struct Preset {
     /// Models endpoint when it does not live at `{base}/models`.
     #[serde(skip)]
     pub models_url: Option<&'static str>,
+    /// Built-in web search, if the provider has one (see `WebSearch`).
+    #[serde(skip)]
+    pub web_search: Option<WebSearch>,
 }
 
 impl Preset {
@@ -58,6 +73,7 @@ pub static PRESETS: &[Preset] = &[
         key_url: Some("https://platform.openai.com/api-keys"),
         suggested_models: &["gpt-6.1-terra", "gpt-6-luna", "gpt-6.1-sol"],
         models_url: None,
+        web_search: Some(WebSearch::Responses),
     },
     Preset {
         id: "anthropic",
@@ -68,6 +84,7 @@ pub static PRESETS: &[Preset] = &[
         key_url: Some("https://console.anthropic.com/settings/keys"),
         suggested_models: &["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"],
         models_url: None,
+        web_search: Some(WebSearch::Native),
     },
     Preset {
         id: GEMINI,
@@ -82,6 +99,7 @@ pub static PRESETS: &[Preset] = &[
             "gemini-2.5-flash-lite",
         ],
         models_url: None,
+        web_search: Some(WebSearch::Native),
     },
     Preset {
         id: "openrouter",
@@ -92,6 +110,7 @@ pub static PRESETS: &[Preset] = &[
         key_url: Some("https://openrouter.ai/keys"),
         suggested_models: &[],
         models_url: None,
+        web_search: Some(WebSearch::OpenRouter),
     },
     Preset {
         id: "groq",
@@ -107,6 +126,7 @@ pub static PRESETS: &[Preset] = &[
             "llama-3.1-8b-instant",
         ],
         models_url: None,
+        web_search: None,
     },
     Preset {
         id: "deepseek",
@@ -117,6 +137,7 @@ pub static PRESETS: &[Preset] = &[
         key_url: Some("https://platform.deepseek.com/api_keys"),
         suggested_models: &["deepseek-flash", "deepseek-v4-pro"],
         models_url: None,
+        web_search: None,
     },
     Preset {
         id: "mistral",
@@ -127,6 +148,7 @@ pub static PRESETS: &[Preset] = &[
         key_url: Some("https://console.mistral.ai/api-keys"),
         suggested_models: &["mistral-small-2603", "mistral-medium-latest"],
         models_url: None,
+        web_search: None,
     },
     Preset {
         id: "xai",
@@ -137,6 +159,7 @@ pub static PRESETS: &[Preset] = &[
         key_url: Some("https://console.x.ai"),
         suggested_models: &["grok-4.3", "grok-4.7"],
         models_url: None,
+        web_search: Some(WebSearch::Responses),
     },
     // GitHub retired GitHub Models on 2026-07-30. Kept so legacy keys still
     // import and existing routes fail with a readable error instead of vanishing.
@@ -153,6 +176,7 @@ pub static PRESETS: &[Preset] = &[
             "openai/gpt-4o-mini",
         ],
         models_url: Some("https://models.github.ai/catalog/models"),
+        web_search: None,
     },
     Preset {
         id: "ollama",
@@ -163,6 +187,7 @@ pub static PRESETS: &[Preset] = &[
         key_url: None,
         suggested_models: &["gpt-oss:20b", "qwen3:8b"],
         models_url: None,
+        web_search: None,
     },
     Preset {
         id: "lmstudio",
@@ -173,6 +198,7 @@ pub static PRESETS: &[Preset] = &[
         key_url: None,
         suggested_models: &[],
         models_url: None,
+        web_search: None,
     },
     Preset {
         id: CUSTOM,
@@ -183,6 +209,7 @@ pub static PRESETS: &[Preset] = &[
         key_url: None,
         suggested_models: &[],
         models_url: None,
+        web_search: None,
     },
 ];
 
@@ -232,6 +259,21 @@ mod tests {
     fn local_presets_need_no_key() {
         assert!(!find("ollama").unwrap().key_required);
         assert!(!find("lmstudio").unwrap().key_required);
+    }
+
+    #[test]
+    fn web_search_only_where_documented() {
+        let with: Vec<_> = PRESETS
+            .iter()
+            .filter(|p| p.web_search.is_some())
+            .map(|p| p.id)
+            .collect();
+        assert_eq!(with, ["openai", "anthropic", GEMINI, "openrouter", "xai"]);
+        assert_eq!(find("xai").unwrap().web_search, Some(WebSearch::Responses));
+        assert!(serde_json::to_value(find("openai").unwrap())
+            .unwrap()
+            .get("webSearch")
+            .is_none());
     }
 
     #[test]
