@@ -92,6 +92,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cases_reported_by_the_llm_search_study() {
+        // Each of these defeated the old cleaner.
+        assert_eq!(clean_title("Shinunoga E-Wa", "Fujii Kaze"), "Shinunoga E-Wa");
+        assert_eq!(clean_title("雪国 - Snow Country", "Yorushika"), "雪国 - Snow Country");
+        assert_eq!(clean_title("夜に駆ける［Official Video］", "YOASOBI"), "夜に駆ける");
+        assert_eq!(clean_title("IU(아이유) _ Blueming(블루밍)", "IU"), "Blueming (블루밍)");
+    }
+
+    #[test]
     fn validates_cleaning_against_csv_fixture() {
         let base_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let path = base_dir

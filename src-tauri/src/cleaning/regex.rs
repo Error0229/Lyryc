@@ -44,7 +44,11 @@ pub fn clean_track_name_sync(title: &str) -> String {
 /// separator splits off only a part that names the artist; otherwise the
 /// title stays whole ("雪国 - Snow Country" by Yorushika).
 pub fn clean_title(title: &str, artist: &str) -> String {
-    let s = title.replace('（', " (").replace('）', ") ");
+    let s = title
+        .replace('（', " (")
+        .replace('）', ") ")
+        .replace('［', " [")
+        .replace('］', "] ");
     let s = drop_noise_brackets(&SPACES.replace_all(&s, " "));
     let s = match title_in_brackets(&s) {
         Some(t) => t,
@@ -138,7 +142,7 @@ fn drop_artist<'a>(s: &'a str, artist: &str) -> &'a str {
     let dash = |prev: Option<char>, next: Option<char>| {
         next.is_some_and(char::is_whitespace) || prev.is_some_and(is_cjk) || next.is_some_and(is_cjk)
     };
-    let split = [" - ", " – ", " — ", " · ", " × ", " • "]
+    let split = [" - ", " – ", " — ", " · ", " × ", " • ", " _ "]
         .iter()
         .find_map(|sep| split_outside_brackets(s, sep, |_, _| true).map(|p| (p, *sep)))
         .or_else(|| ["-", "–", "—"].iter().find_map(|sep| split_outside_brackets(s, sep, dash).map(|p| (p, *sep))));
