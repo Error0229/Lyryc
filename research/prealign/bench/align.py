@@ -88,15 +88,22 @@ class Model:
         with torch.inference_mode():
             return self.net(x).logits
 
-    def emissions(self, wav, chunk_s=30):
-        """Log-probs [1, T, V+1]; the extra column is the <star> wildcard (log p = 0)."""
-        out = []
-        for s in range(0, wav.shape[1], chunk_s * SR):
-            x = wav[:, s:s + chunk_s * SR]
+    def emissions(self, wav, chunk_s=30, ctx_s=0):
+        """Log-probs [1, T, V+1]; the extra column is the <star> wildcard (log p = 0).
+
+        ctx_s > 0 feeds each chunk with ctx_s of audio on both sides and keeps only the
+        chunk's own frames, so no word is cut at a chunk edge (wav2vec2 frames are 320 samples).
+        """
+        out, n, hop = [], wav.shape[1], chunk_s * SR
+        for s in range(0, n, hop):
+            a, e = max(0, s - ctx_s * SR), min(n, s + hop)
+            x = wav[:, a:min(n, e + ctx_s * SR)]
             if x.shape[1] < 400:
                 break
             x = (x - x.mean()) / (x.std() + 1e-7)
-            out.append(torch.log_softmax(self.logits(x), dim=-1))
+            em = torch.log_softmax(self.logits(x), dim=-1)
+            lo = (s - a) // 320
+            out.append(em[:, lo:] if e == n else em[:, lo:lo + (e - s) // 320])
         em = torch.cat(out, dim=1)
         return torch.cat([em, torch.zeros(1, em.shape[1], 1)], dim=-1)
 
@@ -150,10 +157,10 @@ def fill(words):
         nxt = w["start"] if w["start"] is not None else nxt
 
 
-def run(model, wav, lines, lang, chunk_s=30):
+def run(model, wav, lines, lang, chunk_s=30, ctx_s=0):
     """wav: float32 tensor [1, N] at 16 kHz. Returns (lines, emission_s, viterbi_s)."""
     t0 = time.perf_counter()
-    em = model.emissions(wav, chunk_s)
+    em = model.emissions(wav, chunk_s, ctx_s)
     t1 = time.perf_counter()
     out = align(em, model.dictionary, lines, lang, wav.shape[1] / em.shape[1] / SR)
     return out, t1 - t0, time.perf_counter() - t1

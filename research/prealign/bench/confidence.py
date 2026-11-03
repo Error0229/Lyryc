@@ -12,9 +12,9 @@ Track features: median line conf, share of lines with conf below the line thresh
 Prints precision / recall of "reject" for a sweep of thresholds, and the accuracy of
 what is kept. Usage: uv run python -X utf8 bench/confidence.py fp32
 """
-import json, pathlib, statistics, sys
+import difflib, json, pathlib, statistics, sys
 from evaluate import load, usable
-from score import compare, stream
+from score import stream
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 ORDER = ["qq", "kugou", "netease", "lrclib"]
@@ -34,29 +34,29 @@ def rows(name):
                 break
         else:
             continue
-        # Map each reference line's error onto the prediction line that holds its first char.
-        c = compare(r, p["lines"])
-        b = stream(p["lines"])
-        a = stream(r)
-        import difflib
-        sm = difflib.SequenceMatcher(None, [x[0] for x in a], [x[0] for x in b], autojunk=False)
-        m = {i + k: j + k for i, j, n in sm.get_matching_blocks() for k in range(n)}
-        first = {}
-        for i, x in enumerate(a):
-            if x[4] and i in m:
-                first[x[2]] = b[m[i]][2]
-        line_err = {}
-        for e, li in c["line"]:
-            if li in first:
-                line_err[first[li]] = e
+        line_err = per_pred_line(r, p["lines"])
+        # Cross-check: disagreement with LRCLIB's line starts (minus their median offset).
+        lrc = usable(refs[str(t["id"])].get("lrclib"), t, fetch, word_level=False) if src != "lrclib" else None
+        dis = per_pred_line(lrc, p["lines"]) if lrc else {}
+        if dis:
+            off = statistics.median(dis.values())
+            dis = {k: abs(v - off) for k, v in dis.items()}
         for pi, l in enumerate(p["lines"]):
             if pi not in line_err or l["start"] is None:
                 continue
             ntok = sum(len(w["text"]) for w in l["words"])
             span = max(0.02, (l["end"] or l["start"]) - l["start"])
             out.append({"track": t["id"], "lang": t["lang"], "conf": l["conf"], "cps": ntok / span,
-                        "err": abs(line_err[pi]), "src": src})
+                        "err": abs(line_err[pi]), "src": src, "lrc_dis": dis.get(pi)})
     return out
+
+
+def per_pred_line(r, pred_lines):
+    """{prediction line index: signed onset error of the reference line starting in it}."""
+    a, b = stream(r), stream(pred_lines)
+    sm = difflib.SequenceMatcher(None, [x[0] for x in a], [x[0] for x in b], autojunk=False)
+    m = {i + k: j + k for i, j, n in sm.get_matching_blocks() for k in range(n)}
+    return {b[m[i]][2]: b[m[i]][1] - x[1] for i, x in enumerate(a) if x[4] and i in m}
 
 
 def sweep(xs, key, bad, ths, lower_is_bad=True):

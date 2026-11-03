@@ -3,6 +3,7 @@
   uv run python -X utf8 bench/evaluate.py torch_t8_c30            # prediction vs every reference
   uv run python -X utf8 bench/evaluate.py --refs                  # reference vs reference (noise floor)
   uv run python -X utf8 bench/evaluate.py torch_t8_c30 --tracks   # per-track line / word medians
+  uv run python -X utf8 bench/evaluate.py torch_t8_c30 --offset   # minus each (track, ref) median line offset
 
 Writes results/score_<name>.json (numbers only, no lyric text).
 Reference roles: qq / kugou / netease-yrc are word-timed (QRC, KRC, YRC); lrclib is line-only.
@@ -57,7 +58,13 @@ def table(title, res, kind):
                       f"{s['le03']:.0%} | {s['le05']:.0%} | {s['le10']:.0%} |")
 
 
-def score_pred(name, per_track):
+def centre(c):
+    """Remove one constant per (track, ref): the reference's lead-in convention, not aligner error."""
+    off = statistics.median([e for e, _ in c["line"]]) if c["line"] else 0
+    return {**c, "line": [(e - off, li) for e, li in c["line"]], "word": [(e - off, li) for e, li in c["word"]]}
+
+
+def score_pred(name, per_track, offset=False):
     tracks, refs, fetch = load()
     preds = json.loads((ROOT / f"data/pred/{name}.json").read_text(encoding="utf-8"))
     res, tr = {}, {}
@@ -69,6 +76,7 @@ def score_pred(name, per_track):
             if not p or not r:
                 continue
             c = compare(r, p["lines"])
+            c = centre(c) if offset else c
             rows.append((t["lang"], "line", [e for e, _ in c["line"]]))
             if ref != "lrclib":
                 rows.append((t["lang"], "word", [e for e, _ in c["word"]]))
@@ -86,7 +94,7 @@ def score_pred(name, per_track):
     return res, tr
 
 
-def score_refs():
+def score_refs(offset=False):
     """Every ordered pair of word-timed references on the same track: how much do they disagree?"""
     tracks, refs, fetch = load()
     res = {}
@@ -103,6 +111,7 @@ def score_refs():
                 c = compare(ra, rb)
                 if c["matched"] < 0.5:
                     continue
+                c = centre(c) if offset else c
                 rows.append((t["lang"], "line", [e for e, _ in c["line"]]))
                 if "lrclib" not in (a, b):
                     rows.append((t["lang"], "word", [e for e, _ in c["word"]]))
@@ -115,11 +124,13 @@ def main():
     ap.add_argument("name", nargs="?")
     ap.add_argument("--refs", action="store_true")
     ap.add_argument("--tracks", action="store_true")
+    ap.add_argument("--offset", action="store_true")
     a = ap.parse_args()
     if a.refs:
-        res, name, tr = score_refs(), "refs", None
+        res, name, tr = score_refs(a.offset), "refs", None
     else:
-        (res, tr), name = score_pred(a.name, a.tracks), a.name
+        (res, tr), name = score_pred(a.name, a.tracks, a.offset), a.name
+    name += "_offset" if a.offset else ""
     table(name, res, "line")
     table(name, res, "word")
     (ROOT / f"results/score_{name}.json").write_text(json.dumps({"pooled": res, "per_track": tr}, indent=1), encoding="utf-8")
