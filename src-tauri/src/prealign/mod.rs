@@ -96,6 +96,8 @@ struct Shared {
     waiters: HashMap<String, Waiter>,
     downloading: Option<DownloadProgress>,
     download_running: bool,
+    /// The download, so removing the files can stop it first.
+    download_task: Option<tauri::async_runtime::JoinHandle<()>>,
     error: Option<String>,
     working_on: Option<String>,
     aligned: u32,
@@ -470,7 +472,7 @@ fn start_download() {
         s.downloading = Some(DownloadProgress { file: "model", done: 0, total: None });
     }
     emit_status();
-    tauri::async_runtime::spawn(async move {
+    let task = tauri::async_runtime::spawn(async move {
         let last = Mutex::new(std::time::Instant::now());
         let result = assets::ensure(&paths, |p| {
             shared().downloading = Some(DownloadProgress { file: p.file, done: p.done, total: p.total });
@@ -493,6 +495,7 @@ fn start_download() {
         emit_status();
         P.wake.notify_one();
     });
+    shared().download_task = Some(task);
 }
 
 /// The overlay mirrors the user's settings here on start and on every change.
@@ -533,6 +536,15 @@ pub fn prealign_status() -> Status {
 pub async fn prealign_remove_files() -> Result<Status, String> {
     prealign_configure(false, P.extra_sources.load(Ordering::Relaxed));
     let paths = P.paths.get().cloned().ok_or("no data dir")?;
+    // A download still running writes into the folder about to go.
+    let download = shared().download_task.take();
+    if let Some(task) = download {
+        task.abort();
+        let _ = task.await;
+        let mut s = shared();
+        s.download_running = false;
+        s.downloading = None;
+    }
     // The worker lets go of the model as soon as it sees the cancel.
     let mut result = Ok(());
     for _ in 0..20 {

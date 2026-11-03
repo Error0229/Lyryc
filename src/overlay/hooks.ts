@@ -107,7 +107,12 @@ export function useTranslations() {
           remember(key, map);
           if (live) useSession.setState({ translations: map });
         })
-        .catch((e) => live && reportLlmError(e, "Translation"));
+        .catch((e) => {
+          if (!live) return;
+          // What is showing was made for other prefs (another target language).
+          useSession.setState({ translations: {} });
+          reportLlmError(e, "Translation");
+        });
     }, delay);
     return () => {
       live = false;
