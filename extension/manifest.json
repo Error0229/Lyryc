@@ -3,6 +3,7 @@
   "name": "Lyryc Music Detector",
   "version": "0.1.0",
   "description": "Detects currently playing music from multiple streaming platforms",
+  "minimum_chrome_version": "111",
   
   "permissions": [
     "activeTab",
@@ -37,6 +38,14 @@
         "*://music.youtube.com/*"
       ],
       "js": ["youtube-detector.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "*://music.youtube.com/*"
+      ],
+      "js": ["youtube-queue.js"],
+      "world": "MAIN",
       "run_at": "document_idle"
     },
     {

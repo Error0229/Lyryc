@@ -4,8 +4,10 @@
 // navigator.mediaSession, which survives layout redesigns. The artist comes from
 // mediaSession first. Playback state and time come from the <video> element.
 //
-// Output (unchanged): TRACK_DETECTED / TRACK_PAUSED / TRACK_STOPPED /
-// TRACK_PROGRESS messages to background.js.
+// Output: TRACK_DETECTED / TRACK_PAUSED / TRACK_STOPPED / TRACK_PROGRESS
+// messages to background.js, plus UPCOMING_TRACKS relayed from the queue
+// reader (youtube-queue.js, MAIN world): {current, position, upNext[≤3], ad},
+// each entry {videoId, title, artist, length, type}.
 
 const SOURCE = "youtube-music";
 const TICK_MS = 250;
@@ -83,6 +85,13 @@ function tick() {
 }
 
 const timer = setInterval(tick, TICK_MS);
+
+// --- Up next (for the app's opt-in pre-aligner) -----------------------------
+
+window.addEventListener("message", (e) => {
+  if (e.source !== window || e.origin !== location.origin || e.data?.source !== "lyryc-queue") return;
+  send("UPCOMING_TRACKS", e.data.state);
+});
 
 // --- Playback commands from the desktop app --------------------------------
 
