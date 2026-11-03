@@ -15,6 +15,8 @@
 pub mod align;
 mod assets;
 mod audio;
+#[cfg(test)]
+mod bench;
 mod ctc;
 mod model;
 mod queue;
