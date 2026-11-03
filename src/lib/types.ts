@@ -6,6 +6,8 @@ export interface Track {
   album?: string | null;
   duration?: number | null;
   thumbnail?: string | null;
+  /** YouTube Music's id for the track, when it plays there. */
+  videoId?: string | null;
 }
 
 /**
@@ -28,10 +30,17 @@ export interface LyricLine {
 }
 
 /**
- * Where a lyric list's timing came from. `lrclib-estimate` is plain text
- * spread over the track: good for scrolling, never for highlighting.
+ * Where a lyric list's timing came from. `*-estimate` is plain text spread
+ * over the track: good for scrolling, never for highlighting.
  */
-export type LyricsSource = "lrclib" | "lrclib-estimate" | "qq" | "netease" | "kugou";
+export type LyricsSource =
+  | "lrclib"
+  | "lrclib-estimate"
+  | "qq"
+  | "netease"
+  | "kugou"
+  | "ytmusic"
+  | "ytmusic-estimate";
 
 /** `fetch_lyrics_timed` payload. `pending`: a better timing may still arrive. */
 export interface TimedLyrics {

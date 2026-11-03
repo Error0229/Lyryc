@@ -2,7 +2,7 @@
  * Browser-mode backend: a fake player driven by URL params so the UI can be
  * built and screenshotted without Tauri.
  *
- *   ?scenario=idle|playing|translation|furigana|estimate   (default: playing)
+ *   ?scenario=idle|playing|translation|furigana|estimate|ytmusic   (default: playing)
  *   &t=12.5     start at 12.5 s
  *   &paused     freeze the clock (deterministic screenshots)
  *   &retime     5 s in, push re-timed lyrics for the same track
@@ -11,6 +11,7 @@
  *               (also on, after 4 s, when that setting is on)
  *
  * `estimate` serves LRCLIB-style plain lyrics: the right text, guessed timing.
+ * `ytmusic` serves the lyrics as YouTube Music's own timed lyrics.
  */
 import type { Backend, BackendEvents } from "./backend";
 import type { LyricLine, Span } from "../../lib/types";
@@ -104,6 +105,7 @@ export const mockBackend: Backend = {
     await wait(350);
     const found = songs.find((s) => s.track.title === track.title);
     if (!found) throw new Error("No lyrics found");
+    if (mockScenario === "ytmusic") return { lines: found.lines, source: "ytmusic", pending: false };
     if (mockScenario !== "estimate") return { lines: found.lines, source: "lrclib", pending: false };
 
     const pending = extraSources || params.has("upgrade");
