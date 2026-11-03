@@ -13,6 +13,8 @@ mod dialect;
 #[allow(dead_code)]
 pub mod identify;
 pub mod presets;
+#[cfg(test)]
+mod search_experiment;
 pub mod store;
 mod transport;
 
