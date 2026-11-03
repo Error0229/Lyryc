@@ -14,6 +14,7 @@ import { LineView } from "./Line";
 import { lineModel } from "./model";
 import { Stage, useActiveLine, useRetiming } from "./Stage";
 import { stageVars } from "./style";
+import { isEstimate } from "./upgrade";
 
 const HOVER_LINGER_MS = 600;
 
@@ -44,6 +45,22 @@ function statusText(s: Pick<Session, "track" | "status">): { title: string; hint
   if (s.status === "loading") return { title: `Finding lyrics for “${s.track.title}”` };
   if (s.status === "missing") return { title: "No synced lyrics for this track", hint: `${s.track.title} — ${s.track.artist}` };
   return { title: s.track.title, hint: s.track.artist };
+}
+
+/** Estimated timing drives scrolling only; say so, quietly. */
+function EstimatedBadge() {
+  return (
+    <motion.span
+      className="pointer-events-none absolute right-3 bottom-1 text-2xs font-medium text-(--lyric-text) [text-shadow:var(--lyric-shadow)]"
+      title="LRCLIB has no timing for this track; lines advance on a guess"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 0.5 }}
+      exit={{ opacity: 0 }}
+      transition={fade("slow")}
+    >
+      ≈ estimated timing
+    </motion.span>
+  );
 }
 
 function Status({ title, hint, pulse }: { title: string; hint?: string; pulse: boolean }) {
@@ -78,6 +95,9 @@ export function Overlay() {
   const retiming = useRetiming(s.retimedAt);
   const keys = useMemo(() => lineKeys(s.lyrics), [s.lyrics]);
 
+  // Guessed timing must not drive a highlight: show estimated lines plain.
+  const estimated = isEstimate(s.source);
+  const highlight = cfg.wordHighlight && !estimated;
   const translations = cfg.translation.enabled ? s.translations : null;
   const showTranslation = !!translations && Object.keys(translations).length > 0;
   const model = useMemo(
@@ -86,12 +106,12 @@ export function Overlay() {
         lines: s.lyrics,
         keys,
         index,
-        wordHighlight: cfg.wordHighlight,
+        wordHighlight: highlight,
         translations,
         display: cfg.translation.display,
         furigana: furiganaOn ? s.furigana : null,
       }),
-    [s.lyrics, keys, index, cfg.wordHighlight, translations, cfg.translation.display, furiganaOn, s.furigana],
+    [s.lyrics, keys, index, highlight, translations, cfg.translation.display, furiganaOn, s.furigana],
   );
   const vars = useMemo(
     () => stageVars({ lyric: cfg.lyric, translation: cfg.translation, furigana: cfg.furigana, showTranslation }),
@@ -125,7 +145,7 @@ export function Overlay() {
             <LineView
               tokens={model.tokens}
               sub={model.sub}
-              plain={!cfg.wordHighlight}
+              plain={!highlight}
               kana={cfg.furigana.mode === "replace"}
               display={cfg.translation.display}
             />
@@ -134,6 +154,7 @@ export function Overlay() {
           )}
         </Stage>
       </div>
+      <AnimatePresence>{estimated && model && !interactive && <EstimatedBadge />}</AnimatePresence>
       <AnimatePresence>{interactive && <Controls />}</AnimatePresence>
       <Toaster placement="strip" />
     </div>

@@ -27,6 +27,19 @@ export interface LyricLine {
   words?: LyricWord[];
 }
 
+/**
+ * Where a lyric list's timing came from. `lrclib-estimate` is plain text
+ * spread over the track: good for scrolling, never for highlighting.
+ */
+export type LyricsSource = "lrclib" | "lrclib-estimate" | "qq" | "netease" | "kugou";
+
+/** `fetch_lyrics_timed` payload. `pending`: a better timing may still arrive. */
+export interface TimedLyrics {
+  lines: LyricLine[];
+  source: LyricsSource;
+  pending: boolean;
+}
+
 /** A run of text with an optional reading (furigana). */
 export interface Span {
   text: string;

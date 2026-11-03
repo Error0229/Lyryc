@@ -29,7 +29,7 @@ export function useBackendEvents() {
         useSession.setState({ playing: p });
       },
       clickThrough: (on) => useSession.setState({ clickThrough: on }),
-      lyrics: ({ track, lines }) => applyLyrics(track, lines),
+      lyrics: ({ track, lines, source }) => applyLyrics(track, lines, source),
     });
   }, []);
 }

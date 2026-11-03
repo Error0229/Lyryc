@@ -167,6 +167,12 @@ describe("seedFromLegacy", () => {
     expect(seedFromLegacy(kv)).toBe(false);
   });
 
+  it("leaves extra lyric sources off: the old app never asked", () => {
+    const kv = memory({ [LEGACY_CONFIG_KEY]: envelope(v2State) });
+    seedFromLegacy(kv);
+    expect(kv.dump()[SETTINGS_KEY]).toMatchObject({ state: { extraSources: false } });
+  });
+
   it("migrates pre-v2 offsets even without a v2 store", () => {
     const kv = memory({ [LEGACY_OFFSETS_KEY]: envelope({ trackOffsets: { "a - b": 1 }, globalOffset: 0 }, 1) });
     expect(seedFromLegacy(kv)).toBe(true);

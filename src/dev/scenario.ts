@@ -1,7 +1,7 @@
 /**
  * Browser-only setup for building and screenshotting without Tauri. Never runs
  * inside the app. URL params (overlay):
- *   ?scenario=idle|playing|translation|furigana   see services/ipc/mock.ts
+ *   ?scenario=idle|playing|translation|furigana|estimate   see services/ipc/mock.ts
  *   &backdrop=dark|light                          fake desktop behind the strip
  * Settings window:
  *   ?theme=light|dark   &page=<settings page>     &providers (seed the fake LLM)
