@@ -61,7 +61,9 @@ def outcome(rec, case):
         return "miss"
     if case["title"] is None:
         return "wrong"  # nothing is the right answer for a non-song
-    if not (contains(rec["trackName"], case["title"]) and contains(rec["artistName"], case["artist"])):
+    # LRCLIB often files the same recording under a romanized or English name.
+    titles, artists = case["title"] + case.get("alt_title", []), case["artist"] + case.get("alt_artist", [])
+    if not (contains(rec["trackName"], titles) and contains(rec["artistName"], artists)):
         return "wrong"
     return "synced" if rec.get("syncedLyrics") else "instrumental" if rec.get("instrumental") else "plain"
 
@@ -83,11 +85,12 @@ def run_lookups(cases, regex, b_rows):
         d, rt, ra = c["duration"], c["raw_title"], c["raw_artist"]
         cleaned = regex.get(c["id"], rt)
         row = {"id": c["id"], "kind": c["kind"]}
+        found = lambda rec: f"{rec['trackName']} / {rec['artistName']}" if rec else None
         rec, how = lookup([(rt, ra)], d, None)
-        row["raw"] = (outcome(rec, c), how)
+        row["raw"] = (outcome(rec, c), how, found(rec))
         pairs = [(cleaned, ra)] + ([(rt, ra)] if cleaned != rt else [])
         rec, how = lookup(pairs, d, (cleaned, ra))
-        row["app"] = (outcome(rec, c), how)
+        row["app"] = (outcome(rec, c), how, found(rec))
         for b in b_rows:
             if b["id"] != c["id"]:
                 continue
@@ -95,7 +98,7 @@ def run_lookups(cases, regex, b_rows):
             ident = b.get("identity")
             if ident:
                 rec, how = lookup(identity_queries(ident), d, (ident["title_native"], ident["artist_native"]))
-                row[tag] = (outcome(rec, c), how)
+                row[tag] = (outcome(rec, c), how, found(rec))
             else:
                 row[tag] = ("miss" if c["title"] is not None else "miss", "no identity")
         rows.append(row)
@@ -117,7 +120,8 @@ def ident_accuracy(cases, b_rows):
             continue
         s["latency"].append(b["latency_ms"])
         if c["title"] is None:
-            s["details"].append((c["id"], "n/a", reply.get("found"), reply.get("title_native"), reply.get("artist_native")))
+            s["details"].append((c["id"], f"n/a (found={reply.get('found')})", reply.get("confidence"),
+                                 reply.get("title_native"), reply.get("artist_native")))
             continue
         s["n"] += 1
         t = same(reply.get("title_native"), c["title"])

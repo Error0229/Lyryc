@@ -11,6 +11,13 @@
   "artist": [
    "ヨルシカ"
   ],
+  "alt_title": [
+   "Snow Country",
+   "Yukiguni"
+  ],
+  "alt_artist": [
+   "Yorushika"
+  ],
   "duration": 288
  },
  {
@@ -25,6 +32,13 @@
   "artist": [
    "りりあ。"
   ],
+  "alt_title": [
+   "Watashi ja Nakattan da ne."
+  ],
+  "alt_artist": [
+   "Riria.",
+   "Lilia"
+  ],
   "duration": 244
  },
  {
@@ -35,7 +49,9 @@
   "ref_id": null,
   "duration": null,
   "title": null,
-  "artist": null
+  "artist": null,
+  "alt_title": [],
+  "alt_artist": []
  },
  {
   "id": 4,
@@ -49,6 +65,10 @@
   "artist": [
    "Vaundy"
   ],
+  "alt_title": [
+   "Odoriko"
+  ],
+  "alt_artist": [],
   "duration": 229
  },
  {
@@ -63,6 +83,10 @@
   "artist": [
    "Eve"
   ],
+  "alt_title": [
+   "Kaikai Kitan"
+  ],
+  "alt_artist": [],
   "duration": 221
  },
  {
@@ -77,6 +101,12 @@
   "artist": [
    "藤井風",
    "藤井 風"
+  ],
+  "alt_title": [
+   "Shinunoga E-Wa"
+  ],
+  "alt_artist": [
+   "Fujii Kaze"
   ],
   "duration": 191
  },
@@ -93,6 +123,13 @@
    "周杰倫",
    "周杰伦"
   ],
+  "alt_title": [
+   "Qing Tian",
+   "Sunny Day"
+  ],
+  "alt_artist": [
+   "Jay Chou"
+  ],
   "duration": 270
  },
  {
@@ -108,6 +145,10 @@
    "아이유",
    "IU"
   ],
+  "alt_title": [
+   "Through the Night"
+  ],
+  "alt_artist": [],
   "duration": 283
  },
  {
@@ -123,6 +164,10 @@
    "방탄소년단",
    "BTS"
   ],
+  "alt_title": [
+   "Spring Day"
+  ],
+  "alt_artist": [],
   "duration": 274
  },
  {
@@ -136,6 +181,13 @@
   ],
   "artist": [
    "ヨルシカ"
+  ],
+  "alt_title": [
+   "Itte",
+   "Say It"
+  ],
+  "alt_artist": [
+   "Yorushika"
   ],
   "duration": 262
  },
@@ -151,6 +203,10 @@
   "artist": [
    "YOASOBI"
   ],
+  "alt_title": [
+   "Idol"
+  ],
+  "alt_artist": [],
   "duration": 214
  },
  {
@@ -164,6 +220,10 @@
   ],
   "artist": [
    "米津玄師"
+  ],
+  "alt_title": [],
+  "alt_artist": [
+   "Kenshi Yonezu"
   ],
   "duration": 194
  },
@@ -179,6 +239,13 @@
   "artist": [
    "周杰倫",
    "周杰伦"
+  ],
+  "alt_title": [
+   "Dao Xiang",
+   "Rice Field"
+  ],
+  "alt_artist": [
+   "Jay Chou"
   ],
   "duration": 224
  },
@@ -196,6 +263,8 @@
    "아이유",
    "IU"
   ],
+  "alt_title": [],
+  "alt_artist": [],
   "duration": 217
  },
  {
@@ -209,6 +278,10 @@
   ],
   "artist": [
    "Official髭男dism"
+  ],
+  "alt_title": [],
+  "alt_artist": [
+   "Official HIGE DANdism"
   ],
   "duration": 306
  },
@@ -224,6 +297,12 @@
   "artist": [
    "ヨルシカ"
   ],
+  "alt_title": [
+   "Haru"
+  ],
+  "alt_artist": [
+   "Yorushika"
+  ],
   "duration": 271
  },
  {
@@ -237,6 +316,10 @@
   ],
   "artist": [
    "米津玄師"
+  ],
+  "alt_title": [],
+  "alt_artist": [
+   "Kenshi Yonezu"
   ],
   "duration": 256
  },
@@ -252,6 +335,10 @@
   "artist": [
    "Official髭男dism"
   ],
+  "alt_title": [],
+  "alt_artist": [
+   "Official HIGE DANdism"
+  ],
   "duration": 326
  },
  {
@@ -266,6 +353,11 @@
   "artist": [
    "YOASOBI"
   ],
+  "alt_title": [
+   "Yoru ni Kakeru",
+   "Into the Night"
+  ],
+  "alt_artist": [],
   "duration": 261
  },
  {
@@ -280,6 +372,11 @@
   "artist": [
    "YOASOBI"
   ],
+  "alt_title": [
+   "Yoru ni Kakeru",
+   "Into the Night"
+  ],
+  "alt_artist": [],
   "duration": 261
  },
  {
@@ -294,6 +391,8 @@
   "artist": [
    "The Weeknd"
   ],
+  "alt_title": [],
+  "alt_artist": [],
   "duration": 200
  },
  {
@@ -308,6 +407,8 @@
   "artist": [
    "Queen"
   ],
+  "alt_title": [],
+  "alt_artist": [],
   "duration": 354
  },
  {
@@ -321,6 +422,12 @@
   ],
   "artist": [
    "ずっと真夜中でいいのに。"
+  ],
+  "alt_title": [
+   "Mirror Tune"
+  ],
+  "alt_artist": [
+   "ZUTOMAYO"
   ],
   "duration": 254
  },
@@ -337,6 +444,13 @@
    "草東沒有派對",
    "草东没有派对"
   ],
+  "alt_title": [
+   "Shan Hai",
+   "The Mountain and the Sea"
+  ],
+  "alt_artist": [
+   "No Party For Cao Dong"
+  ],
   "duration": 252
  },
  {
@@ -350,6 +464,12 @@
   ],
   "artist": [
    "美波"
+  ],
+  "alt_title": [
+   "Kawaki wo Ameku"
+  ],
+  "alt_artist": [
+   "Minami"
   ],
   "duration": 270
  },
@@ -366,6 +486,10 @@
    "AKMU",
    "악뮤"
   ],
+  "alt_title": [
+   "How can I love the heartbreak, you're the one I love"
+  ],
+  "alt_artist": [],
   "duration": 290
  },
  {
@@ -383,6 +507,8 @@
    "坂本龍一",
    "Ryuichi Sakamoto"
   ],
+  "alt_title": [],
+  "alt_artist": [],
   "duration": 240
  },
  {
@@ -393,6 +519,8 @@
   "ref_id": null,
   "duration": null,
   "title": null,
-  "artist": null
+  "artist": null,
+  "alt_title": [],
+  "alt_artist": []
  }
 ]

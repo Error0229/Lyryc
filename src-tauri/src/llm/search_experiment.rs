@@ -48,7 +48,9 @@ fn dump_regex_clean() {
 #[ignore = "research: live LLM calls on the user's key"]
 async fn identify_cases() {
     let settings = std::env::var("LYRYC_LLM_SETTINGS").map_or_else(
-        |_| PathBuf::from(std::env::var("APPDATA").unwrap()).join("com.lyryc.app/llm-settings.json"),
+        |_| {
+            PathBuf::from(std::env::var("APPDATA").unwrap()).join("com.lyryc.app/llm-settings.json")
+        },
         PathBuf::from,
     );
     let copy = std::env::temp_dir().join("lyryc-llm-search-settings.json");
@@ -71,17 +73,26 @@ async fn identify_cases() {
         .map(|v| v.split(',').filter_map(|i| i.trim().parse().ok()).collect());
     let path = research_dir().join("results/b_identify.jsonl");
     let done = std::fs::read_to_string(&path).unwrap_or_default();
-    let seen: Vec<Value> = done.lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
+    let seen: Vec<Value> = done
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
     for case in cases() {
-        if ids.as_ref().is_some_and(|ids| !ids.contains(&case["id"].as_u64().unwrap())) {
+        if ids
+            .as_ref()
+            .is_some_and(|ids| !ids.contains(&case["id"].as_u64().unwrap()))
+        {
             continue;
         }
         for &search in modes {
             let key = (&case["id"], search, target.model.as_str());
-            if seen
-                .iter()
-                .any(|r| (&r["id"], r["search"] == true, r["model"].as_str().unwrap_or("")) == key)
-            {
+            if seen.iter().any(|r| {
+                (
+                    &r["id"],
+                    r["search"] == true,
+                    r["model"].as_str().unwrap_or(""),
+                ) == key
+            }) {
                 continue;
             }
             let user = prompt(

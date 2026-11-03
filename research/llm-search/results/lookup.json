@@ -1,0 +1,1326 @@
+{
+ "lookups": [
+  {
+   "id": 1,
+   "kind": "bilingual",
+   "raw": [
+    "miss",
+    null,
+    null
+   ],
+   "app": [
+    "miss",
+    null,
+    null
+   ],
+   "B_nosearch_gemini-3.5-flash-lite": [
+    "synced",
+    "get 雪国 / ヨルシカ",
+    "雪国 / ヨルシカ"
+   ]
+  },
+  {
+   "id": 2,
+   "kind": "yt-video",
+   "raw": [
+    "miss",
+    null,
+    null
+   ],
+   "app": [
+    "miss",
+    null,
+    null
+   ],
+   "B_nosearch_gemini-3.5-flash-lite": [
+    "miss",
+    null,
+    null
+   ]
+  },
+  {
+   "id": 3,
+   "kind": "unverified",
+   "raw": [
+    "miss",
+    null,
+    null
+   ],
+   "app": [
+    "miss",
+    null,
+    null
+   ],
+   "B_nosearch_gemini-3.5-flash-lite": [
+    "miss",
+    null,
+    null
+   ]
+  },
+  {
+   "id": 4,
+   "kind": "romanized",
+   "raw": [
+    "synced",
+    "get Odoriko / Vaundy",
+    "odoriko / VAUNDY"
+   ],
+   "app": [
+    "synced",
+    "get Odoriko / Vaundy",
+    "odoriko / VAUNDY"
+   ],
+   "B_nosearch_gemini-3.5-flash-lite": [
+    "synced",
+    "get 踊り子 / Vaundy",
+    "踊り子 / Vaundy"
+   ]
+  },
+  {
+   "id": 5,
+   "kind": "romanized",
+   "raw": [
+    "synced",
+    "get Kaikai Kitan / Eve",
+    "Kaikai Kitan / Eve"
+   ],
+   "app": [
+    "synced",
+    "get Kaikai Kitan / Eve",
+    "Kaikai Kitan / Eve"
+   ],
+   "B_nosearch_gemini-3.5-flash-lite": [
+    "synced",
+    "get Kaikai Kitan / Eve",
+    "Kaikai Kitan / Eve"
+   ]
+  },
+  {
+   "id": 6,
+   "kind": "romanized",
+   "raw": [
+    "synced",
+    "get Shinunoga E-Wa / Fujii Kaze",
+    "Shinunoga E-Wa / Fujii Kaze"
+   ],
+   "app": [
+    "synced",
+    "get Shinunoga E-Wa / Fujii Kaze",
+    "Shinunoga E-Wa / Fujii Kaze"
+   ],
+   "B_nosearch_gemini-3.5-flash-lite": [
+    "synced",
+    "get 死ぬのがいいわ / 藤井風",
+    "死ぬのがいいわ / 藤井風"
+   ]
+  },
+  {
+   "id": 7,
+   "kind": "romanized",
+   "raw": [
+    "miss",
+    null,
+    null
+   ],
+   "app": [
+    "miss",
+    null,
+    null
+   ],
+   "B_nosearch_gemini-3.5-flash-lite": [
+    "synced",
+    "get 晴天 / 周杰倫",
+    "晴天 / 周杰倫"
+   ]
+  },
+  {
+   "id": 8,
+   "kind": "translated",
+   "raw": [
+    "synced",
+    "get Through the Night / IU",
+    "Through the Night / IU"
+   ],
+   "app": [
+    "synced",
+    "get Through the Night / IU",
+    "Through the Night / IU"
+   ],
+   "B_nosearch_gemini-3.5-flash-lite": [
+    "synced",
+    "get Through the Night / IU",
+    "Through the Night / IU"
+   ]
+  },
+  {
+   "id": 9,
+   "kind": "translated",
+   "raw": [
+    "synced",
+    "get Spring Day / BTS",
+    "Spring Day / BTS"
+   ],
+   "app": [
+    "synced",
+    "get Spring Day / BTS",
+    "Spring Day / BTS"
+   ],
+   "B_nosearch_gemini-3.5-flash-lite": [
+    "synced",
+    "get 봄날 / 방탄소년단",
+    "봄날 / 방탄소년단"
+   ]
+  },
+  {
+   "id": 10,
+   "kind": "romanized",
+   "raw": [
+    "miss",
+    null,
+    null
+   ],
+   "app": [
+    "miss",
+    null,
+    null
+   ],
+   "B_nosearch_gemini-3.5-flash-lite": [
+    "synced",
+    "get 言って。 / ヨルシカ",
+    "言って。 / ヨルシカ"
+   ]
+  },
+  {
+   "id": 11,
+   "kind": "yt-video",
+   "raw": [
+    "miss",
+    null,
+    null
+   ],
+   "app": [
+    "synced",
+    "get アイドル / Ayase / YOASOBI",
+    "アイドル / Ayase, YOASOBI"
+   ],
+   "B_nosearch_gemini-3.5-flash-lite": [
+    "synced",
+    "get アイドル / YOASOBI",
+    "アイドル / YOASOBI"
+   ]
+  },
+  {
+   "id": 12,
+   "kind": "yt-video",
+   "raw": [
+    "miss",
+    null,
+    null
+   ],
+   "app": [
+    "synced",
+    "get KICK BACK / 米津玄師",
+    "KICK BACK / 米津玄師"
+   ],
+   "B_nosearch_gemini-3.5-flash-lite": [
+    "synced",
+    "get KICK BACK / 米津玄師",
+    "KICK BACK / 米津玄師"
+   ]
+  },
+  {
+   "id": 13,
+   "kind": "yt-video",
+   "raw": [
+    "miss",
+    null,
+    null
+   ],
+   "app": [
+    "miss",
+    null,
+    null
+   ],
+   "B_nosearch_gemini-3.5-flash-lite": [
+    "synced",
+    "get 稻香 / 周杰倫",
+    "稻香 / 周杰倫"
+   ]
+  },
+  {
+   "id": 14,
+   "kind": "yt-video",
+   "raw": [
+    "miss",
+    null,
+    null
+   ],
+   "app": [
+    "miss",
+    null,
+    null
+   ],
+   "B_nosearch_gemini-3.5-flash-lite": [
+    "synced",
+    "get Blueming / IU",
+    "Blueming / IU"
+   ]
+  },
+  {
+   "id": 15,
+   "kind": "yt-video",
+   "raw": [
+    "miss",
+    null,
+    null
+   ],
+   "app": [
+    "synced",
+    "search Subtitle［Official Video］ / Official髭男dism",
+    "Official髭男dism - Subtitle [Official Video] / Official髭男dism"
+   ],
+   "B_nosearch_gemini-3.5-flash-lite": [
+    "synced",
+    "get Subtitle / Official髭男dism",
+    "Subtitle / Official髭男dism"
+   ]
+  },
+  {
+   "id": 16,
+   "kind": "yt-video",
+   "raw": [
+    "miss",
+    null,
+    null
+   ],
+   "app": [
+    "synced",
+    "get 晴る / ヨルシカ",
+    "晴る / ヨルシカ"
+   ],
+   "B_nosearch_gemini-3.5-flash-lite": [
+    "synced",
+    "get 晴る / ヨルシカ",
+    "晴る / ヨルシカ"
+   ]
+  },
+  {
+   "id": 17,
+   "kind": "romanized-artist",
+   "raw": [
+    "plain",
+    "get Lemon / Kenshi Yonezu",
+    "Lemon / Kenshi Yonezu"
+   ],
+   "app": [
+    "plain",
+    "get Lemon / Kenshi Yonezu",
+    "Lemon / Kenshi Yonezu"
+   ],
+   "B_nosearch_gemini-3.5-flash-lite": [
+    "synced",
+    "get Lemon / 米津玄師",
+    "Lemon / 米津玄師"
+   ]
+  },
+  {
+   "id": 18,
+   "kind": "romanized-artist",
+   "raw": [
+    "synced",
+    "get Pretender / Official HIGE DANdism",
+    "Pretender / Official HIGE DANdism"
+   ],
+   "app": [
+    "synced",
+    "get Pretender / Official HIGE DANdism",
+    "Pretender / Official HIGE DANdism"
+   ],
+   "B_nosearch_gemini-3.5-flash-lite": [
+    "synced",
+    "get Pretender / Official髭男dism",
+    "Pretender / Official髭男dism"
+   ]
+  },
+  {
+   "id": 19,
+   "kind": "romanized",
+   "raw": [
+    "synced",
+    "get Yoru ni Kakeru / YOASOBI",
+    "Yoru ni kakeru / YOASOBI"
+   ],
+   "app": [
+    "synced",
+    "get Yoru ni Kakeru / YOASOBI",
+    "Yoru ni kakeru / YOASOBI"
+   ],
+   "B_nosearch_gemini-3.5-flash-lite": [
+    "plain",
+    "get 夜に駆ける / YOASOBI",
+    "夜に駆ける / YOASOBI"
+   ]
+  },
+  {
+   "id": 20,
+   "kind": "clean",
+   "raw": [
+    "plain",
+    "get 夜に駆ける / YOASOBI",
+    "夜に駆ける / YOASOBI"
+   ],
+   "app": [
+    "plain",
+    "get 夜に駆ける / YOASOBI",
+    "夜に駆ける / YOASOBI"
+   ],
+   "B_nosearch_gemini-3.5-flash-lite": [
+    "plain",
+    "get 夜に駆ける / YOASOBI",
+    "夜に駆ける / YOASOBI"
+   ]
+  },
+  {
+   "id": 21,
+   "kind": "clean",
+   "raw": [
+    "synced",
+    "get Blinding Lights / The Weeknd",
+    "Blinding Lights / The Weeknd"
+   ],
+   "app": [
+    "synced",
+    "get Blinding Lights / The Weeknd",
+    "Blinding Lights / The Weeknd"
+   ],
+   "B_nosearch_gemini-3.5-flash-lite": [
+    "synced",
+    "get Blinding Lights / The Weeknd",
+    "Blinding Lights / The Weeknd"
+   ]
+  },
+  {
+   "id": 22,
+   "kind": "yt-video",
+   "raw": [
+    "miss",
+    null,
+    null
+   ],
+   "app": [
+    "synced",
+    "get Bohemian Rhapsody / Queen Official",
+    "Bohemian Rhapsody / Queen Official"
+   ],
+   "B_nosearch_gemini-3.5-flash-lite": [
+    "synced",
+    "get Bohemian Rhapsody / Queen",
+    "Bohemian Rhapsody / Queen"
+   ]
+  },
+  {
+   "id": 23,
+   "kind": "obscure",
+   "raw": [
+    "miss",
+    null,
+    null
+   ],
+   "app": [
+    "miss",
+    null,
+    null
+   ],
+   "B_nosearch_gemini-3.5-flash-lite": [
+    "synced",
+    "get ミラーチューン / ずっと真夜中でいいのに。",
+    "ミラーチューン / ずっと真夜中でいいのに。"
+   ]
+  },
+  {
+   "id": 24,
+   "kind": "obscure",
+   "raw": [
+    "miss",
+    null,
+    null
+   ],
+   "app": [
+    "miss",
+    null,
+    null
+   ],
+   "B_nosearch_gemini-3.5-flash-lite": [
+    "synced",
+    "get 山海 / 草東沒有派對",
+    "山海 / 草東沒有派對"
+   ]
+  },
+  {
+   "id": 25,
+   "kind": "obscure",
+   "raw": [
+    "miss",
+    null,
+    null
+   ],
+   "app": [
+    "miss",
+    null,
+    null
+   ],
+   "B_nosearch_gemini-3.5-flash-lite": [
+    "synced",
+    "get カワキヲアメク / 美波",
+    "カワキヲアメク / 美波"
+   ]
+  },
+  {
+   "id": 26,
+   "kind": "translated",
+   "raw": [
+    "synced",
+    "get How can I love the heartbreak, you're the one I love / AKMU",
+    "How can I love the heartbreak, you're the one I love / AKMU"
+   ],
+   "app": [
+    "synced",
+    "get How can I love the heartbreak, you're the one I love / AKMU",
+    "How can I love the heartbreak, you're the one I love / AKMU"
+   ],
+   "B_nosearch_gemini-3.5-flash-lite": [
+    "synced",
+    "get 어떻게 이별까지 사랑하겠어, 널 사랑하는 거지 / 악뮤",
+    "어떻게 이별까지 사랑하겠어, 널 사랑하는 거지 / 악뮤"
+   ]
+  },
+  {
+   "id": 27,
+   "kind": "instrumental",
+   "raw": [
+    "instrumental",
+    "get Merry Christmas Mr. Lawrence / Ryuichi Sakamoto",
+    "Merry Christmas Mr. Lawrence / Ryuichi Sakamoto"
+   ],
+   "app": [
+    "instrumental",
+    "get Merry Christmas Mr. Lawrence / Ryuichi Sakamoto",
+    "Merry Christmas Mr. Lawrence / Ryuichi Sakamoto"
+   ],
+   "B_nosearch_gemini-3.5-flash-lite": [
+    "instrumental",
+    "get Merry Christmas Mr. Lawrence / 坂本龍一",
+    "Merry Christmas Mr. Lawrence / 坂本龍一"
+   ]
+  },
+  {
+   "id": 28,
+   "kind": "not-a-song",
+   "raw": [
+    "miss",
+    null,
+    null
+   ],
+   "app": [
+    "miss",
+    null,
+    null
+   ],
+   "B_nosearch_gemini-3.5-flash-lite": [
+    "miss",
+    "no identity"
+   ]
+  }
+ ],
+ "identification": {
+  "B_nosearch_gemini-3.5-flash-lite": {
+   "n": 26,
+   "title": 25,
+   "artist": 25,
+   "both": 24,
+   "kept": 26,
+   "kept_wrong": 2,
+   "latency": [
+    1224,
+    1781,
+    1561,
+    964,
+    1092,
+    1053,
+    2382,
+    1085,
+    1422,
+    970,
+    1112,
+    1097,
+    1214,
+    1204,
+    1045,
+    1810,
+    1199,
+    1101,
+    900,
+    981,
+    1521,
+    1085,
+    1192,
+    1097,
+    1366,
+    1581,
+    1123,
+    779
+   ],
+   "errors": 0,
+   "isrc_given": 26,
+   "details": [
+    [
+     1,
+     "ok",
+     1.0,
+     "雪国",
+     "ヨルシカ"
+    ],
+    [
+     2,
+     "WRONG",
+     0.99,
+     "私じゃなかったんだね。",
+     "マカロニえんぴつ"
+    ],
+    [
+     3,
+     "n/a (found=True)",
+     0.95,
+     "SYNC",
+     "DAOKO"
+    ],
+    [
+     4,
+     "ok",
+     0.99,
+     "踊り子",
+     "Vaundy"
+    ],
+    [
+     5,
+     "WRONG",
+     1.0,
+     "回回奇譚",
+     "Eve"
+    ],
+    [
+     6,
+     "ok",
+     1.0,
+     "死ぬのがいいわ",
+     "藤井風"
+    ],
+    [
+     7,
+     "ok",
+     1.0,
+     "晴天",
+     "周杰倫"
+    ],
+    [
+     8,
+     "ok",
+     1.0,
+     "밤편지",
+     "아이유"
+    ],
+    [
+     9,
+     "ok",
+     1.0,
+     "봄날",
+     "방탄소년단"
+    ],
+    [
+     10,
+     "ok",
+     0.99,
+     "言って。",
+     "ヨルシカ"
+    ],
+    [
+     11,
+     "ok",
+     1.0,
+     "アイドル",
+     "YOASOBI"
+    ],
+    [
+     12,
+     "ok",
+     1.0,
+     "KICK BACK",
+     "米津玄師"
+    ],
+    [
+     13,
+     "ok",
+     1.0,
+     "稻香",
+     "周杰倫"
+    ],
+    [
+     14,
+     "ok",
+     0.99,
+     "Blueming",
+     "아이유"
+    ],
+    [
+     15,
+     "ok",
+     1.0,
+     "Subtitle",
+     "Official髭男dism"
+    ],
+    [
+     16,
+     "ok",
+     1.0,
+     "晴る",
+     "ヨルシカ"
+    ],
+    [
+     17,
+     "ok",
+     1.0,
+     "Lemon",
+     "米津玄師"
+    ],
+    [
+     18,
+     "ok",
+     1.0,
+     "Pretender",
+     "Official髭男dism"
+    ],
+    [
+     19,
+     "ok",
+     1.0,
+     "夜に駆ける",
+     "YOASOBI"
+    ],
+    [
+     20,
+     "ok",
+     1.0,
+     "夜に駆ける",
+     "YOASOBI"
+    ],
+    [
+     21,
+     "ok",
+     1.0,
+     "Blinding Lights",
+     "The Weeknd"
+    ],
+    [
+     22,
+     "ok",
+     1.0,
+     "Bohemian Rhapsody",
+     "Queen"
+    ],
+    [
+     23,
+     "ok",
+     1.0,
+     "ミラーチューン",
+     "ずっと真夜中でいいのに。"
+    ],
+    [
+     24,
+     "ok",
+     1.0,
+     "山海",
+     "草東沒有派對"
+    ],
+    [
+     25,
+     "ok",
+     0.99,
+     "カワキヲアメク",
+     "美波"
+    ],
+    [
+     26,
+     "ok",
+     0.99,
+     "어떻게 이별까지 사랑하겠어, 널 사랑하는 거지",
+     "악뮤"
+    ],
+    [
+     27,
+     "ok",
+     1.0,
+     "Merry Christmas Mr. Lawrence",
+     "坂本龍一"
+    ],
+    [
+     28,
+     "n/a (found=False)",
+     1.0,
+     "lofi hip hop radio 📚 beats to relax/study to",
+     "Lofi Girl"
+    ]
+   ]
+  }
+ },
+ "a": [
+  {
+   "id": 1,
+   "kind": "bilingual",
+   "status": 200,
+   "finish": "STOP",
+   "latency_ms": 2587,
+   "tokens": {
+    "promptTokenCount": 152,
+    "candidatesTokenCount": 633,
+    "thoughtsTokenCount": null,
+    "toolUsePromptTokenCount": null
+   },
+   "found": true,
+   "model_lines": 20,
+   "has_lrc": true,
+   "ref_lines": 16,
+   "recall": 0.0,
+   "precision": 0.0,
+   "timing_within_1s": 0.0
+  },
+  {
+   "id": 2,
+   "kind": "yt-video",
+   "status": 200,
+   "finish": "STOP",
+   "latency_ms": 1921,
+   "tokens": {
+    "promptTokenCount": 163,
+    "candidatesTokenCount": 452,
+    "thoughtsTokenCount": null,
+    "toolUsePromptTokenCount": null
+   },
+   "found": true,
+   "model_lines": 1,
+   "has_lrc": false,
+   "ref_lines": 41,
+   "recall": 0.0,
+   "precision": 0.0
+  },
+  {
+   "id": 3,
+   "kind": "unverified",
+   "status": 200,
+   "finish": "STOP",
+   "latency_ms": 2645,
+   "tokens": {
+    "promptTokenCount": 144,
+    "candidatesTokenCount": 873,
+    "thoughtsTokenCount": null,
+    "toolUsePromptTokenCount": null
+   },
+   "found": true,
+   "model_lines": 4,
+   "has_lrc": false,
+   "ref_lines": 0
+  },
+  {
+   "id": 4,
+   "kind": "romanized",
+   "status": 200,
+   "finish": "STOP",
+   "latency_ms": 2218,
+   "tokens": {
+    "promptTokenCount": 150,
+    "candidatesTokenCount": 628,
+    "thoughtsTokenCount": null,
+    "toolUsePromptTokenCount": null
+   },
+   "found": true,
+   "model_lines": 23,
+   "has_lrc": true,
+   "ref_lines": 50,
+   "recall": 0.0,
+   "precision": 0.0,
+   "timing_within_1s": 0.0
+  },
+  {
+   "id": 5,
+   "kind": "romanized",
+   "status": 200,
+   "finish": "STOP",
+   "latency_ms": 2623,
+   "tokens": {
+    "promptTokenCount": 149,
+    "candidatesTokenCount": 549,
+    "thoughtsTokenCount": null,
+    "toolUsePromptTokenCount": null
+   },
+   "found": true,
+   "model_lines": 15,
+   "has_lrc": true,
+   "ref_lines": 54,
+   "recall": 0.0,
+   "precision": 0.0,
+   "timing_within_1s": 0.0
+  },
+  {
+   "id": 6,
+   "kind": "romanized",
+   "status": 200,
+   "finish": "STOP",
+   "latency_ms": 2970,
+   "tokens": {
+    "promptTokenCount": 154,
+    "candidatesTokenCount": 908,
+    "thoughtsTokenCount": null,
+    "toolUsePromptTokenCount": null
+   },
+   "found": true,
+   "model_lines": 26,
+   "has_lrc": true,
+   "ref_lines": 35,
+   "recall": 0.0,
+   "precision": 0.0,
+   "timing_within_1s": 0.0
+  },
+  {
+   "id": 7,
+   "kind": "romanized",
+   "status": 200,
+   "finish": "STOP",
+   "latency_ms": 3707,
+   "tokens": {
+    "promptTokenCount": 148,
+    "candidatesTokenCount": 1099,
+    "thoughtsTokenCount": null,
+    "toolUsePromptTokenCount": null
+   },
+   "found": true,
+   "model_lines": 33,
+   "has_lrc": true,
+   "ref_lines": 53,
+   "recall": 0.42424242424242425,
+   "precision": 0.47368421052631576,
+   "timing_within_1s": 0.0
+  },
+  {
+   "id": 8,
+   "kind": "translated",
+   "status": 200,
+   "finish": "STOP",
+   "latency_ms": 4115,
+   "tokens": {
+    "promptTokenCount": 148,
+    "candidatesTokenCount": 1432,
+    "thoughtsTokenCount": null,
+    "toolUsePromptTokenCount": null
+   },
+   "found": true,
+   "model_lines": 4,
+   "has_lrc": false,
+   "ref_lines": 32,
+   "recall": 0.0,
+   "precision": 0.0
+  },
+  {
+   "id": 9,
+   "kind": "translated",
+   "status": 200,
+   "finish": "STOP",
+   "latency_ms": 4663,
+   "tokens": {
+    "promptTokenCount": 147,
+    "candidatesTokenCount": 1615,
+    "thoughtsTokenCount": null,
+    "toolUsePromptTokenCount": null
+   },
+   "found": true,
+   "model_lines": 60,
+   "has_lrc": true,
+   "ref_lines": 50,
+   "recall": 0.16216216216216217,
+   "precision": 0.13636363636363635,
+   "timing_within_1s": 0.0
+  },
+  {
+   "id": 10,
+   "kind": "romanized",
+   "status": 200,
+   "finish": "STOP",
+   "latency_ms": 4844,
+   "tokens": {
+    "promptTokenCount": 151,
+    "candidatesTokenCount": 1630,
+    "thoughtsTokenCount": null,
+    "toolUsePromptTokenCount": null
+   },
+   "found": true,
+   "model_lines": 8,
+   "has_lrc": true,
+   "ref_lines": 52,
+   "recall": 0.0,
+   "precision": 0.0,
+   "timing_within_1s": 0.0
+  },
+  {
+   "id": 11,
+   "kind": "yt-video",
+   "status": 200,
+   "finish": "STOP",
+   "latency_ms": 3433,
+   "tokens": {
+    "promptTokenCount": 159,
+    "candidatesTokenCount": 868,
+    "thoughtsTokenCount": null,
+    "toolUsePromptTokenCount": null
+   },
+   "found": true,
+   "model_lines": 24,
+   "has_lrc": true,
+   "ref_lines": 32,
+   "recall": 0.0,
+   "precision": 0.0,
+   "timing_within_1s": 0.0
+  },
+  {
+   "id": 12,
+   "kind": "yt-video",
+   "status": 200,
+   "finish": "STOP",
+   "latency_ms": 2991,
+   "tokens": {
+    "promptTokenCount": 158,
+    "candidatesTokenCount": 805,
+    "thoughtsTokenCount": null,
+    "toolUsePromptTokenCount": null
+   },
+   "found": true,
+   "model_lines": 28,
+   "has_lrc": true,
+   "ref_lines": 46,
+   "recall": 0.041666666666666664,
+   "precision": 0.05,
+   "timing_within_1s": 0.0
+  },
+  {
+   "id": 13,
+   "kind": "yt-video",
+   "status": 200,
+   "finish": "STOP",
+   "latency_ms": 4806,
+   "tokens": {
+    "promptTokenCount": 163,
+    "candidatesTokenCount": 1459,
+    "thoughtsTokenCount": null,
+    "toolUsePromptTokenCount": null
+   },
+   "found": true,
+   "model_lines": 50,
+   "has_lrc": true,
+   "ref_lines": 41,
+   "recall": 0.17857142857142858,
+   "precision": 0.15625,
+   "timing_within_1s": 0.0
+  },
+  {
+   "id": 14,
+   "kind": "yt-video",
+   "status": 200,
+   "finish": "STOP",
+   "latency_ms": 4636,
+   "tokens": {
+    "promptTokenCount": 169,
+    "candidatesTokenCount": 1610,
+    "thoughtsTokenCount": null,
+    "toolUsePromptTokenCount": null
+   },
+   "found": true,
+   "model_lines": 33,
+   "has_lrc": true,
+   "ref_lines": 44,
+   "recall": 0.0,
+   "precision": 0.0,
+   "timing_within_1s": 0.0
+  },
+  {
+   "id": 15,
+   "kind": "yt-video",
+   "status": 200,
+   "finish": "STOP",
+   "latency_ms": 5044,
+   "tokens": {
+    "promptTokenCount": 161,
+    "candidatesTokenCount": 1613,
+    "thoughtsTokenCount": null,
+    "toolUsePromptTokenCount": null
+   },
+   "found": true,
+   "model_lines": 60,
+   "has_lrc": true,
+   "ref_lines": 67,
+   "recall": 0.046875,
+   "precision": 0.0392156862745098,
+   "timing_within_1s": 0.0
+  },
+  {
+   "id": 16,
+   "kind": "yt-video",
+   "status": 200,
+   "finish": "STOP",
+   "latency_ms": 4716,
+   "tokens": {
+    "promptTokenCount": 161,
+    "candidatesTokenCount": 1203,
+    "thoughtsTokenCount": null,
+    "toolUsePromptTokenCount": null
+   },
+   "found": true,
+   "model_lines": 37,
+   "has_lrc": true,
+   "ref_lines": 46,
+   "recall": 0.0,
+   "precision": 0.0,
+   "timing_within_1s": 0.0
+  },
+  {
+   "id": 17,
+   "kind": "romanized-artist",
+   "status": 200,
+   "finish": "STOP",
+   "latency_ms": 4744,
+   "tokens": {
+    "promptTokenCount": 151,
+    "candidatesTokenCount": 1315,
+    "thoughtsTokenCount": null,
+    "toolUsePromptTokenCount": null
+   },
+   "found": true,
+   "model_lines": 35,
+   "has_lrc": true,
+   "ref_lines": 37,
+   "recall": 0.0,
+   "precision": 0.0,
+   "timing_within_1s": 0.0
+  },
+  {
+   "id": 18,
+   "kind": "romanized-artist",
+   "status": 200,
+   "finish": "STOP",
+   "latency_ms": 4764,
+   "tokens": {
+    "promptTokenCount": 152,
+    "candidatesTokenCount": 1366,
+    "thoughtsTokenCount": null,
+    "toolUsePromptTokenCount": null
+   },
+   "found": true,
+   "model_lines": 40,
+   "has_lrc": true,
+   "ref_lines": 52,
+   "recall": 0.0,
+   "precision": 0.0,
+   "timing_within_1s": 0.0
+  },
+  {
+   "id": 19,
+   "kind": "romanized",
+   "status": 200,
+   "finish": "STOP",
+   "latency_ms": 2334,
+   "tokens": {
+    "promptTokenCount": 153,
+    "candidatesTokenCount": 645,
+    "thoughtsTokenCount": null,
+    "toolUsePromptTokenCount": null
+   },
+   "found": true,
+   "model_lines": 20,
+   "has_lrc": true,
+   "ref_lines": 56,
+   "recall": 0.18518518518518517,
+   "precision": 0.5,
+   "timing_within_1s": 0.1
+  },
+  {
+   "id": 20,
+   "kind": "clean",
+   "status": 200,
+   "finish": "STOP",
+   "latency_ms": 2706,
+   "tokens": {
+    "promptTokenCount": 151,
+    "candidatesTokenCount": 649,
+    "thoughtsTokenCount": null,
+    "toolUsePromptTokenCount": null
+   },
+   "found": true,
+   "model_lines": 18,
+   "has_lrc": true,
+   "ref_lines": 56,
+   "recall": 0.12962962962962962,
+   "precision": 0.3888888888888889,
+   "timing_within_1s": 0.42857142857142855
+  },
+  {
+   "id": 21,
+   "kind": "clean",
+   "status": 200,
+   "finish": "STOP",
+   "latency_ms": 3446,
+   "tokens": {
+    "promptTokenCount": 150,
+    "candidatesTokenCount": 1205,
+    "thoughtsTokenCount": null,
+    "toolUsePromptTokenCount": null
+   },
+   "found": true,
+   "model_lines": 33,
+   "has_lrc": true,
+   "ref_lines": 35,
+   "recall": 0.9565217391304348,
+   "precision": 0.9565217391304348,
+   "timing_within_1s": 0.0
+  },
+  {
+   "id": 22,
+   "kind": "yt-video",
+   "status": 200,
+   "finish": "STOP",
+   "latency_ms": 4548,
+   "tokens": {
+    "promptTokenCount": 158,
+    "candidatesTokenCount": 1667,
+    "thoughtsTokenCount": null,
+    "toolUsePromptTokenCount": null
+   },
+   "found": true,
+   "model_lines": 44,
+   "has_lrc": true,
+   "ref_lines": 50,
+   "recall": 0.8958333333333334,
+   "precision": 0.9772727272727273,
+   "timing_within_1s": 0.0
+  },
+  {
+   "id": 23,
+   "kind": "obscure",
+   "status": 200,
+   "finish": "STOP",
+   "latency_ms": 4509,
+   "tokens": {
+    "promptTokenCount": 170,
+    "candidatesTokenCount": 1108,
+    "thoughtsTokenCount": null,
+    "toolUsePromptTokenCount": null
+   },
+   "found": true,
+   "model_lines": 33,
+   "has_lrc": true,
+   "ref_lines": 61,
+   "recall": 0.0,
+   "precision": 0.0,
+   "timing_within_1s": 0.0
+  },
+  {
+   "id": 24,
+   "kind": "obscure",
+   "status": 200,
+   "finish": "STOP",
+   "latency_ms": 3268,
+   "tokens": {
+    "promptTokenCount": 176,
+    "candidatesTokenCount": 891,
+    "thoughtsTokenCount": null,
+    "toolUsePromptTokenCount": null
+   },
+   "found": true,
+   "model_lines": 26,
+   "has_lrc": true,
+   "ref_lines": 15,
+   "recall": 0.0,
+   "precision": 0.0,
+   "timing_within_1s": 0.0
+  },
+  {
+   "id": 25,
+   "kind": "obscure",
+   "status": 200,
+   "finish": "STOP",
+   "latency_ms": 5032,
+   "tokens": {
+    "promptTokenCount": 151,
+    "candidatesTokenCount": 1390,
+    "thoughtsTokenCount": null,
+    "toolUsePromptTokenCount": null
+   },
+   "found": true,
+   "model_lines": 41,
+   "has_lrc": true,
+   "ref_lines": 53,
+   "recall": 0.0,
+   "precision": 0.0,
+   "timing_within_1s": 0.0
+  },
+  {
+   "id": 26,
+   "kind": "translated",
+   "status": 200,
+   "finish": "STOP",
+   "latency_ms": 3270,
+   "tokens": {
+    "promptTokenCount": 160,
+    "candidatesTokenCount": 904,
+    "thoughtsTokenCount": null,
+    "toolUsePromptTokenCount": null
+   },
+   "found": true,
+   "model_lines": 28,
+   "has_lrc": true,
+   "ref_lines": 34,
+   "recall": 0.08333333333333333,
+   "precision": 0.15,
+   "timing_within_1s": 0.0
+  },
+  {
+   "id": 27,
+   "kind": "instrumental",
+   "status": 200,
+   "finish": "STOP",
+   "latency_ms": 1145,
+   "tokens": {
+    "promptTokenCount": 153,
+    "candidatesTokenCount": 78,
+    "thoughtsTokenCount": null,
+    "toolUsePromptTokenCount": null
+   },
+   "found": false,
+   "model_lines": 0,
+   "has_lrc": false,
+   "ref_lines": 0
+  },
+  {
+   "id": 28,
+   "kind": "not-a-song",
+   "status": 200,
+   "finish": "STOP",
+   "latency_ms": 1015,
+   "tokens": {
+    "promptTokenCount": 156,
+    "candidatesTokenCount": 84,
+    "thoughtsTokenCount": null,
+    "toolUsePromptTokenCount": null
+   },
+   "found": false,
+   "model_lines": 0,
+   "has_lrc": false,
+   "ref_lines": 0
+  }
+ ]
+}
