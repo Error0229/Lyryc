@@ -6,7 +6,8 @@
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex, OnceLock};
 
 use super::{
     complete_with, resolve, ChatRequest, Completion, JsonSchema, LlmError, Target, Task, Tools,
@@ -182,15 +183,17 @@ fn preview(text: &str) -> String {
     text.chars().take(120).collect()
 }
 
-/// One identification against an explicit target, with its search tool on.
+/// One identification against an explicit target. With `web_search` the
+/// provider's search tool is required; a provider without one is an error.
 pub async fn identify_with(
     target: &Target,
     raw_title: &str,
     raw_artist: &str,
     duration: Option<f64>,
+    web_search: bool,
 ) -> Result<Option<SongIdentity>, LlmError> {
     let user = prompt(raw_title, raw_artist, duration);
-    let reply = complete_with(target, &request(&user), tools(true)).await?;
+    let reply = complete_with(target, &request(&user), tools(web_search)).await?;
     parse(&reply).map_err(|message| LlmError {
         provider: target.label.clone(),
         model: target.model.clone(),
@@ -199,21 +202,37 @@ pub async fn identify_with(
     })
 }
 
+/// Answers per raw (title, artist), including "unsure", for this session: a
+/// song that missed once will miss again, and each call costs the user.
+type Answers = HashMap<(String, String), Option<SongIdentity>>;
+static ANSWERS: LazyLock<Mutex<Answers>> = LazyLock::new(Default::default);
+
 /// Canonical names for a raw player title, using the cleaning route. `None`
-/// when no provider is set up, it has no search tool, or the model is unsure.
+/// when no provider is set up, the call failed, or the model is unsure.
+///
+/// The lookup calls this with `web_search: false`: the study measured 25/26
+/// LRCLIB hits that way, and free-tier keys get 429 on every grounded call.
 pub async fn identify_song(
     raw_title: &str,
     raw_artist: &str,
     duration: Option<f64>,
+    web_search: bool,
 ) -> Option<SongIdentity> {
+    let key = (raw_title.to_string(), raw_artist.to_string());
+    if let Some(answer) = ANSWERS.lock().unwrap().get(&key) {
+        return answer.clone();
+    }
     let target = resolve(Task::Cleaning, &[])?;
-    match identify_with(&target, raw_title, raw_artist, duration).await {
+    let answer = match identify_with(&target, raw_title, raw_artist, duration, web_search).await {
         Ok(found) => found,
         Err(e) => {
+            // Not remembered: a network or quota failure may pass.
             warn!("Song identification failed: {e}");
-            None
+            return None;
         }
-    }
+    };
+    ANSWERS.lock().unwrap().insert(key, answer.clone());
+    answer
 }
 
 #[cfg(test)]

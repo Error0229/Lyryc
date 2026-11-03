@@ -30,11 +30,6 @@ Reply with JSON only: {"artist": "...", "title": "..."}"#;
 /// provider later is not shadowed by a fallback.
 static CACHE: LazyLock<Mutex<HashMap<(String, String), Names>>> = LazyLock::new(Default::default);
 
-/// The song's names from the routed LLM: one call, cached.
-pub async fn llm_names(artist: &str, title: &str) -> Result<Names, String> {
-    llm_names_with_keys(artist, title, &[]).await
-}
-
 async fn llm_names_with_keys(artist: &str, title: &str, call_keys: &[AdhocKey]) -> Result<Names, String> {
     let key = (artist.to_string(), title.to_string());
     if let Some(names) = CACHE.lock().unwrap().get(&key) {

@@ -12,7 +12,8 @@
 //! twice. A plain-only hit spends one of them looking for a synced entry of the
 //! same recording.
 
-use crate::cleaning::{self, clean_title, normalize_name, Names};
+use crate::cleaning::{clean_title, normalize_name, Names};
+use crate::llm;
 use crate::lyrics_cache::{cache_lyrics, cache_no_lyrics, get_cached_lyrics, CacheResult};
 use crate::sources::{self, Found, Provider};
 use crate::timing;
@@ -366,7 +367,7 @@ impl<E: Effects> Lookup<'_, E> {
 
     /// Step 5: one LLM call, then an exact lookup and a search with its names.
     async fn llm_pass(&mut self) -> Option<Lrclib> {
-        let names = self.fx.names(&self.req.artist, &self.req.title).await?;
+        let names = self.fx.names(self.req).await?;
         self.find(&[names.title], &names.artist, false).await
     }
 }
@@ -468,8 +469,8 @@ trait Effects: Send + Sync {
     fn cached(&self, artist: &str, track: &str) -> CacheResult;
     /// Send one LRCLIB request.
     fn lrclib(&self, url: &str) -> impl Future<Output = Reply> + Send;
-    /// The LLM's names for the song; None when it is not set up or failed.
-    fn names(&self, artist: &str, title: &str) -> impl Future<Output = Option<Names>> + Send;
+    /// The LLM's names for the song; None when it is not set up, failed or is unsure.
+    fn names(&self, req: &Request) -> impl Future<Output = Option<Names>> + Send;
     fn sources(&self, q: &sources::Query, plain: Option<&[String]>) -> impl Future<Output = Option<Found>> + Send;
     fn save(&self, artist: &str, track: &str, lines: &[LyricLine], source: TimingSource);
     fn save_none(&self, artist: &str, track: &str);
@@ -495,11 +496,15 @@ impl Effects for Live {
             Err(e) => Reply::Failed(e.to_string()),
         }
     }
-    async fn names(&self, artist: &str, title: &str) -> Option<Names> {
-        cleaning::llm_names(artist, title)
-            .await
-            .map_err(|e| debug!("No LLM names for '{}': {}", title, e))
-            .ok()
+    /// Song identification as measured in docs/research/llm-search (search off):
+    /// the release's own names, e.g. "Snow Country" / Yorushika -> 雪国 / ヨルシカ.
+    async fn names(&self, req: &Request) -> Option<Names> {
+        let id = llm::identify::identify_song(&req.title, &req.artist, req.duration, false).await?;
+        info!(
+            "Identified '{}' by '{}' as '{}' by '{}'",
+            req.title, req.artist, id.title_native, id.artist_native
+        );
+        Some(Names { artist: id.artist_native, title: id.title_native })
     }
     fn sources(&self, q: &sources::Query, plain: Option<&[String]>) -> impl Future<Output = Option<Found>> + Send {
         sources::find(q, plain)
@@ -810,7 +815,7 @@ mod tests {
             let reply = self.lrclib.iter().find(|(n, _)| url.contains(n)).map_or(Reply::NotFound, |(_, r)| r.clone());
             async move { reply }
         }
-        fn names(&self, _artist: &str, _title: &str) -> impl Future<Output = Option<Names>> + Send {
+        fn names(&self, _req: &Request) -> impl Future<Output = Option<Names>> + Send {
             *self.llm_calls.lock().unwrap() += 1;
             let names = self.names.clone();
             async move { names }
@@ -1072,7 +1077,7 @@ mod tests {
             self.0.lock().unwrap().push(status);
             reply
         }
-        async fn names(&self, _artist: &str, _title: &str) -> Option<Names> {
+        async fn names(&self, _req: &Request) -> Option<Names> {
             None
         }
         fn sources(&self, q: &sources::Query, plain: Option<&[String]>) -> impl Future<Output = Option<Found>> + Send {
