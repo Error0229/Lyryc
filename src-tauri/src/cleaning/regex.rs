@@ -38,7 +38,6 @@ lazy_static::lazy_static! {
     static ref RE_ASCII_PARENS: Regex = Regex::new(r"\([^)]*\)").unwrap();
     static ref RE_OFFICIAL_VIDEO: Regex = Regex::new(r"(?i)\s+Official\s+Video\s*$").unwrap();
     static ref RE_FULL_ALBUM: Regex = Regex::new(r"^([^-]+)\(Full Album\)\s*-.*$").unwrap();
-    static ref RE_LOOSE_DASH_SEPARATOR: Regex = Regex::new(r"^(.+?)\s*-\s*(.+)$").unwrap();
     static ref RE_FEAT_PARENS: Regex =
         Regex::new(r"(?i)\s*\((?:feat|ft|featuring)\.?\s+[^)]*\)").unwrap();
     static ref RE_FEAT_PARENS_CAPTURE: Regex =
@@ -86,18 +85,29 @@ lazy_static::lazy_static! {
     ];
 }
 
-/// Split text by common separators (-, ·, ×). Returns (first_part, second_part) or None.
+/// Split at the first separator outside brackets: a spaced one (" - ", " · ", ...),
+/// else a bare "-". A dash inside "(Remastered - February 5, 2001)" belongs to the
+/// tag, not to an "Artist - Title" split. Returns (first_part, second_part) or None.
 fn split_by_separator(text: &str) -> Option<(&str, &str)> {
-    for sep in &[" - ", " – ", " — ", " · ", " × ", " • "] {
-        if let Some(pos) = text.find(sep) {
-            let first = text[..pos].trim();
-            let second = text[pos + sep.len()..].trim();
-            if !first.is_empty() && !second.is_empty() {
-                return Some((first, second));
-            }
-        }
-    }
-    None
+    [" - ", " – ", " — ", " · ", " × ", " • "]
+        .iter()
+        .find_map(|sep| split_outside_brackets(text, sep))
+        .or_else(|| split_outside_brackets(text, "-"))
+}
+
+fn split_outside_brackets<'a>(text: &'a str, sep: &str) -> Option<(&'a str, &'a str)> {
+    text.match_indices(sep)
+        .filter(|&(pos, _)| bracket_depth(&text[..pos]) == 0)
+        .map(|(pos, _)| (text[..pos].trim(), text[pos + sep.len()..].trim()))
+        .find(|(first, second)| !first.is_empty() && !second.is_empty())
+}
+
+fn bracket_depth(prefix: &str) -> usize {
+    prefix.chars().fold(0, |depth, c| match c {
+        '(' | '[' | '（' | '【' | '「' => depth + 1,
+        ')' | ']' | '）' | '】' | '」' => depth.saturating_sub(1),
+        _ => depth,
+    })
 }
 
 fn is_cjk_char(c: char) -> bool {
@@ -370,15 +380,7 @@ fn handle_separator_patterns(text: &str) -> String {
     }
 
     // Handle separators: "-", "·", "×"
-    let split = split_by_separator(&cleaned).or_else(|| {
-        RE_LOOSE_DASH_SEPARATOR.captures(&cleaned).map(|captures| {
-            let first = captures.get(1).map(|m| m.as_str().trim()).unwrap_or("");
-            let second = captures.get(2).map(|m| m.as_str().trim()).unwrap_or("");
-            (first, second)
-        })
-    });
-
-    if let Some((first, second)) = split {
+    if let Some((first, second)) = split_by_separator(&cleaned) {
         let first_lower = first.to_lowercase();
         let second_lower = second.to_lowercase();
 
@@ -698,17 +700,6 @@ fn final_cleanup(text: &str, original: &str) -> String {
     // Handle Japanese cover suffix
     if cleaned.contains("/ Japanese Cover") {
         cleaned = cleaned.replace("/ Japanese Cover", " (Japanese Cover)");
-    }
-
-    // Last attempt for Artist - Track
-    if cleaned == original && cleaned.contains(" - ") {
-        let parts: Vec<&str> = cleaned.split(" - ").collect();
-        if parts.len() == 2 {
-            let track = parts[1].trim();
-            if !track.is_empty() {
-                cleaned = track.to_string();
-            }
-        }
     }
 
     // Handle (Full Album)

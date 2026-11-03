@@ -1,9 +1,8 @@
 // YouTube Music detector.
 //
-// The track comes from navigator.mediaSession, which the player fills for the
-// OS media controls. It survives layout redesigns and is independent of the UI
-// language. Playback state and time come from the <video> element. Player-bar
-// selectors are only a fallback for the metadata.
+// The title comes from the player bar (the full bilingual name), falling back to
+// navigator.mediaSession, which survives layout redesigns. The artist comes from
+// mediaSession first. Playback state and time come from the <video> element.
 //
 // Output (unchanged): TRACK_DETECTED / TRACK_PAUSED / TRACK_STOPPED /
 // TRACK_PROGRESS messages to background.js.
@@ -21,7 +20,10 @@ function text(sel) {
 
 function readTrack() {
   const md = navigator.mediaSession?.metadata;
-  const title = md?.title || text("ytmusic-player-bar .content-info-wrapper .title");
+  // Title: the player bar first. mediaSession drops the native-script part of
+  // bilingual titles ("雪国 - Snow Country" -> "Snow Country"), and LRCLIB files
+  // such songs under the full name. mediaSession is the fallback for redesigns.
+  const title = text("ytmusic-player-bar .content-info-wrapper .title") || md?.title;
   // The player-bar byline is "Artist • Album • Year"; mediaSession is just the artist.
   const artist = (md?.artist || text("ytmusic-player-bar .content-info-wrapper .byline"))
     ?.split("•")[0]

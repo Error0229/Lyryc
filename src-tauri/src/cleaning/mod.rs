@@ -159,6 +159,15 @@ mod tests {
     }
 
     #[test]
+    fn never_splits_on_a_dash_inside_brackets() {
+        // Seen in a real LRCLIB result list: this used to become "February 5, 2001)".
+        let cleaned = clean_track_name_sync("Hello Love (Buddha Remastered - February 5, 2001)");
+        assert!(cleaned.starts_with("Hello Love"), "got '{}'", cleaned);
+        // A dash outside brackets still splits.
+        assert_eq!(clean_track_name_sync("Song Title - YouTube Music"), "Song Title");
+    }
+
+    #[test]
     fn cleans_youtube_suffixes_and_brackets() {
         let input = "【MV】私じゃなかったんだね。(Official Video) - YouTube Music";
         let cleaned = clean_track_name_sync(input);
