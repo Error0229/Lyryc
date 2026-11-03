@@ -40,7 +40,7 @@ pub async fn init_extension_connection(
                     title: track_update.title.clone(),
                     artist: track_update.artist.clone(),
                     album: None,
-                    duration: track_update.duration,
+                    duration: track_update.duration.filter(|d| *d > 0.0), // 0 = unknown
                     thumbnail: track_update.thumbnail.clone(),
                 };
                 info!("Track changed: '{}' by '{}'", track_info.title, track_info.artist);

@@ -29,9 +29,11 @@ function readTrack() {
   if (!title || !artist) return null;
 
   const art = md?.artwork;
+  const duration = video()?.duration;
   return {
     title,
     artist,
+    duration: Number.isFinite(duration) ? duration : null, // lets the app do an exact lookup
     thumbnail: art?.length ? art[art.length - 1].src : $("ytmusic-player-bar img")?.src || null,
     source: SOURCE,
     url: location.href,

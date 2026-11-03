@@ -69,7 +69,12 @@ function translationConfig(p: TranslationPrefs) {
 const tauriBackend: Backend = {
   initExtension: () => invoke("init_extension_connection"),
   currentTrack: () => invoke<Track | null>("get_current_track"),
-  fetchLyrics: (t) => invoke<LyricLine[]>("fetch_lyrics", { trackName: t.title, artistName: t.artist }),
+  fetchLyrics: (t) =>
+    invoke<LyricLine[]>("fetch_lyrics", {
+      trackName: t.title,
+      artistName: t.artist,
+      duration: t.duration || null, // the extension sends 0 for "unknown"
+    }),
 
   async translate(lines, prefs) {
     const lyrics = lines.map(({ time, text, duration }) => ({ time, text, duration: duration ?? null }));

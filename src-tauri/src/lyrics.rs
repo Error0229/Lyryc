@@ -5,7 +5,7 @@ use crate::lyrics_cache::{cache_lyrics, cache_no_lyrics, get_cached_lyrics, Cach
 use crate::types::LyricLine;
 use anyhow::{anyhow, Result};
 use log::{debug, info, warn};
-use reqwest::Client;
+use reqwest::{Client, StatusCode};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -31,6 +31,23 @@ const STAGE_TIMEOUT_SECS: u64 = 15;
 // Shared HTTP client instance for lyrics fetching
 static LYRICS_HTTP_CLIENT: OnceLock<Arc<Client>> = OnceLock::new();
 
+// LRCLIB etiquette (https://lrclib.net/docs): identify the client, send requests
+// one at a time with a short gap, and honour Retry-After on 429/503. Ignoring it
+// gets "ServerOverloaded" answers and eventually a temporary ban.
+const LRCLIB_USER_AGENT: &str = concat!(
+    "Lyryc v",
+    env!("CARGO_PKG_VERSION"),
+    " (https://github.com/Error0229/Lyryc)"
+);
+const LRCLIB_MIN_GAP: Duration = Duration::from_millis(250);
+const LRCLIB_MAX_RETRIES: u32 = 2;
+const LRCLIB_MAX_RETRY_WAIT: Duration = Duration::from_secs(5);
+
+/// When the last LRCLIB request finished. The lock is held across each request,
+/// which is what serializes all LRCLIB traffic in the app.
+static LRCLIB_LAST: tokio::sync::Mutex<Option<tokio::time::Instant>> =
+    tokio::sync::Mutex::const_new(None);
+
 /// State shared by every search stage of one `fetch_lyrics` call.
 #[derive(Default)]
 struct SearchRun {
@@ -47,6 +64,7 @@ fn get_lyrics_http_client() -> &'static Arc<Client> {
     LYRICS_HTTP_CLIENT.get_or_init(|| {
         Arc::new(
             Client::builder()
+                .user_agent(LRCLIB_USER_AGENT)
                 .timeout(Duration::from_secs(30))
                 .pool_max_idle_per_host(15)
                 .pool_idle_timeout(Duration::from_secs(90))
@@ -341,6 +359,116 @@ fn score_result_match(context: &MatchContext, track: &str, artist: &str, has_syn
     score.clamp(0.0, 1.0)
 }
 
+/// The one way to send a request to LRCLIB: serialized, spaced, and retrying
+/// 429/503 after `Retry-After` (with up to 30% jitter, as the docs ask). Returns
+/// the final response whatever its status; callers decide what it means.
+async fn lrclib_get(
+    client: &Client,
+    url: &str,
+    per_req_timeout: Duration,
+) -> Result<reqwest::Response> {
+    let mut attempt = 0;
+    loop {
+        let resp = {
+            let mut last = LRCLIB_LAST.lock().await;
+            if let Some(at) = *last {
+                tokio::time::sleep_until(at + LRCLIB_MIN_GAP).await;
+            }
+            let resp = client.get(url).timeout(per_req_timeout).send().await;
+            *last = Some(tokio::time::Instant::now());
+            resp?
+        };
+
+        let status = resp.status();
+        let busy = status == StatusCode::TOO_MANY_REQUESTS
+            || status == StatusCode::SERVICE_UNAVAILABLE;
+        let wait = retry_after(&resp).unwrap_or(Duration::from_secs(1));
+        if !busy || attempt == LRCLIB_MAX_RETRIES || wait > LRCLIB_MAX_RETRY_WAIT {
+            return Ok(resp);
+        }
+        attempt += 1;
+        debug!("LRCLIB answered {} for {}; retrying in {:?}", status, url, wait);
+        tokio::time::sleep(with_jitter(wait)).await;
+    }
+}
+
+fn retry_after(resp: &reqwest::Response) -> Option<Duration> {
+    let secs: f64 = resp
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    (secs.is_finite() && secs >= 0.0).then(|| Duration::from_secs_f64(secs))
+}
+
+/// Add 0-30% so clients told the same Retry-After don't come back in lockstep.
+fn with_jitter(wait: Duration) -> Duration {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    wait.mul_f64(1.0 + f64::from(nanos % 300) / 1000.0)
+}
+
+/// Fewer lines than this is a junk record (LRCLIB has some, e.g. "[00:00.00]probe"),
+/// not a song. Rejecting it lets the search path find a real one.
+const MIN_RECORD_LINES: usize = 3;
+
+/// Lyrics from one LRCLIB record: synced if present, else plain. None for
+/// instrumentals, empty and junk records.
+fn lyrics_from_record(record: &serde_json::Value) -> Option<Vec<LyricLine>> {
+    let field = |name: &str| record[name].as_str().filter(|s| !s.trim().is_empty());
+    let lyrics = match (field("syncedLyrics"), field("plainLyrics")) {
+        (Some(synced), _) => parse_lrc_format(synced),
+        (None, Some(plain)) => convert_plain_lyrics_to_lines(plain),
+        (None, None) => return None,
+    };
+    (lyrics.len() >= MIN_RECORD_LINES).then_some(lyrics)
+}
+
+/// `/api/get`: one exact lookup by name and duration (LRCLIB allows +-2 s). Cheap
+/// for LRCLIB and usually all we need. Failures are recorded on `run` and read
+/// as "not found", so the search path still gets its turn.
+async fn fetch_exact(
+    track: &str,
+    artist: &str,
+    duration: f64,
+    run: &SearchRun,
+) -> Option<Vec<LyricLine>> {
+    let url = format!(
+        "https://lrclib.net/api/get?track_name={}&artist_name={}&duration={}",
+        urlencoding::encode(track),
+        urlencoding::encode(artist),
+        duration.round() as u64
+    );
+    if !run.tried.lock().unwrap().insert(url.clone()) {
+        return None;
+    }
+
+    let timeout = Duration::from_secs(PER_REQUEST_TIMEOUT_SECS);
+    let record = async {
+        let resp = lrclib_get(get_lyrics_http_client(), &url, timeout).await?;
+        if resp.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let record = resp.error_for_status()?.json::<serde_json::Value>().await?;
+        Ok::<_, anyhow::Error>(Some(record))
+    }
+    .await;
+
+    match record {
+        Ok(record) => record.as_ref().and_then(lyrics_from_record),
+        Err(e) => {
+            debug!("Exact lookup failed for '{}' by '{}': {}", track, artist, e);
+            run.incomplete.store(true, Ordering::Relaxed);
+            None
+        }
+    }
+}
+
 async fn fetch_lyrics_from_url(
     client: Arc<Client>,
     candidate: LyricsCandidate,
@@ -348,13 +476,9 @@ async fn fetch_lyrics_from_url(
     per_req_timeout: Duration,
 ) -> Result<LyricsFetchResult> {
     let req_fut = async {
-        let resp = client
-            .get(&candidate.url)
-            .header("User-Agent", "Lyryc/0.1.0")
-            .timeout(per_req_timeout)
-            .send()
-            .await?;
-        let resp = resp.error_for_status()?;
+        let resp = lrclib_get(&client, &candidate.url, per_req_timeout)
+            .await?
+            .error_for_status()?;
         let json: Vec<serde_json::Value> = resp.json().await?;
 
         debug!(
@@ -450,6 +574,7 @@ async fn fetch_lyrics_from_url(
 pub async fn fetch_lyrics(
     track_name: String,
     artist_name: String,
+    duration: Option<f64>,       // seconds, from the player; enables the exact lookup
     _request_id: Option<String>, // Keep for compatibility
 ) -> Result<Vec<LyricLine>, String> {
     // Check cache first - instant return if we've seen this song before
@@ -490,8 +615,24 @@ pub async fn fetch_lyrics(
     let mut fast_params = SearchParameters::new(track_name.clone(), search_artist.clone());
     fast_params.populate_regex_only();
 
-    // Build fast path candidates (only highest priority - stages 1-2)
     let run = SearchRun::default();
+
+    // === EXACT PATH ===
+    // With the player's duration, /api/get usually answers in one cheap request.
+    if let Some(duration) = duration.filter(|d| (1.0..=3600.0).contains(d)) {
+        let mut titles = vec![fast_params.cleaned_track.clone(), track_name.clone()];
+        titles.dedup();
+        for title in &titles {
+            if let Some(lyrics) = fetch_exact(title, &search_artist, duration, &run).await {
+                info!("Exact match: '{}' by '{}' ({:.0}s)", title, search_artist, duration);
+                llm_handle.abort();
+                cache_lyrics(&artist_name, &track_name, lyrics.clone());
+                return Ok(lyrics);
+            }
+        }
+    }
+
+    // Build fast path candidates (only highest priority - stages 1-2)
     let fast_candidates = build_search_candidates(&fast_params)?;
     let fast_candidates: Vec<_> = fast_candidates
         .into_iter()
@@ -910,7 +1051,7 @@ pub async fn fetch_lrclib_raw(
 
     if let Ok(resp) = client
         .get(&url)
-        .header("User-Agent", "Lyryc/0.1.0")
+        .header("User-Agent", LRCLIB_USER_AGENT)
         .timeout(Duration::from_secs(10))
         .send()
         .await
@@ -930,7 +1071,7 @@ pub async fn fetch_lrclib_raw(
         );
         if let Ok(resp) = client
             .get(&url)
-            .header("User-Agent", "Lyryc/0.1.0")
+            .header("User-Agent", LRCLIB_USER_AGENT)
             .timeout(Duration::from_secs(10))
             .send()
             .await
@@ -1034,4 +1175,44 @@ pub fn convert_plain_lyrics_to_lines(plain_lyrics: &str) -> Vec<LyricLine> {
     }
 
     lyrics
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn record_prefers_synced_then_plain_then_nothing() {
+        let synced = json!({
+            "syncedLyrics": "[00:01.00]a\n[00:02.00]b\n[00:03.00]c",
+            "plainLyrics": "x"
+        });
+        assert_eq!(lyrics_from_record(&synced).unwrap()[0].text, "a");
+
+        let plain = json!({"syncedLyrics": "  ", "plainLyrics": "one\ntwo\nthree"});
+        assert_eq!(lyrics_from_record(&plain).unwrap().len(), 3);
+
+        // A real junk record that /api/get returned for a popular song.
+        let junk = json!({"syncedLyrics": "[00:00.00]probe", "plainLyrics": "probe"});
+        assert!(lyrics_from_record(&junk).is_none());
+
+        let instrumental = json!({"instrumental": true, "syncedLyrics": null, "plainLyrics": null});
+        assert!(lyrics_from_record(&instrumental).is_none());
+    }
+
+    #[test]
+    fn jitter_adds_at_most_thirty_percent() {
+        let base = Duration::from_secs(1);
+        for _ in 0..100 {
+            let wait = with_jitter(base);
+            assert!(wait >= base && wait < base.mul_f64(1.3));
+        }
+    }
+
+    #[test]
+    fn user_agent_follows_lrclib_format() {
+        assert!(LRCLIB_USER_AGENT.starts_with("Lyryc v"));
+        assert!(LRCLIB_USER_AGENT.ends_with("(https://github.com/Error0229/Lyryc)"));
+    }
 }
