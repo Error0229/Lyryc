@@ -13,6 +13,8 @@
 
 mod align;
 mod breaker;
+#[cfg(test)]
+mod diag;
 mod kugou;
 mod netease;
 mod qq;
@@ -181,21 +183,46 @@ where
 
 /// The guards. None means "don't trust this", never "partially trust it".
 fn accept(hit: &Hit, q: &Query, plain: Option<&[String]>) -> Option<Vec<LyricLine>> {
+    check(hit, q, plain).ok()
+}
+
+/// Why a hit failed the guards.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Reject {
+    /// Fewer than `MIN_LINES` timed lines.
+    FewLines,
+    /// Timed past the end of the recording being played.
+    TooLong,
+    /// No known text, and the title is some other song's.
+    Title,
+    /// Under `MIN_MATCHED` of the known lines found a partner.
+    Text,
+}
+
+fn check(hit: &Hit, q: &Query, plain: Option<&[String]>) -> Result<Vec<LyricLine>, Reject> {
     let src = align::parse_lrc(&hit.lrc, &q.track, &q.artist);
-    let last = src.last()?.0;
-    if src.len() < MIN_LINES || last > q.duration + SAME_RECORDING_SECS {
-        return None;
+    let last = src.last().ok_or(Reject::FewLines)?.0;
+    if src.len() < MIN_LINES {
+        return Err(Reject::FewLines);
+    }
+    if last > q.duration + SAME_RECORDING_SECS {
+        return Err(Reject::TooLong);
     }
     let Some(plain) = plain else {
-        return title_matches(&hit.title, &q.track).then(|| to_lines(src));
+        return if title_matches(&hit.title, &q.track) {
+            Ok(to_lines(src))
+        } else {
+            Err(Reject::Title)
+        };
     };
     let mapped = align::map_lines(plain, &src);
     let matched = mapped.iter().flatten().count();
     if (matched as f64) < MIN_MATCHED * plain.len() as f64 {
-        return None;
+        return Err(Reject::Text);
     }
     let times = align::interpolate(&mapped, q.duration.max(last));
-    Some(to_lines(
+    Ok(to_lines(
         times.into_iter().zip(plain.iter().cloned()).collect(),
     ))
 }
