@@ -1,6 +1,6 @@
 //! NetEase Cloud Music: `/api/search/get` search, `/api/song/lyric` lyric.
 
-use super::{str_of, Api, Candidate, Query};
+use super::{str_of, Api, Candidate, Name};
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 
@@ -12,10 +12,10 @@ pub const API: Api = Api {
     lyric,
 };
 
-fn search_url(q: &Query) -> String {
+fn search_url(name: &Name, _duration: f64) -> String {
     format!(
         "https://music.163.com/api/search/get?s={}&type=1&limit=10",
-        urlencoding::encode(&format!("{} {}", q.track, q.artist))
+        urlencoding::encode(&format!("{} {}", name.title, name.artist))
     )
 }
 
@@ -83,7 +83,10 @@ mod tests {
             ("409430736", "恋", "茅原実里")
         );
         assert_eq!(c[0].duration, 265.773);
-        assert_eq!(crate::sources::best(c, &koi()).unwrap().id, "409430736");
+        assert_eq!(
+            crate::sources::best(c, &koi(), true).unwrap().id,
+            "409430736"
+        );
         // No results: no `songs` key at all.
         assert!(
             candidates(&json!({"result": {"songCount": 0}, "code": 200}))

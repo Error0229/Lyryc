@@ -1,7 +1,7 @@
 //! QQ Music: `client_search_cp` search, `fcg_query_lyric_new` lyric (plain LRC
 //! with `nobase64=1`). Both want a y.qq.com Referer.
 
-use super::{str_of, Api, Candidate, Query};
+use super::{str_of, Api, Candidate, Name};
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 
@@ -13,10 +13,10 @@ pub const API: Api = Api {
     lyric,
 };
 
-fn search_url(q: &Query) -> String {
+fn search_url(name: &Name, _duration: f64) -> String {
     format!(
         "https://c.y.qq.com/soso/fcgi-bin/client_search_cp?w={}&format=json&n=10",
-        urlencoding::encode(&format!("{} {}", q.track, q.artist))
+        urlencoding::encode(&format!("{} {}", name.title, name.artist))
     )
 }
 
@@ -76,7 +76,7 @@ mod tests {
         assert_eq!(c[0].artist, "茅原实里 (ちはらみのり)");
         assert_eq!(c[0].duration, 265.0);
         assert_eq!(
-            crate::sources::best(c, &koi()).unwrap().id,
+            crate::sources::best(c, &koi(), true).unwrap().id,
             "004b0Z2O3rHFH1"
         );
         assert!(candidates(&json!({"code": 0, "data": {}})).is_err());
@@ -96,7 +96,7 @@ mod tests {
     #[test]
     fn search_url_encodes_query() {
         assert_eq!(
-            search_url(&koi()),
+            search_url(&koi().names[0], 265.0),
             "https://c.y.qq.com/soso/fcgi-bin/client_search_cp?w=%E6%81%8B%20%E8%8C%85%E5%8E%9F%E5%AE%9F%E9%87%8C&format=json&n=10"
         );
     }
