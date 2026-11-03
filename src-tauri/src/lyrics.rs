@@ -737,19 +737,15 @@ pub async fn fetch_lyrics_timed(
     req.video_id = video_id.filter(|id| ytmusic::is_video_id(id));
     req.web_search = web_search.unwrap_or(false);
     req.refetch = refetch.unwrap_or(false);
-    if req.refetch {
-        // Everything the app remembers about the song led to the wrong lyrics.
-        info!("Searching again for '{}' by '{}'", req.title, req.artist);
-        correct(&req.artist, &req.title);
-        forget_lyrics(&req.artist, &req.title);
-        llm::identify::forget(&req.title, &req.artist);
-        prealign::forget(req.video_id.as_deref());
-    }
     let (mut timed, mut upgrade) = {
         // The lock first: a lookahead holding it must not wait on this lookup.
         let _song = song_lock(&req).await;
         let _live = LiveLookup::start();
-        if !req.refetch {
+        // Under the lock: a lookup of the song still running when the user
+        // pressed Search again saves its answer before this forgets it.
+        if req.refetch {
+            forget_song(&req);
+        } else {
             adopt_queue_names(&req);
         }
         fetch_timed(&Live, &req, extra_sources).await?
@@ -768,6 +764,15 @@ pub async fn fetch_lyrics_timed(
         });
     }
     Ok(timed)
+}
+
+/// Everything the app remembers about the song led to the wrong lyrics.
+fn forget_song(req: &Request) {
+    info!("Searching again for '{}' by '{}'", req.title, req.artist);
+    correct(&req.artist, &req.title);
+    forget_lyrics(&req.artist, &req.title);
+    llm::identify::forget(&req.title, &req.artist);
+    prealign::forget(req.video_id.as_deref());
 }
 
 /// The user says the song has no words: remembered like a found instrumental,
