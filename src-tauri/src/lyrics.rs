@@ -461,12 +461,15 @@ struct Request {
     duration: Option<f64>,
     /// The YouTube Music track being played, if that is the player.
     video_id: Option<String>,
+    /// Opt-in, paid: when identification without search finds nothing, retry
+    /// it with the provider's web search.
+    web_search: bool,
 }
 
 impl Request {
     fn new(title: String, artist: String, duration: Option<f64>) -> Self {
         let duration = duration.filter(|d| (1.0..=3600.0).contains(d));
-        Self { title, artist, duration, video_id: None }
+        Self { title, artist, duration, video_id: None, web_search: false }
     }
 }
 
@@ -485,7 +488,7 @@ trait Effects: Send + Sync {
     fn lrclib(&self, url: &str) -> impl Future<Output = Reply> + Send;
     /// The LLM's names for the song, native first; empty when it is not set
     /// up, failed or is unsure.
-    fn names(&self, req: &Request) -> impl Future<Output = Vec<Names>> + Send;
+    fn names(&self, req: &Request, web_search: bool) -> impl Future<Output = Vec<Names>> + Send;
     fn sources(&self, q: &sources::Query, plain: Option<&[String]>) -> impl Future<Output = Option<Found>> + Send;
     /// YouTube Music's lyrics for the track; None when it has none or failed.
     fn ytmusic(&self, video_id: &str) -> impl Future<Output = Option<YtLyrics>> + Send;
@@ -513,15 +516,21 @@ impl Effects for Live {
             Err(e) => Reply::Failed(e.to_string()),
         }
     }
-    /// Song identification as measured in docs/research/llm-search (search off):
-    /// the release's own names, e.g. "Snow Country" / Yorushika -> 雪国 / ヨルシカ.
-    async fn names(&self, req: &Request) -> Vec<Names> {
-        let Some(id) = llm::identify::identify_song(&req.title, &req.artist, req.duration, false).await else {
+    /// Song identification as measured in docs/research/llm-search and
+    /// llm-lyrics-deep: the release's own names, e.g. "Snow Country" / Yorushika
+    /// -> 雪国 / ヨルシカ. With `web_search` the provider searches first (10/10
+    /// hard cases in the study, ~$0.015-0.05 per song on the user's key).
+    async fn names(&self, req: &Request, web_search: bool) -> Vec<Names> {
+        let Some(id) = llm::identify::identify_song(&req.title, &req.artist, req.duration, web_search).await else {
             return Vec::new();
         };
         info!(
-            "Identified '{}' by '{}' as '{}' by '{}'",
-            req.title, req.artist, id.title_native, id.artist_native
+            "Identified '{}' by '{}' as '{}' by '{}'{}",
+            req.title,
+            req.artist,
+            id.title_native,
+            id.artist_native,
+            if web_search { " (web search)" } else { "" }
         );
         identified_names(&id)
     }
@@ -565,9 +574,11 @@ pub async fn fetch_lyrics_timed(
     duration: Option<f64>,
     extra_sources: bool,
     video_id: Option<String>, // YouTube Music's id for the track, if it plays there
+    web_search: Option<bool>, // the user's "identify with web search" opt-in
 ) -> Result<TimedLyrics, String> {
     let mut req = Request::new(track_name, artist_name, duration);
     req.video_id = video_id.filter(|id| ytmusic::is_video_id(id));
+    req.web_search = web_search.unwrap_or(false);
     let (timed, upgrade) = fetch_timed(&Live, &req, extra_sources).await?;
     if let Some(job) = upgrade {
         tauri::async_runtime::spawn(async move {
@@ -604,13 +615,32 @@ async fn fetch_timed<E: Effects>(
     let mut run = Lookup { fx, req, asked: HashMap::new(), incomplete: false };
     let mut found = if negative { None } else { run.regex_pass().await };
     if found.is_none() {
-        // A negative-cached song already had its LLM call; it retries the sources only.
-        let names = if negative { Vec::new() } else { fx.names(req).await };
-        found = run.identified_pass(&names).await;
-        if found.is_none() {
+        // Identification without search, then (opt-in, paid) with web search;
+        // each pass tries LRCLIB, then the sources, with the names it found. A
+        // negative-cached song already had its LLM calls: sources only.
+        let passes: &[Option<bool>] = match (negative, req.web_search) {
+            (true, _) => &[None],
+            (false, false) => &[Some(false)],
+            (false, true) => &[Some(false), Some(true)],
+        };
+        let mut tried: Option<Vec<Names>> = None;
+        for pass in passes {
+            let names = match pass {
+                Some(web_search) => fx.names(req, *web_search).await,
+                None => Vec::new(),
+            };
+            // Same names as the last pass (e.g. no LLM set up): nothing new to ask.
+            if tried.as_ref() == Some(&names) {
+                continue;
+            }
+            found = run.identified_pass(&names).await;
+            if found.is_some() {
+                break;
+            }
             if let Some(timed) = from_sources(fx, req, &names, extra).await {
                 return Ok((timed, None));
             }
+            tried = Some(names);
         }
     }
     info!(
@@ -879,6 +909,8 @@ mod tests {
         /// The first rule whose text is in the URL answers; otherwise 404.
         lrclib: Vec<(&'static str, Reply)>,
         names: Vec<Names>,
+        /// What identification with web search finds.
+        names_searched: Vec<Names>,
         answer: Option<Found>,
         urls: Mutex<Vec<String>>,
         llm_calls: Mutex<u32>,
@@ -932,9 +964,9 @@ mod tests {
             let reply = self.lrclib.iter().find(|(n, _)| url.contains(n)).map_or(Reply::NotFound, |(_, r)| r.clone());
             async move { reply }
         }
-        fn names(&self, _req: &Request) -> impl Future<Output = Vec<Names>> + Send {
+        fn names(&self, _req: &Request, web_search: bool) -> impl Future<Output = Vec<Names>> + Send {
             *self.llm_calls.lock().unwrap() += 1;
-            let names = self.names.clone();
+            let names = if web_search { self.names_searched.clone() } else { self.names.clone() };
             async move { names }
         }
         fn sources(&self, q: &sources::Query, plain: Option<&[String]>) -> impl Future<Output = Option<Found>> + Send {
@@ -1097,6 +1129,38 @@ mod tests {
             "native names first, then the player's, then the other spellings"
         );
         assert_eq!(fx.saved(), vec![TimingSource::Qq]);
+    }
+
+    #[tokio::test]
+    async fn web_search_identification_is_opt_in_and_only_after_the_free_pass() {
+        // The free pass can't place the song; only the web search pass finds 雪国 / ヨルシカ.
+        let (mut req, searched) = snow_country();
+        let fx = || {
+            Fake { names_searched: searched.clone(), ..Default::default() }
+                .rule("artist_name=%E3%83%A8", json_reply(json!([record("雪国", "ヨルシカ", 288.0, true)])))
+                .rule("search?", json_reply(json!([])))
+        };
+
+        let off = fx();
+        assert!(fetch_timed(&off, &req, true).await.is_err());
+        assert_eq!(off.llm_calls(), 1, "setting off: the free identification only");
+
+        req.web_search = true;
+        let on = fx();
+        let (timed, _) = fetch_timed(&on, &req, true).await.unwrap();
+        assert_eq!(timed.source, TimingSource::Lrclib);
+        assert_eq!(on.llm_calls(), 2, "free pass first, then web search");
+        assert_eq!(on.calls().len(), 1, "the sources ran once, after the free pass only");
+    }
+
+    #[tokio::test]
+    async fn web_search_pass_is_skipped_when_it_has_nothing_new() {
+        // No LLM answer either way (e.g. none set up): the sources are asked once, not twice.
+        let (mut req, _) = snow_country();
+        req.web_search = true;
+        let fx = Fake::default().rule("search?", json_reply(json!([])));
+        assert!(fetch_timed(&fx, &req, true).await.is_err());
+        assert_eq!(fx.calls().len(), 1);
     }
 
     #[tokio::test]
@@ -1355,7 +1419,7 @@ mod tests {
             self.0.lock().unwrap().push(status);
             reply
         }
-        async fn names(&self, _req: &Request) -> Vec<Names> {
+        async fn names(&self, _req: &Request, _web_search: bool) -> Vec<Names> {
             Vec::new()
         }
         fn sources(&self, q: &sources::Query, plain: Option<&[String]>) -> impl Future<Output = Option<Found>> + Send {

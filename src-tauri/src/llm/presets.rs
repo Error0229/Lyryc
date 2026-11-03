@@ -18,7 +18,8 @@ pub enum Dialect {
 }
 
 /// How a preset exposes its provider's built-in web search tool.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum WebSearch {
     /// Responses API (`POST {base}/responses`) with `tools: [{type: "web_search"}]`.
     /// OpenAI and xAI; Chat Completions has no search tool on either.
@@ -44,7 +45,7 @@ pub struct Preset {
     #[serde(skip)]
     pub models_url: Option<&'static str>,
     /// Built-in web search, if the provider has one (see `WebSearch`).
-    #[serde(skip)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub web_search: Option<WebSearch>,
 }
 
@@ -270,10 +271,10 @@ mod tests {
             .collect();
         assert_eq!(with, ["openai", "anthropic", GEMINI, "openrouter", "xai"]);
         assert_eq!(find("xai").unwrap().web_search, Some(WebSearch::Responses));
-        assert!(serde_json::to_value(find("openai").unwrap())
-            .unwrap()
-            .get("webSearch")
-            .is_none());
+        // Sent to the frontend, so Settings can warn when identification can't search.
+        let json = |id| serde_json::to_value(find(id).unwrap()).unwrap();
+        assert_eq!(json("openrouter")["webSearch"], "openrouter");
+        assert!(json("groq").get("webSearch").is_none());
     }
 
     #[test]

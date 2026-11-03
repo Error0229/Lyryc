@@ -25,6 +25,8 @@ export interface LlmPreset {
   keyRequired: boolean; // false for local servers (Ollama, LM Studio)
   keyUrl?: string; // where the user gets a key
   suggestedModels: string[];
+  /** The provider's built-in web search, if any (needed to identify songs with search). */
+  webSearch?: "responses" | "openrouter" | "native";
 }
 
 export interface LlmProvider {

@@ -204,7 +204,9 @@ pub async fn identify_with(
 
 /// Answers per raw (title, artist), including "unsure", for this session: a
 /// song that missed once will miss again, and each call costs the user.
-type Answers = HashMap<(String, String), Option<SongIdentity>>;
+/// By (raw title, raw artist, web search): a search-off "unsure" must not
+/// shadow the search-on attempt.
+type Answers = HashMap<(String, String, bool), Option<SongIdentity>>;
 static ANSWERS: LazyLock<Mutex<Answers>> = LazyLock::new(Default::default);
 
 /// Canonical names for a raw player title, using the cleaning route. `None`
@@ -218,7 +220,7 @@ pub async fn identify_song(
     duration: Option<f64>,
     web_search: bool,
 ) -> Option<SongIdentity> {
-    let key = (raw_title.to_string(), raw_artist.to_string());
+    let key = (raw_title.to_string(), raw_artist.to_string(), web_search);
     if let Some(answer) = ANSWERS.lock().unwrap().get(&key) {
         return answer.clone();
     }

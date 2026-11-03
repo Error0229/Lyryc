@@ -33,6 +33,8 @@ invoke<TimedLyrics>("fetch_lyrics_timed", {
   duration: number | null, // seconds; 0/absent = unknown
   extraSources: boolean,   // the user's "Extra lyric sources" setting
   videoId?: string | null, // YouTube Music's id for the track (Track.videoId)
+  webSearch?: boolean,     // "Identify songs with web search": when no source finds the
+                           // song, re-identify it with the provider's web search (paid)
 });
 
 type LyricsSource =

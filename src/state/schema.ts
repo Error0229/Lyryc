@@ -68,6 +68,8 @@ export interface Settings {
   wordHighlight: boolean;
   /** Ask QQ Music / NetEase / Kugou for timing LRCLIB lacks. Opt-in: unofficial endpoints. */
   extraSources: boolean;
+  /** When no source finds a song, let the AI provider search the web to identify it. Opt-in: paid. */
+  identifyWithSearch: boolean;
   lyric: LyricStyle;
   translation: TranslationPrefs;
   furigana: FuriganaPrefs;
@@ -98,6 +100,7 @@ export const defaultSettings: Settings = {
   theme: "system",
   wordHighlight: true,
   extraSources: false,
+  identifyWithSearch: false,
   lyric: defaultLyric,
   translation: {
     enabled: false,

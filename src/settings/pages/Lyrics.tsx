@@ -11,8 +11,21 @@ import { Slider } from "../../ui/Slider";
 import { Switch } from "../../ui/Switch";
 import { PageHeader } from "../Page";
 import { useCurrentTrack } from "../useTrack";
+import { presetOf, useLlm } from "../providers/useLlm";
 
 const RANGE = OFFSET_LIMIT / 2;
+
+/**
+ * Whether the provider song identification runs on (Track name cleanup, else
+ * translation, as the backend routes it) has web search. Undefined while loading.
+ */
+function useIdentifySearchSupport(): boolean | undefined {
+  const { presets, settings: llm } = useLlm();
+  if (!llm || presets.length === 0) return undefined;
+  const route = llm.routes.cleaning ?? llm.routes.translation;
+  const provider = route && llm.providers.find((p) => p.id === route.providerId);
+  return !!provider && !!presetOf(presets, provider.presetId)?.webSearch;
+}
 
 function OffsetSlider({ label, value, onChange }: { label: string; value: number; onChange: (v: number) => void }) {
   return (
@@ -44,6 +57,8 @@ function TrackOffsets({ offsets }: { offsets: Record<string, number> }) {
 export function LyricsPage() {
   const wordHighlight = useSettings((s) => s.wordHighlight);
   const extraSources = useSettings((s) => s.extraSources);
+  const identifyWithSearch = useSettings((s) => s.identifyWithSearch);
+  const canSearch = useIdentifySearchSupport();
   const { globalOffset, trackOffsets } = useSettings((s) => s.sync);
   const track = useCurrentTrack();
   const [confirm, setConfirm] = useState(false);
@@ -65,6 +80,16 @@ export function LyricsPage() {
           hint="Shows YouTube Music's own lyrics for the track playing there, and asks QQ Music, NetEase and Kugou for timing LRCLIB lacks, sending them the title and artist. Unofficial lookups: they use these services' internal APIs, not public ones, outside their terms, and may stop working."
         >
           <Switch label="Extra lyric sources" checked={extraSources} onChange={settings.setExtraSources} />
+        </Row>
+        <Row
+          label="Identify songs with web search"
+          hint={
+            identifyWithSearch && canSearch === false
+              ? "Your Track name cleanup provider has no web search. Route it to OpenRouter, OpenAI, Anthropic, xAI or Gemini (paid tier) in AI providers."
+              : "When no source finds a song, your AI provider searches the web for its real title and artist, then the lookup runs again. Only names come back, never lyrics. Costs about $0.02–0.05 per song on your key."
+          }
+        >
+          <Switch label="Identify songs with web search" checked={identifyWithSearch} onChange={settings.setIdentifyWithSearch} />
         </Row>
       </Section>
 

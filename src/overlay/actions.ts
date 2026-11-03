@@ -22,7 +22,8 @@ export function setTrack(track: Track) {
 async function loadLyrics(track: Track) {
   const id = ++request;
   try {
-    const r = await backend.fetchLyrics(track, useSettings.getState().extraSources);
+    const { extraSources, identifyWithSearch } = useSettings.getState();
+    const r = await backend.fetchLyrics(track, extraSources, identifyWithSearch);
     if (id === request) applyLyrics(track, r.lines, r.source);
   } catch {
     if (id === request) useSession.setState({ status: "missing" });
