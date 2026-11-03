@@ -5,3 +5,4 @@ results/raw/
 __pycache__/
 *.log
 data/dataset.json
+data/stems/*.wav

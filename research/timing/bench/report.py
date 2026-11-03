@@ -1,10 +1,16 @@
-"""Aggregate results/*.json into the benchmark table. Usage: python bench/report.py [--by-lang]"""
+"""Aggregate results/*.json into the benchmark table.
+
+Usage: python bench/report.py [--by-lang] [--ids 3,5,6] [--oracle-offset]
+  --oracle-offset : subtract each track's median signed error first. This uses ground
+                    truth, so it is a diagnostic: it isolates aligner error from a constant
+                    shift between the downloaded audio and the LRCLIB timeline.
+"""
 import statistics, sys
 from common import load, score
 from results import load_all
 
 
-def pooled(data, tracks):
+def pooled(data, tracks, oracle=False):
     """Line-pooled metrics over tracks the method covered, plus coverage."""
     errs, n, covered, secs = [], 0, 0, []
     for t in data:
@@ -13,10 +19,10 @@ def pooled(data, tracks):
             continue
         covered += 1
         secs.append(r["secs"])
-        for (gt, _), p in zip(t["truth"], r["times"]):
-            n += 1
-            if p is not None:
-                errs.append(abs(p - gt))
+        d = [p - gt if p is not None else None for (gt, _), p in zip(t["truth"], r["times"])]
+        off = statistics.median(x for x in d if x is not None) if oracle else 0.0
+        n += len(d)
+        errs += [abs(x - off) for x in d if x is not None]
     if not errs:
         return None
     return {"cov": covered / len(data), "mean": statistics.fmean(errs), "median": statistics.median(errs),
@@ -37,6 +43,10 @@ HEAD = ("| method | coverage | mean abs err (s) | median (s) | ≤0.3s | ≤0.5s
 if __name__ == "__main__":
     data = load()
     allres = load_all()
+    if "--ids" in sys.argv:
+        ids = sys.argv[sys.argv.index("--ids") + 1].split(",")
+        data = [t for t in data if str(t["id"]) in ids]
+    oracle = "--oracle-offset" in sys.argv
     groups = [("all", data)]
     if "--by-lang" in sys.argv:
         groups += [(lg, [t for t in data if t["lang"] == lg]) for lg in ("en", "ja", "zh", "ko")]
@@ -44,4 +54,4 @@ if __name__ == "__main__":
         print(f"\n**{g}** ({len(subset)} tracks, {sum(len(t['truth']) for t in subset)} lines)\n")
         print(HEAD)
         for name, r in allres.items():
-            print(row(name, r["info"], pooled(subset, r["tracks"])))
+            print(row(name, r["info"], pooled(subset, r["tracks"], oracle)))

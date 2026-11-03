@@ -12,4 +12,5 @@ def save(name, tracks, info):
 
 
 def load_all():
-    return {p.stem: json.loads(p.read_text(encoding="utf-8")) for p in sorted(RES.glob("*.json"))}
+    out = {p.stem: json.loads(p.read_text(encoding="utf-8")) for p in sorted(RES.glob("*.json"))}
+    return {k: v for k, v in out.items() if isinstance(v, dict) and "info" in v}
