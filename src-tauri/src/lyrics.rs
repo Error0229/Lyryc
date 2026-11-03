@@ -1,40 +1,42 @@
-use crate::cleaning::{
-    clean_artist_and_track_names, clean_track_name, clean_track_name_sync, remove_artist_from_track,
-};
+//! Lyrics lookup: a short, sequential conversation with LRCLIB, then the
+//! opt-in extra sources, then one LLM-assisted retry.
+//!
+//! 1. Cache.
+//! 2. `/api/get` with the player's title, then with the regex-cleaned title.
+//! 3. One structured `/api/search` for the cleaned title; one full-text `q=`
+//!    search only if nothing so far found the song.
+//! 4. Extra sources (QQ / NetEase / Kugou), when enabled: also when LRCLIB failed.
+//! 5. One LLM call for canonical names, then `/api/get` + search with them.
+//!
+//! At most `MAX_REQUESTS` LRCLIB requests per song, one at a time, and no URL
+//! twice. A plain-only hit spends one of them looking for a synced entry of the
+//! same recording.
+
+use crate::cleaning::{self, clean_title, normalize_name, Names};
 use crate::lyrics_cache::{cache_lyrics, cache_no_lyrics, get_cached_lyrics, CacheResult};
 use crate::sources::{self, Found, Provider};
 use crate::timing;
 use crate::types::LyricLine;
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use log::{debug, info, warn};
+use regex::Regex;
 use reqwest::{Client, StatusCode};
 use serde::Serialize;
-use std::collections::HashSet;
+use serde_json::Value;
+use std::collections::HashMap;
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{LazyLock, OnceLock};
 use std::time::Duration;
 use tauri::Emitter;
-use tokio::{task::JoinSet, time::timeout};
-use tokio_util::sync::CancellationToken;
 
-// Priority constants for clear hierarchy - CLEANED names should have HIGHER priority
-const PRIORITY_EXACT_CLEANED: u8 = 10; // Highest - cleaned track + cleaned artist
-const PRIORITY_EXACT_ORIGINAL: u8 = 9; // Original track + cleaned artist
-const PRIORITY_WILDCARD_CLEANED_WITH_ARTIST: u8 = 8; // Wildcard cleaned + artist
-const PRIORITY_WILDCARD_WITH_ARTIST: u8 = 7; // Wildcard original + artist
-const PRIORITY_EXACT_CLEANED_WITHOUT_ARTIST: u8 = 6; // Cleaned without artist prefix
-const PRIORITY_EXACT_WITHOUT_ARTIST: u8 = 5; // Original without artist prefix
-const PRIORITY_WILDCARD_CLEANED_ONLY: u8 = 4; // Wildcard cleaned only
-const PRIORITY_WILDCARD_ORIGINAL_ONLY: u8 = 3; // Wildcard original only
-
-// Configuration constants
-const MAX_CANDIDATES_PER_STAGE: usize = 4;
-const PER_REQUEST_TIMEOUT_SECS: u64 = 10;
-const STAGE_TIMEOUT_SECS: u64 = 15;
-
-// Shared HTTP client instance for lyrics fetching
-static LYRICS_HTTP_CLIENT: OnceLock<Arc<Client>> = OnceLock::new();
+/// Most LRCLIB requests one song may cost (retries of a busy answer aside).
+const MAX_REQUESTS: usize = 5;
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// A search result scoring below this is some other song.
+const MIN_SCORE: f32 = 0.6;
+/// Fewer lines than this is a junk record (LRCLIB has some, e.g. "[00:00.00]probe"),
+/// not a song.
+const MIN_RECORD_LINES: usize = 3;
 
 // LRCLIB etiquette (https://lrclib.net/docs): identify the client, send requests
 // one at a time with a short gap, and honour Retry-After on 429/503. Ignoring it
@@ -53,326 +55,15 @@ const LRCLIB_MAX_RETRY_WAIT: Duration = Duration::from_secs(5);
 static LRCLIB_LAST: tokio::sync::Mutex<Option<tokio::time::Instant>> =
     tokio::sync::Mutex::const_new(None);
 
-/// State shared by every search stage of one `fetch_lyrics` call.
-#[derive(Default)]
-struct SearchRun {
-    /// URLs already requested. The LLM path re-derives most of the fast path's
-    /// candidates; asking LRCLIB the same question twice is pointless.
-    tried: Mutex<HashSet<String>>,
-    /// Some request never got an answer (HTTP error, network, timeout), so
-    /// "nothing found" is not trustworthy and must not be negative-cached.
-    incomplete: AtomicBool,
-}
-
-/// Get shared HTTP client with connection pooling for lyrics
-fn get_lyrics_http_client() -> &'static Arc<Client> {
-    LYRICS_HTTP_CLIENT.get_or_init(|| {
-        Arc::new(
-            Client::builder()
-                .user_agent(LRCLIB_USER_AGENT)
-                .timeout(Duration::from_secs(30))
-                .pool_max_idle_per_host(15)
-                .pool_idle_timeout(Duration::from_secs(90))
-                .build()
-                .expect("Failed to create lyrics HTTP client"),
-        )
+fn client() -> &'static Client {
+    static CLIENT: OnceLock<Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        Client::builder()
+            .user_agent(LRCLIB_USER_AGENT)
+            .timeout(Duration::from_secs(30))
+            .build()
+            .expect("Failed to create lyrics HTTP client")
     })
-}
-
-#[derive(Clone, Debug)]
-struct MatchContext {
-    expected_tracks: Vec<String>,
-    expected_artists: Vec<String>,
-}
-
-#[derive(Clone, Debug)]
-struct LyricsCandidate {
-    priority: u8, // Higher number = higher priority
-    url: String,
-    description: String,
-    match_context: MatchContext,
-}
-
-#[derive(Clone, Debug)]
-struct LyricsFetchResult {
-    candidate: LyricsCandidate,
-    lyrics: Vec<LyricLine>,
-    score: f32,
-    /// Set when `lyrics` are estimated from plainLyrics, so the caller can look
-    /// for real timing and must not cache the estimate.
-    plain_source: Option<PlainSource>,
-}
-
-/// The LRCLIB entry an estimated result came from.
-#[derive(Clone, Debug)]
-struct PlainSource {
-    track: String,
-    artist: String,
-    duration: f64,
-}
-
-#[derive(Clone, Debug)]
-struct SearchParameters {
-    track_name: String,
-    artist_name: String,
-    artist_variants: Vec<String>, // All artist name variants from LLM cleaning
-    cleaned_track: String,
-    cleaned_artist: String,
-    cleaned_artist_primary: String, // First artist from cleaned_artists array
-    track_without_artist: String,
-    cleaned_track_without_artist: String,
-}
-
-impl SearchParameters {
-    fn new(track_name: String, artist_name: String) -> Self {
-        Self {
-            track_name: track_name.clone(),
-            artist_name: artist_name.clone(),
-            artist_variants: Vec::new(),           // Will be filled async
-            cleaned_track: String::new(),          // Will be filled async
-            cleaned_artist: String::new(),         // Will be filled async
-            cleaned_artist_primary: String::new(), // Will be filled async
-            track_without_artist: String::new(),   // Will be filled async
-            cleaned_track_without_artist: String::new(), // Will be filled async
-        }
-    }
-
-    /// Fast path: populate with regex cleaning only (instant, no LLM calls)
-    fn populate_regex_only(&mut self) {
-        // Use regex cleaning for track name
-        self.cleaned_track = clean_track_name_sync(&self.track_name);
-
-        // Use original artist name (no LLM cleaning)
-        self.cleaned_artist = self.artist_name.clone();
-        self.cleaned_artist_primary = self.artist_name.clone();
-        self.artist_variants = vec![self.artist_name.clone()];
-
-        // Track without artist prefix
-        self.track_without_artist = remove_artist_from_track(&self.track_name, &self.artist_name);
-        self.cleaned_track_without_artist = clean_track_name_sync(&self.track_without_artist);
-
-        debug!(
-            "Regex-only cleaning: '{}' -> '{}', artist: '{}'",
-            self.track_name, self.cleaned_track, self.artist_name
-        );
-    }
-
-    async fn populate_cleaned_variants(&mut self) {
-        // Use LLM cleaning for artist and track names
-        match clean_artist_and_track_names(&self.artist_name, &self.track_name).await {
-            Ok(result) => {
-                self.cleaned_artist = result.artist.cleaned_title.clone();
-                // Use the primary artist (first in array) for search
-                self.cleaned_artist_primary = result
-                    .artist
-                    .cleaned_artists
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| result.artist.cleaned_title.clone());
-
-                // Build artist variants list from LLM cleaning
-                self.artist_variants = Vec::new();
-
-                // 1. Add LLM cleaned artists
-                for artist in &result.artist.cleaned_artists {
-                    if !self.artist_variants.contains(artist) {
-                        self.artist_variants.push(artist.clone());
-                    }
-                }
-
-                // 2. Add primary cleaned artist
-                if !self.artist_variants.contains(&self.cleaned_artist_primary) {
-                    self.artist_variants
-                        .push(self.cleaned_artist_primary.clone());
-                }
-
-                // 3. Add original artist name as fallback
-                if !self.artist_variants.contains(&self.artist_name) {
-                    self.artist_variants.push(self.artist_name.clone());
-                }
-
-                // Check if track cleaning actually worked in combined cleaning
-                let combined_cleaned_track = result.track.cleaned_title.clone();
-                if combined_cleaned_track != self.track_name {
-                    self.cleaned_track = combined_cleaned_track;
-                    debug!(
-                        "Artist/track cleaning: '{}' -> {} variants {:?}, '{}' -> '{}'",
-                        self.artist_name,
-                        self.artist_variants.len(),
-                        self.artist_variants,
-                        self.track_name,
-                        self.cleaned_track
-                    );
-                } else {
-                    // Combined cleaning didn't clean the track, fall back to track-only cleaning
-                    debug!(
-                        "Combined cleaning didn't clean track '{}', falling back to track-only cleaning",
-                        self.track_name
-                    );
-                    self.cleaned_track = clean_track_name(&self.track_name).await;
-                    debug!(
-                        "Track-only fallback: '{}' -> '{}', artist: '{}' -> {} variants {:?}",
-                        self.track_name,
-                        self.cleaned_track,
-                        self.artist_name,
-                        self.artist_variants.len(),
-                        self.artist_variants
-                    );
-                }
-            }
-            Err(e) => {
-                warn!(
-                    "Failed to clean artist/track with LLM: {}, using original names",
-                    e
-                );
-
-                // Use original name only
-                self.artist_variants = vec![self.artist_name.clone()];
-
-                // Fallback to separate cleaning for track
-                self.cleaned_track = clean_track_name(&self.track_name).await;
-                self.cleaned_artist = self.artist_name.clone();
-                self.cleaned_artist_primary = self.artist_name.clone();
-
-                debug!(
-                    "Using original fallback: artist '{}', track '{}' -> '{}'",
-                    self.artist_name, self.track_name, self.cleaned_track
-                );
-            }
-        }
-
-        self.track_without_artist = remove_artist_from_track(&self.track_name, &self.artist_name);
-        self.cleaned_track_without_artist = clean_track_name_sync(&self.track_without_artist);
-    }
-}
-
-fn build_match_context(params: &SearchParameters) -> MatchContext {
-    let mut expected_tracks = Vec::new();
-    let track_candidates = vec![
-        params.cleaned_track.as_str(),
-        params.track_name.as_str(),
-        params.cleaned_track_without_artist.as_str(),
-        params.track_without_artist.as_str(),
-    ];
-    for track in track_candidates {
-        if !track.trim().is_empty() && !expected_tracks.contains(&track.to_string()) {
-            expected_tracks.push(track.to_string());
-        }
-    }
-
-    let mut expected_artists = Vec::new();
-    for artist in &params.artist_variants {
-        if !artist.trim().is_empty() && !expected_artists.contains(artist) {
-            expected_artists.push(artist.clone());
-        }
-    }
-
-    MatchContext {
-        expected_tracks,
-        expected_artists,
-    }
-}
-
-fn normalize_for_match(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut last_space = false;
-    for ch in text.to_lowercase().chars() {
-        if ch.is_alphanumeric() {
-            out.push(ch);
-            last_space = false;
-        } else if ch.is_whitespace() {
-            if !last_space {
-                out.push(' ');
-                last_space = true;
-            }
-        } else if !last_space {
-            out.push(' ');
-            last_space = true;
-        }
-    }
-    out.trim().to_string()
-}
-
-fn token_overlap_score(expected: &str, candidate: &str) -> f32 {
-    let expected_tokens: Vec<&str> = expected.split_whitespace().collect();
-    if expected_tokens.is_empty() {
-        return 0.0;
-    }
-    let candidate_tokens: std::collections::HashSet<&str> = candidate.split_whitespace().collect();
-    let mut matches = 0;
-    for token in &expected_tokens {
-        if candidate_tokens.contains(token) {
-            matches += 1;
-        }
-    }
-    matches as f32 / expected_tokens.len() as f32
-}
-
-fn string_match_score(expected: &str, candidate: &str, contains_score: f32) -> f32 {
-    let expected_norm = normalize_for_match(expected);
-    let candidate_norm = normalize_for_match(candidate);
-    if expected_norm.is_empty() || candidate_norm.is_empty() {
-        return 0.0;
-    }
-    if expected_norm == candidate_norm {
-        return 1.0;
-    }
-    if candidate_norm.contains(&expected_norm) || expected_norm.contains(&candidate_norm) {
-        return contains_score;
-    }
-    let overlap = token_overlap_score(&expected_norm, &candidate_norm);
-    if overlap > 0.0 {
-        return 0.4 + 0.5 * overlap;
-    }
-    0.0
-}
-
-fn has_cover_marker(text: &str) -> bool {
-    let lowered = text.to_lowercase();
-    lowered.contains("cover")
-        || lowered.contains("karaoke")
-        || lowered.contains("instrumental")
-        || lowered.contains("remix")
-}
-
-fn score_result_match(context: &MatchContext, track: &str, artist: &str, has_synced: bool) -> f32 {
-    let cleaned_track = crate::cleaning::clean_track_name_sync(track);
-
-    let mut best_track: f32 = 0.0;
-    for expected in &context.expected_tracks {
-        let score_raw = string_match_score(expected, track, 0.85);
-        let score_cleaned = string_match_score(expected, &cleaned_track, 0.85);
-        best_track = best_track.max(score_raw.max(score_cleaned));
-    }
-
-    let mut best_artist: f32 = 0.0;
-    for expected in &context.expected_artists {
-        let score = string_match_score(expected, artist, 0.7);
-        best_artist = best_artist.max(score);
-    }
-
-    let artist_weight = if context.expected_artists.is_empty() {
-        0.0
-    } else {
-        0.25
-    };
-    let track_weight = 0.95 - artist_weight;
-    let mut score: f32 = best_track * track_weight + best_artist * artist_weight;
-    if has_synced {
-        score += 0.05;
-    }
-
-    let expected_has_cover = context.expected_tracks.iter().any(|t| has_cover_marker(t));
-    if !expected_has_cover {
-        if has_cover_marker(track) {
-            score -= 0.15;
-        }
-        if has_cover_marker(artist) {
-            score -= 0.1;
-        }
-    }
-
-    score.clamp(0.0, 1.0)
 }
 
 /// The one way to send a request to LRCLIB: serialized, spaced, and retrying
@@ -429,168 +120,259 @@ fn with_jitter(wait: Duration) -> Duration {
     wait.mul_f64(1.0 + f64::from(nanos % 300) / 1000.0)
 }
 
-/// Fewer lines than this is a junk record (LRCLIB has some, e.g. "[00:00.00]probe"),
-/// not a song. Rejecting it lets the search path find a real one.
-const MIN_RECORD_LINES: usize = 3;
+fn lrclib_url(endpoint: &str, params: &[(&str, &str)]) -> String {
+    let query: Vec<String> = params
+        .iter()
+        .map(|(k, v)| format!("{k}={}", urlencoding::encode(v)))
+        .collect();
+    format!("https://lrclib.net/api/{endpoint}?{}", query.join("&"))
+}
 
-/// Synced lyrics from one LRCLIB record. None for plain-only, instrumental, empty
-/// and junk records: plain-only hits belong to the search path, which knows how
-/// to upgrade or estimate them without caching a guess.
-fn synced_from_record(record: &serde_json::Value) -> Option<Vec<LyricLine>> {
+/// What one LRCLIB request came back with.
+#[derive(Clone, Debug)]
+enum Reply {
+    Json(Value),
+    /// 404: LRCLIB has no such track. A real answer.
+    NotFound,
+    /// No usable answer (network, timeout, 5xx after retries).
+    Failed(String),
+}
+
+/// Synced lyrics from one LRCLIB record. None for plain-only, instrumental,
+/// empty and junk records.
+fn synced_from_record(record: &Value) -> Option<Vec<LyricLine>> {
     let synced = record["syncedLyrics"].as_str().filter(|s| !s.trim().is_empty())?;
     let lyrics = parse_lrc_format(synced);
     (lyrics.len() >= MIN_RECORD_LINES).then_some(lyrics)
 }
 
-/// `/api/get`: one exact lookup by name and duration (LRCLIB allows +-2 s). Cheap
-/// for LRCLIB and usually all we need. Failures are recorded on `run` and read
-/// as "not found", so the search path still gets its turn.
-async fn fetch_exact(
-    track: &str,
-    artist: &str,
+fn plain_from_record(record: &Value) -> Option<&str> {
+    let plain = record["plainLyrics"].as_str()?;
+    (plain.lines().filter(|l| !l.trim().is_empty()).count() >= MIN_RECORD_LINES).then_some(plain)
+}
+
+fn has_lyrics(record: &Value) -> bool {
+    synced_from_record(record).is_some() || plain_from_record(record).is_some()
+}
+
+/// The LRCLIB entry an estimated result came from.
+#[derive(Clone, Debug)]
+struct PlainSource {
+    track: String,
+    artist: String,
     duration: f64,
-    run: &SearchRun,
-) -> Option<Vec<LyricLine>> {
-    let url = format!(
-        "https://lrclib.net/api/get?track_name={}&artist_name={}&duration={}",
-        urlencoding::encode(track),
-        urlencoding::encode(artist),
-        duration.round() as u64
-    );
-    if !run.tried.lock().unwrap().insert(url.clone()) {
-        return None;
-    }
+}
 
-    let timeout = Duration::from_secs(PER_REQUEST_TIMEOUT_SECS);
-    let record = async {
-        let resp = lrclib_get(get_lyrics_http_client(), &url, timeout).await?;
-        if resp.status() == StatusCode::NOT_FOUND {
-            return Ok(None);
-        }
-        let record = resp.error_for_status()?.json::<serde_json::Value>().await?;
-        Ok::<_, anyhow::Error>(Some(record))
-    }
-    .await;
+/// What LRCLIB had for the song.
+#[derive(Debug)]
+enum Lrclib {
+    /// Real timing: a synced entry, or a plain hit upgraded to one.
+    Synced(Vec<LyricLine>),
+    /// Plain lyrics only, with an estimate (never cached).
+    Plain { estimate: Vec<LyricLine>, src: PlainSource },
+}
 
-    match record {
-        Ok(record) => record.as_ref().and_then(synced_from_record),
-        Err(e) => {
-            debug!("Exact lookup failed for '{}' by '{}': {}", track, artist, e);
-            run.incomplete.store(true, Ordering::Relaxed);
-            None
-        }
+// ---------------------------------------------------------------------------
+// Matching search results to the song.
+
+/// The names a search result is compared against.
+struct Want {
+    titles: Vec<String>,
+    artists: Vec<String>,
+    duration: Option<f64>,
+}
+
+/// 1 for the same name, `contains` when one holds the other, 0.4-0.9 by shared words.
+fn string_match_score(expected: &str, candidate: &str, contains: f32) -> f32 {
+    let (e, c) = (normalize_name(expected), normalize_name(candidate));
+    if e.is_empty() || c.is_empty() {
+        return 0.0;
+    }
+    if e == c {
+        return 1.0;
+    }
+    if c.contains(&e) || e.contains(&c) {
+        return contains;
+    }
+    let words: Vec<&str> = e.split(' ').collect();
+    let shared = words.iter().filter(|w| c.split(' ').any(|x| x == **w)).count();
+    if shared == 0 {
+        0.0
+    } else {
+        0.4 + 0.5 * shared as f32 / words.len() as f32
     }
 }
 
-async fn fetch_lyrics_from_url(
-    client: Arc<Client>,
-    candidate: LyricsCandidate,
-    token: CancellationToken,
-    per_req_timeout: Duration,
-) -> Result<LyricsFetchResult> {
-    let req_fut = async {
-        let resp = lrclib_get(&client, &candidate.url, per_req_timeout)
-            .await?
-            .error_for_status()?;
-        let json: Vec<serde_json::Value> = resp.json().await?;
+static COVER: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)cover|karaoke|instrumental|remix").unwrap());
 
-        debug!(
-            "Found {} search results for {}",
-            json.len(),
-            candidate.description
-        );
-
-        if json.is_empty() {
-            return Ok::<_, anyhow::Error>(LyricsFetchResult {
-                candidate,
-                lyrics: Vec::new(),
-                score: 0.0,
-                plain_source: None,
-            });
-        }
-
-        let mut best_index: Option<usize> = None;
-        let mut best_score = 0.0;
-        let mut best_has_synced = false;
-
-        for (index, data) in json.iter().enumerate() {
-            let synced = data["syncedLyrics"]
-                .as_str()
-                .map(|s| !s.trim().is_empty())
-                .unwrap_or(false);
-            let plain = data["plainLyrics"]
-                .as_str()
-                .map(|s| !s.trim().is_empty())
-                .unwrap_or(false);
-
-            if !synced && !plain {
-                continue;
-            }
-
-            let track = data["trackName"].as_str().unwrap_or("");
-            let artist = data["artistName"].as_str().unwrap_or("");
-            let score = score_result_match(&candidate.match_context, track, artist, synced);
-
-            if best_index.is_none() || score > best_score {
-                best_index = Some(index);
-                best_score = score;
-                best_has_synced = synced;
-            }
-        }
-
-        let mut plain_source = None;
-        let (lyrics, match_summary) = match best_index {
-            Some(index) => {
-                let data = &json[index];
-                let track = data["trackName"].as_str().unwrap_or("");
-                let artist = data["artistName"].as_str().unwrap_or("");
-                let synced_lyrics = data["syncedLyrics"].as_str().unwrap_or("");
-                let plain_lyrics = data["plainLyrics"].as_str().unwrap_or("");
-                let lyrics = if best_has_synced && !synced_lyrics.trim().is_empty() {
-                    info!(
-                        "Found synced lyrics for {}, parsing LRC format",
-                        candidate.description
-                    );
-                    parse_lrc_format(synced_lyrics)
-                } else if !plain_lyrics.trim().is_empty() {
-                    info!(
-                        "Found plain lyrics for {}, converting to unsynced format",
-                        candidate.description
-                    );
-                    let duration = data["duration"].as_f64().unwrap_or(0.0);
-                    plain_source = Some(PlainSource {
-                        track: track.to_string(),
-                        artist: artist.to_string(),
-                        duration,
-                    });
-                    timing::estimate_plain(plain_lyrics, duration)
-                } else {
-                    Vec::new()
-                };
-                let summary = format!("'{}' by '{}' (score {:.2})", track, artist, best_score);
-                (lyrics, summary)
-            }
-            None => (Vec::new(), "no lyric-bearing results".to_string()),
-        };
-
-        debug!(
-            "Best match for {} -> {}",
-            candidate.description, match_summary
-        );
-
-        Ok::<_, anyhow::Error>(LyricsFetchResult {
-            candidate,
-            lyrics,
-            score: best_score,
-            plain_source,
-        })
+/// Title 0.7, artist 0.25, synced 0.05; minus covers and a length mismatch.
+/// LRCLIB's names are canonical, so they are only normalized, not cleaned;
+/// either half of a bilingual "雪国 - Snow Country" counts as the title.
+fn score(record: &Value, want: &Want) -> f32 {
+    let track = record["trackName"].as_str().unwrap_or("");
+    let artist = record["artistName"].as_str().unwrap_or("");
+    let mut tracks = vec![track];
+    if let Some((native, translated)) = track.split_once(" - ") {
+        tracks.extend([native, translated]);
+    }
+    let best = |expected: &[String], candidates: &[&str], contains: f32| {
+        expected
+            .iter()
+            .flat_map(|e| candidates.iter().map(move |c| string_match_score(e, c, contains)))
+            .fold(0.0f32, f32::max)
     };
+    let mut s = 0.7 * best(&want.titles, &tracks, 0.85)
+        + 0.25 * best(&want.artists, &[artist], 0.7);
+    if synced_from_record(record).is_some() {
+        s += 0.05;
+    }
+    if COVER.is_match(track) && !want.titles.iter().any(|t| COVER.is_match(t)) {
+        s -= 0.15;
+    }
+    if let (Some(want_secs), Some(secs)) = (want.duration, record["duration"].as_f64()) {
+        // Same recording within LRCLIB's 2 s; an exact name at any length still passes.
+        s -= ((want_secs - secs).abs() as f32 - 2.0).clamp(0.0, 10.0) / 40.0;
+    }
+    s.clamp(0.0, 1.0)
+}
 
-    tokio::select! {
-        _ = token.cancelled() => Err(anyhow!("Request cancelled")),
-        res = req_fut => res,
+/// The lyric-bearing result that best names the song, if any is close enough.
+fn best_match(results: Vec<Value>, want: &Want) -> Option<Value> {
+    let (s, record) = results
+        .into_iter()
+        .filter(has_lyrics)
+        .map(|r| (score(&r, want), r))
+        .max_by(|a, b| a.0.total_cmp(&b.0))?;
+    debug!(
+        "Best search result: '{}' by '{}' ({:.2})",
+        record["trackName"].as_str().unwrap_or(""),
+        record["artistName"].as_str().unwrap_or(""),
+        s
+    );
+    (s >= MIN_SCORE).then_some(record)
+}
+
+// ---------------------------------------------------------------------------
+// The lookup.
+
+/// One song's conversation with LRCLIB: the budget, the answers so far, and
+/// whether every question got one.
+struct Lookup<'a, E> {
+    fx: &'a E,
+    req: &'a Request,
+    /// Answers by URL, so a repeated question costs nothing.
+    asked: HashMap<String, Option<Value>>,
+    /// Some request got no answer, so "nothing found" is not trustworthy and
+    /// must not be negative-cached.
+    incomplete: bool,
+}
+
+impl<E: Effects> Lookup<'_, E> {
+    async fn ask(&mut self, url: String) -> Option<Value> {
+        if let Some(answer) = self.asked.get(&url) {
+            return answer.clone();
+        }
+        if self.asked.len() >= MAX_REQUESTS {
+            debug!("LRCLIB budget spent; skipping {}", url);
+            return None;
+        }
+        let answer = match self.fx.lrclib(&url).await {
+            Reply::Json(v) => Some(v),
+            Reply::NotFound => None,
+            Reply::Failed(e) => {
+                warn!("LRCLIB gave no answer for {}: {}", url, e);
+                self.incomplete = true;
+                None
+            }
+        };
+        self.asked.insert(url, answer.clone());
+        answer
+    }
+
+    /// `/api/get`: LRCLIB's exact lookup by names and length (+-2 s).
+    async fn exact(&mut self, title: &str, artist: &str) -> Option<Value> {
+        let secs = self.req.duration?.round().to_string();
+        if title.trim().is_empty() || artist.trim().is_empty() {
+            return None;
+        }
+        let url = lrclib_url("get", &[("track_name", title), ("artist_name", artist), ("duration", &secs)]);
+        self.ask(url).await.filter(has_lyrics)
+    }
+
+    async fn search(&mut self, params: &[(&str, &str)], want: &Want) -> Option<Value> {
+        match self.ask(lrclib_url("search", params)).await? {
+            Value::Array(results) => best_match(results, want),
+            _ => None,
+        }
+    }
+
+    /// Steps 2-3 for one spelling: exact lookups for each title, one structured
+    /// search for the last, and with `full_text` one `q=` search if all missed.
+    async fn find(&mut self, titles: &[String], artist: &str, full_text: bool) -> Option<Lrclib> {
+        for title in titles {
+            if let Some(record) = self.exact(title, artist).await {
+                return Some(self.settle(record).await);
+            }
+        }
+        let title = titles.last()?;
+        let mut want_titles = titles.to_vec();
+        want_titles.push(self.req.title.clone());
+        let want = Want {
+            titles: want_titles,
+            artists: vec![artist.to_string(), self.req.artist.clone()],
+            duration: self.req.duration,
+        };
+        let mut record = self.search(&[("track_name", title), ("artist_name", artist)], &want).await;
+        if record.is_none() && full_text {
+            record = self.search(&[("q", &format!("{title} {artist}"))], &want).await;
+        }
+        Some(self.settle(record?).await)
+    }
+
+    /// A lyric-bearing record as an answer. Plain-only: look for a synced
+    /// entry of the same recording under LRCLIB's own spelling first.
+    async fn settle(&mut self, record: Value) -> Lrclib {
+        if let Some(lines) = synced_from_record(&record) {
+            return Lrclib::Synced(lines);
+        }
+        let src = PlainSource {
+            track: record["trackName"].as_str().unwrap_or("").to_string(),
+            artist: record["artistName"].as_str().unwrap_or("").to_string(),
+            duration: record["duration"].as_f64().unwrap_or(0.0),
+        };
+        if src.duration > 0.0 {
+            let url = lrclib_url("search", &[("track_name", &src.track), ("artist_name", &src.artist)]);
+            if let Some(Value::Array(results)) = self.ask(url).await {
+                let synced = timing::pick_synced_alternative(&results, src.duration).map(|lrc| parse_lrc_format(&lrc));
+                if let Some(lines) = synced.filter(|l| l.len() >= MIN_RECORD_LINES) {
+                    info!("Upgraded plain lyrics to a synced LRCLIB entry for '{}'", src.track);
+                    return Lrclib::Synced(lines);
+                }
+            }
+        }
+        info!("No synced timing for '{}'; returning estimated timing (not cached)", src.track);
+        let plain = plain_from_record(&record).unwrap_or("");
+        Lrclib::Plain { estimate: timing::estimate_plain(plain, src.duration), src }
+    }
+
+    /// Steps 2-3 with the player's names and the regex-cleaned title.
+    async fn regex_pass(&mut self) -> Option<Lrclib> {
+        let (raw, artist) = (self.req.title.clone(), self.req.artist.clone());
+        let cleaned = clean_title(&raw, &artist);
+        let titles = if cleaned.is_empty() || cleaned == raw { vec![raw] } else { vec![raw, cleaned] };
+        self.find(&titles, &artist, true).await
+    }
+
+    /// Step 5: one LLM call, then an exact lookup and a search with its names.
+    async fn llm_pass(&mut self) -> Option<Lrclib> {
+        let names = self.fx.names(&self.req.artist, &self.req.title).await?;
+        self.find(&[names.title], &names.artist, false).await
     }
 }
+
+// ---------------------------------------------------------------------------
+// The contract.
 
 /// Where the timing of a lyric list came from: the contract's `source`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -673,19 +455,6 @@ impl Request {
     }
 }
 
-/// What LRCLIB had, before any third-party source is asked.
-#[derive(Debug)]
-enum Lrclib {
-    /// Real timing: a synced entry, or a plain hit upgraded to one.
-    Synced(Vec<LyricLine>),
-    /// Plain lyrics only, with an estimate (never cached).
-    Plain { estimate: Vec<LyricLine>, src: PlainSource },
-    /// LRCLIB has nothing; `cached` when the negative cache said so.
-    Missing { error: String, cached: bool },
-    /// Requests failed, so "nothing" is not trustworthy. Never cached.
-    Unavailable(String),
-}
-
 /// A background lookup that may replace an estimate with real timing.
 #[derive(Debug)]
 struct Upgrade {
@@ -693,8 +462,14 @@ struct Upgrade {
     plain: Vec<String>,
 }
 
-/// Routing's side effects, behind a trait so tests run it offline.
+/// Everything the lookup does to the outside world, behind a trait so tests
+/// run it offline and count its requests.
 trait Effects: Send + Sync {
+    fn cached(&self, artist: &str, track: &str) -> CacheResult;
+    /// Send one LRCLIB request.
+    fn lrclib(&self, url: &str) -> impl Future<Output = Reply> + Send;
+    /// The LLM's names for the song; None when it is not set up or failed.
+    fn names(&self, artist: &str, title: &str) -> impl Future<Output = Option<Names>> + Send;
     fn sources(&self, q: &sources::Query, plain: Option<&[String]>) -> impl Future<Output = Option<Found>> + Send;
     fn save(&self, artist: &str, track: &str, lines: &[LyricLine], source: TimingSource);
     fn save_none(&self, artist: &str, track: &str);
@@ -703,6 +478,29 @@ trait Effects: Send + Sync {
 struct Live;
 
 impl Effects for Live {
+    fn cached(&self, artist: &str, track: &str) -> CacheResult {
+        get_cached_lyrics(artist, track)
+    }
+    async fn lrclib(&self, url: &str) -> Reply {
+        let resp = match lrclib_get(client(), url, REQUEST_TIMEOUT).await {
+            Ok(resp) => resp,
+            Err(e) => return Reply::Failed(e.to_string()),
+        };
+        if resp.status() == StatusCode::NOT_FOUND {
+            return Reply::NotFound;
+        }
+        let json = async { resp.error_for_status()?.json::<Value>().await };
+        match json.await {
+            Ok(v) => Reply::Json(v),
+            Err(e) => Reply::Failed(e.to_string()),
+        }
+    }
+    async fn names(&self, artist: &str, title: &str) -> Option<Names> {
+        cleaning::llm_names(artist, title)
+            .await
+            .map_err(|e| debug!("No LLM names for '{}': {}", title, e))
+            .ok()
+    }
     fn sources(&self, q: &sources::Query, plain: Option<&[String]>) -> impl Future<Output = Option<Found>> + Send {
         sources::find(q, plain)
     }
@@ -728,7 +526,7 @@ pub async fn fetch_lyrics(
 /// `fetch_lyrics` plus where the timing came from. With `extra_sources`, a
 /// plain-only LRCLIB hit answers with the estimate at once and looks for real
 /// timing in the background (`lyrics-timing-updated`), and a track LRCLIB
-/// lacks entirely is looked up in the extra sources before giving up.
+/// lacks (or can't answer for) is looked up in the extra sources.
 #[tauri::command]
 pub async fn fetch_lyrics_timed(
     app: tauri::AppHandle,
@@ -757,61 +555,71 @@ async fn fetch_timed<E: Effects>(
     req: &Request,
     extra: bool,
 ) -> Result<(TimedLyrics, Option<Upgrade>), String> {
-    let found = match get_cached_lyrics(&req.artist, &req.title) {
+    let negative = match fx.cached(&req.artist, &req.title) {
         CacheResult::Hit(lines, source) => {
             info!("Using cached lyrics for: {} by {}", req.title, req.artist);
             let source = TimingSource::from_cache(source.as_deref());
             return Ok((TimedLyrics { lines, source, pending: false }, None));
         }
-        CacheResult::NegativeHit => {
-            info!("Cached negative result for: {} by {} (no lyrics available)", req.title, req.artist);
-            Lrclib::Missing { error: "No lyrics found (cached)".to_string(), cached: true }
-        }
-        CacheResult::Miss => lookup_lrclib(req).await,
+        CacheResult::NegativeHit => true,
+        CacheResult::Miss => false,
     };
-    resolve(fx, req, found, extra).await
-}
 
-/// What to answer now, and what to try in the background. Extra sources
-/// never run when LRCLIB has real timing.
-async fn resolve<E: Effects>(
-    fx: &E,
-    req: &Request,
-    found: Lrclib,
-    extra: bool,
-) -> Result<(TimedLyrics, Option<Upgrade>), String> {
+    let started = std::time::Instant::now();
+    let mut run = Lookup { fx, req, asked: HashMap::new(), incomplete: false };
+    let mut found = if negative { None } else { run.regex_pass().await };
+    if found.is_none() {
+        if let Some(timed) = from_sources(fx, req, extra).await {
+            return Ok((timed, None));
+        }
+        if !negative {
+            found = run.llm_pass().await;
+        }
+    }
+    info!(
+        "Lyrics lookup for '{}' by '{}': {} after {} LRCLIB request(s) in {:.1}s",
+        req.title,
+        req.artist,
+        match &found {
+            Some(Lrclib::Synced(_)) => "synced",
+            Some(Lrclib::Plain { .. }) => "plain only",
+            None if run.incomplete => "no answer",
+            None => "nothing",
+        },
+        run.asked.len(),
+        started.elapsed().as_secs_f64()
+    );
+
     match found {
-        Lrclib::Synced(lines) => {
+        Some(Lrclib::Synced(lines)) => {
             fx.save(&req.artist, &req.title, &lines, TimingSource::Lrclib);
             Ok((TimedLyrics { lines, source: TimingSource::Lrclib, pending: false }, None))
         }
-        Lrclib::Plain { estimate, src } => {
+        Some(Lrclib::Plain { estimate, src }) => {
             let upgrade = if extra { upgrade_job(req, &estimate, &src) } else { None };
             let pending = upgrade.is_some();
             Ok((TimedLyrics { lines: estimate, source: TimingSource::LrclibEstimate, pending }, upgrade))
         }
-        Lrclib::Missing { error, cached } => {
-            // Without a length there is no telling the right recording apart.
-            if let Some(duration) = req.duration.filter(|_| extra) {
-                let q = sources::Query {
-                    track: clean_track_name_sync(&req.title),
-                    artist: req.artist.clone(),
-                    duration,
-                };
-                if let Some(found) = fx.sources(&q, None).await {
-                    let source = TimingSource::from(found.provider);
-                    info!("LRCLIB had nothing for '{}'; {} did", req.title, source.as_str());
-                    fx.save(&req.artist, &req.title, &found.lines, source);
-                    return Ok((TimedLyrics { lines: found.lines, source, pending: false }, None));
-                }
-            }
-            if !cached {
-                fx.save_none(&req.artist, &req.title);
-            }
-            Err(error)
+        None if negative => Err("No lyrics found (cached)".to_string()),
+        None if run.incomplete => Err("Lyrics service unavailable, try again later".to_string()),
+        None => {
+            fx.save_none(&req.artist, &req.title);
+            Err("No lyrics found".to_string())
         }
-        Lrclib::Unavailable(error) => Err(error),
     }
+}
+
+/// Step 4: with the setting on and a length to match recordings by, the extra
+/// sources, whether LRCLIB had nothing or could not answer. A hit is cached.
+async fn from_sources<E: Effects>(fx: &E, req: &Request, extra: bool) -> Option<TimedLyrics> {
+    let duration = req.duration.filter(|_| extra)?;
+    let track = clean_title(&req.title, &req.artist);
+    let q = sources::Query { track, artist: req.artist.clone(), duration };
+    let found = fx.sources(&q, None).await?;
+    let source = TimingSource::from(found.provider);
+    info!("LRCLIB had nothing for '{}'; {} did", req.title, source.as_str());
+    fx.save(&req.artist, &req.title, &found.lines, source);
+    Some(TimedLyrics { lines: found.lines, source, pending: false })
 }
 
 /// Look up LRCLIB's spelling of the song, for the length being played.
@@ -832,616 +640,70 @@ async fn run_upgrade<E: Effects>(fx: &E, req: &Request, job: Upgrade) -> Option<
     Some(TimingUpdate { title: req.title.clone(), artist: req.artist.clone(), lines: found.lines, source })
 }
 
-/// LRCLIB only: the exact lookup, then the staged searches.
-async fn lookup_lrclib(req: &Request) -> Lrclib {
-    let (track_name, artist_name, duration) = (req.title.clone(), req.artist.clone(), req.duration);
-
-    // Convert single artist name to comma-separated format for search
-    let search_artist = if artist_name.contains(',') {
-        artist_name.clone() // Already comma-separated
-    } else {
-        artist_name.clone() // Single artist
-    };
-
-    info!("Fetching lyrics for: {} by {}", track_name, search_artist);
-
-    // === PARALLEL APPROACH ===
-    // Start LLM cleaning in background immediately
-    let llm_track = track_name.clone();
-    let llm_artist = search_artist.clone();
-    let llm_handle = tokio::spawn(async move {
-        let mut params = SearchParameters::new(llm_track, llm_artist);
-        params.populate_cleaned_variants().await;
-        params
-    });
-
-    // Regex cleaning for fast path (instant)
-    let mut fast_params = SearchParameters::new(track_name.clone(), search_artist.clone());
-    fast_params.populate_regex_only();
-
-    let run = SearchRun::default();
-
-    // === EXACT PATH ===
-    // With the player's duration, /api/get usually answers in one cheap request.
-    if let Some(duration) = duration {
-        let mut titles = vec![fast_params.cleaned_track.clone(), track_name.clone()];
-        titles.dedup();
-        for title in &titles {
-            if let Some(lyrics) = fetch_exact(title, &search_artist, duration, &run).await {
-                info!("Exact match: '{}' by '{}' ({:.0}s)", title, search_artist, duration);
-                llm_handle.abort();
-                return Lrclib::Synced(lyrics);
-            }
-        }
-    }
-
-    // Build fast path candidates (only highest priority - stages 1-2)
-    let fast_candidates = build_search_candidates(&fast_params);
-    let fast_candidates: Vec<_> = fast_candidates
-        .into_iter()
-        .filter(|c| c.priority >= PRIORITY_EXACT_ORIGINAL) // Only priority 9-10
-        .collect();
-
-    // Try fast path with limited stages (runs in parallel with LLM cleaning)
-    if !fast_candidates.is_empty() {
-        debug!(
-            "Trying fast path with {} high-priority candidates",
-            fast_candidates.len()
-        );
-
-        if let Ok(result) = execute_staged_search(fast_candidates, &run).await {
-            info!("Fast path success with: {}", result.candidate.description);
-            llm_handle.abort(); // Cancel LLM - we don't need it
-            return finish_lyrics(result, &run).await;
-        }
-        debug!("Fast path failed, waiting for LLM results");
-    }
-
-    // === LLM PATH ===
-    // Fast path failed or was empty, use LLM-cleaned candidates
-    // By now LLM should be done (it ran in parallel with fast path HTTP requests)
-    let search_params = match llm_handle.await {
-        Ok(llm_params) => llm_params,
-        Err(e) => {
-            // LLM task panicked - fallback to regex-cleaned params
-            warn!("LLM cleaning task failed: {}. Falling back to regex params.", e);
-            fast_params
-        }
-    };
-
-    let full_candidates = build_search_candidates(&search_params);
-    if full_candidates.is_empty() {
-        return Lrclib::Missing { error: "No valid search candidates".to_string(), cached: false };
-    }
-
-    match execute_staged_search(full_candidates, &run).await {
-        Ok(result) => {
-            info!("Search success with: {}", result.candidate.description);
-            finish_lyrics(result, &run).await
-        }
-        Err(e) if run.incomplete.load(Ordering::Relaxed) => {
-            warn!(
-                "Lyrics lookup for '{}' by '{}' incomplete (some LRCLIB requests failed); not caching: {}",
-                track_name, artist_name, e
-            );
-            Lrclib::Unavailable(format!("Lyrics service unavailable, try again later: {}", e))
-        }
-        Err(e) => {
-            warn!(
-                "No lyrics found after trying all strategies for '{}' by '{}': {}",
-                track_name, artist_name, e
-            );
-            Lrclib::Missing { error: format!("No lyrics found: {}", e), cached: false }
-        }
-    }
-}
-
-/// For a plain-only hit, look for a synced LRCLIB entry of the same recording
-/// first. Estimates are never cached, so a later play can still pick up real
-/// timing.
-async fn finish_lyrics(result: LyricsFetchResult, run: &SearchRun) -> Lrclib {
-    let Some(src) = result.plain_source else {
-        return Lrclib::Synced(result.lyrics);
-    };
-    let synced = find_synced_alternative(&src, run).await.map(|lrc| parse_lrc_format(&lrc));
-    match synced.filter(|l| !l.is_empty()) {
-        Some(lyrics) => {
-            info!("Upgraded plain lyrics to a synced LRCLIB entry for '{}'", src.track);
-            Lrclib::Synced(lyrics)
-        }
-        None => {
-            info!("No synced timing for '{}'; returning estimated timing (not cached)", src.track);
-            Lrclib::Plain { estimate: result.lyrics, src }
-        }
-    }
-}
-
-/// Other LRCLIB entries of the same song, under LRCLIB's own spelling of it,
-/// filtered to a synced one of the same recording.
-async fn find_synced_alternative(src: &PlainSource, run: &SearchRun) -> Option<String> {
-    if src.duration <= 0.0 {
-        return None;
-    }
-    let url = format!(
-        "https://lrclib.net/api/search?track_name={}&artist_name={}",
-        urlencoding::encode(&src.track),
-        urlencoding::encode(&src.artist)
-    );
-    if !run.tried.lock().unwrap().insert(url.clone()) {
-        return None;
-    }
-    let timeout = Duration::from_secs(PER_REQUEST_TIMEOUT_SECS);
-    let resp = lrclib_get(get_lyrics_http_client(), &url, timeout).await.ok()?;
-    let results: Vec<serde_json::Value> = resp.error_for_status().ok()?.json().await.ok()?;
-    let found = timing::pick_synced_alternative(&results, src.duration);
-    debug!(
-        "Synced alternative for '{}' by '{}' ({} results): {}",
-        src.track,
-        src.artist,
-        results.len(),
-        found.is_some()
-    );
-    found
-}
-
-/// Build all search candidates with proper priority and error handling
-fn build_search_candidates(params: &SearchParameters) -> Vec<LyricsCandidate> {
-    let mut candidates = Vec::new();
-    let match_context = build_match_context(params);
-
-    // Try all artist variants at each priority level
-    // Priority order: LLM cleaned > Original
-    for (variant_idx, artist_variant) in params.artist_variants.iter().enumerate() {
-        let variant_desc = if variant_idx == 0 {
-            "primary"
-        } else if variant_idx < params.artist_variants.len() - 1 {
-            "variant"
-        } else {
-            "original"
-        };
-
-        // Stage 1: Exact searches (Priority 9-10) - Most precise
-        add_exact_search_candidate(
-            &mut candidates,
-            &params.cleaned_track,
-            artist_variant,
-            PRIORITY_EXACT_CLEANED,
-            &match_context,
-            &format!(
-                "exact cleaned track + {} artist '{}'",
-                variant_desc, artist_variant
-            ),
-        );
-
-        add_exact_search_candidate(
-            &mut candidates,
-            &params.track_name,
-            artist_variant,
-            PRIORITY_EXACT_ORIGINAL,
-            &match_context,
-            &format!("exact track + {} artist '{}'", variant_desc, artist_variant),
-        );
-
-        // Stage 2: Wildcard with artist (Priority 7-8) - Good balance
-        add_wildcard_search_candidate(
-            &mut candidates,
-            &params.cleaned_track,
-            artist_variant,
-            PRIORITY_WILDCARD_CLEANED_WITH_ARTIST,
-            &match_context,
-            &format!(
-                "wildcard cleaned track + {} artist '{}'",
-                variant_desc, artist_variant
-            ),
-        );
-
-        add_wildcard_search_candidate(
-            &mut candidates,
-            &params.track_name,
-            artist_variant,
-            PRIORITY_WILDCARD_WITH_ARTIST,
-            &match_context,
-            &format!(
-                "wildcard track + {} artist '{}'",
-                variant_desc, artist_variant
-            ),
-        );
-
-        // Stage 3: Exact without artist prefix (Priority 5-6)
-        add_exact_search_candidate(
-            &mut candidates,
-            &params.cleaned_track_without_artist,
-            artist_variant,
-            PRIORITY_EXACT_CLEANED_WITHOUT_ARTIST,
-            &match_context,
-            &format!(
-                "exact cleaned without prefix + {} artist '{}'",
-                variant_desc, artist_variant
-            ),
-        );
-
-        add_exact_search_candidate(
-            &mut candidates,
-            &params.track_without_artist,
-            artist_variant,
-            PRIORITY_EXACT_WITHOUT_ARTIST,
-            &match_context,
-            &format!(
-                "exact without prefix + {} artist '{}'",
-                variant_desc, artist_variant
-            ),
-        );
-    }
-
-    // Stage 4: Wildcard only track (Priority 3-4) - Last resort, no artist filter
-    add_wildcard_only_candidate(
-        &mut candidates,
-        &params.cleaned_track,
-        PRIORITY_WILDCARD_CLEANED_ONLY,
-        &match_context,
-        "wildcard cleaned only",
-    );
-
-    add_wildcard_only_candidate(
-        &mut candidates,
-        &params.track_name,
-        PRIORITY_WILDCARD_ORIGINAL_ONLY,
-        &match_context,
-        "wildcard original only",
-    );
-
-    candidates
-}
-
-/// Add exact search candidate (track_name + artist_name parameters)
-fn add_exact_search_candidate(
-    candidates: &mut Vec<LyricsCandidate>,
-    track: &str,
-    artist: &str,
-    priority: u8,
-    match_context: &MatchContext,
-    description_prefix: &str,
-) {
-    if !track.trim().is_empty() && !artist.trim().is_empty() {
-        let url = format!(
-            "https://lrclib.net/api/search?track_name={}&artist_name={}",
-            urlencoding::encode(track),
-            urlencoding::encode(artist)
-        );
-        candidates.push(LyricsCandidate {
-            priority,
-            url,
-            description: format!("{}: '{}' by '{}'", description_prefix, track, artist),
-            match_context: match_context.clone(),
-        });
-    }
-}
-
-/// Add wildcard search candidate (q parameter with track + artist)
-fn add_wildcard_search_candidate(
-    candidates: &mut Vec<LyricsCandidate>,
-    track: &str,
-    artist: &str,
-    priority: u8,
-    match_context: &MatchContext,
-    description_prefix: &str,
-) {
-    if !track.trim().is_empty() && !artist.trim().is_empty() {
-        let url = format!(
-            "https://lrclib.net/api/search?q={}",
-            urlencoding::encode(&format!("{} {}", track, artist))
-        );
-        candidates.push(LyricsCandidate {
-            priority,
-            url,
-            description: format!("{}: '{}' + '{}'", description_prefix, track, artist),
-            match_context: match_context.clone(),
-        });
-    }
-}
-
-/// Add wildcard search candidate (q parameter with track only)
-fn add_wildcard_only_candidate(
-    candidates: &mut Vec<LyricsCandidate>,
-    track: &str,
-    priority: u8,
-    match_context: &MatchContext,
-    description_prefix: &str,
-) {
-    if !track.trim().is_empty() {
-        let url = format!(
-            "https://lrclib.net/api/search?q={}",
-            urlencoding::encode(track)
-        );
-        candidates.push(LyricsCandidate {
-            priority,
-            url,
-            description: format!("{}: '{}'", description_prefix, track),
-            match_context: match_context.clone(),
-        });
-    }
-}
-
-/// Execute search in priority stages - higher priority stages complete before lower ones
-async fn execute_staged_search(
-    mut candidates: Vec<LyricsCandidate>,
-    run: &SearchRun,
-) -> Result<LyricsFetchResult> {
-    const MIN_ACCEPTABLE_SCORE: f32 = 0.6;
-    // Sort candidates by priority (highest first)
-    candidates.sort_by_key(|c| std::cmp::Reverse(c.priority));
-
-    // Group candidates by priority for staged execution
-    let mut stages: Vec<Vec<LyricsCandidate>> = Vec::new();
-    let mut current_stage = Vec::new();
-    let mut current_priority: Option<u8> = None;
-
-    for candidate in candidates {
-        match current_priority {
-            Some(priority) if priority == candidate.priority => {
-                current_stage.push(candidate);
-            }
-            _ => {
-                if !current_stage.is_empty() {
-                    stages.push(current_stage);
-                }
-                current_stage = vec![candidate.clone()];
-                current_priority = Some(candidate.priority);
-            }
-        }
-    }
-    if !current_stage.is_empty() {
-        stages.push(current_stage);
-    }
-
-    // Execute each stage in priority order
-    let _total_stages = stages.len();
-    for (stage_num, stage_candidates) in stages.into_iter().enumerate() {
-        debug!(
-            "Executing stage {} with {} candidates at priority {}",
-            stage_num + 1,
-            stage_candidates.len(),
-            stage_candidates.first().map(|c| c.priority).unwrap_or(0)
-        );
-
-        // Limit candidates per stage to avoid excessive API calls
-        let limited_candidates: Vec<_> = stage_candidates
-            .into_iter()
-            .filter(|c| run.tried.lock().unwrap().insert(c.url.clone()))
-            .take(MAX_CANDIDATES_PER_STAGE)
-            .collect();
-
-        match execute_concurrent_stage(limited_candidates, run).await {
-            Ok(result) => {
-                info!(
-                    "Stage {} succeeded with: {}",
-                    stage_num + 1,
-                    result.candidate.description
-                );
-                if result.score >= MIN_ACCEPTABLE_SCORE {
-                    return Ok(result);
-                }
-                warn!(
-                    "Stage {} best match score {:.2} below threshold {:.2}: {}",
-                    stage_num + 1,
-                    result.score,
-                    MIN_ACCEPTABLE_SCORE,
-                    result.candidate.description
-                );
-            }
-            Err(e) => {
-                debug!("Stage {} failed: {}", stage_num + 1, e);
-                // Continue to next stage
-            }
-        }
-    }
-
-    Err(anyhow!("All search stages failed"))
-}
-
-/// Execute all candidates in a stage concurrently, return first successful result
-async fn execute_concurrent_stage(
-    candidates: Vec<LyricsCandidate>,
-    run: &SearchRun,
-) -> Result<LyricsFetchResult> {
-    if candidates.is_empty() {
-        return Err(anyhow!("No candidates in stage"));
-    }
-
-    let client = get_lyrics_http_client().clone();
-    let cancel_all = CancellationToken::new();
-    let mut set = JoinSet::new();
-
-    // Start all candidates in this stage
-    for candidate in candidates {
-        let token = cancel_all.child_token();
-        let client_clone = client.clone();
-
-        set.spawn(fetch_lyrics_from_url(
-            client_clone,
-            candidate,
-            token,
-            Duration::from_secs(PER_REQUEST_TIMEOUT_SECS),
-        ));
-    }
-
-    // Collect best result within stage timeout
-    let stage_timeout = Duration::from_secs(STAGE_TIMEOUT_SECS);
-    let deadline = tokio::time::Instant::now() + stage_timeout;
-    let mut best_result: Option<LyricsFetchResult> = None;
-
-    loop {
-        let now = tokio::time::Instant::now();
-        if now >= deadline {
-            break;
-        }
-
-        let remaining = deadline - now;
-        let joined = timeout(remaining, set.join_next()).await;
-        match joined {
-            Ok(Some(Ok(Ok(result)))) => {
-                if !result.lyrics.is_empty() {
-                    let is_better = best_result
-                        .as_ref()
-                        .map(|best| result.score > best.score)
-                        .unwrap_or(true);
-                    if is_better {
-                        best_result = Some(result);
-                    }
-                }
-            }
-            Ok(Some(Ok(Err(e)))) => {
-                debug!("Candidate failed: {}", e);
-                run.incomplete.store(true, Ordering::Relaxed);
-            }
-            Ok(Some(Err(e))) => {
-                debug!("Task join error: {}", e);
-                run.incomplete.store(true, Ordering::Relaxed);
-            }
-            Ok(None) => break,
-            Err(_) => break,
-        }
-    }
-    // Requests still running when the stage deadline hit never answered.
-    if !set.is_empty() {
-        run.incomplete.store(true, Ordering::Relaxed);
-    }
-
-    // Cleanup
-    cancel_all.cancel();
-    set.abort_all();
-
-    best_result.ok_or_else(|| anyhow!("No successful results in stage"))
-}
-
+/// One LRCLIB record for the names, synced preferred: a structured search,
+/// then a full-text one if that found nothing.
 #[tauri::command]
 pub async fn fetch_lrclib_raw(
     track_name: String,
     artist_name: String,
 ) -> Result<serde_json::Value, String> {
     info!("Fetching raw LRCLib for: {} by {}", track_name, artist_name);
-
-    let client = Client::builder().build().map_err(|e| e.to_string())?;
-    let mut candidates: Vec<serde_json::Value> = Vec::new();
-
-    // Exact search
-    let mut url = format!(
-        "https://lrclib.net/api/search?track_name={}",
-        urlencoding::encode(&track_name)
-    );
+    let mut params = vec![("track_name", track_name.as_str())];
     if !artist_name.trim().is_empty() {
-        url.push_str(&format!(
-            "&artist_name={}",
-            urlencoding::encode(&artist_name)
-        ));
+        params.push(("artist_name", artist_name.as_str()));
     }
-
-    if let Ok(resp) = client
-        .get(&url)
-        .header("User-Agent", LRCLIB_USER_AGENT)
-        .timeout(Duration::from_secs(10))
-        .send()
-        .await
-    {
-        if resp.status().is_success() {
-            if let Ok(json) = resp.json::<Vec<serde_json::Value>>().await {
-                candidates.extend(json);
-            }
+    let full_text = format!("{} {}", track_name, artist_name);
+    let mut results = Vec::new();
+    for url in [lrclib_url("search", &params), lrclib_url("search", &[("q", &full_text)])] {
+        if let Reply::Json(Value::Array(found)) = Live.lrclib(&url).await {
+            results = found;
+        }
+        if !results.is_empty() {
+            break;
         }
     }
-
-    // Wildcard search as fallback
-    if candidates.is_empty() {
-        let url = format!(
-            "https://lrclib.net/api/search?q={}",
-            urlencoding::encode(&format!("{} {}", track_name, artist_name))
-        );
-        if let Ok(resp) = client
-            .get(&url)
-            .header("User-Agent", LRCLIB_USER_AGENT)
-            .timeout(Duration::from_secs(10))
-            .send()
-            .await
-        {
-            if resp.status().is_success() {
-                if let Ok(json) = resp.json::<Vec<serde_json::Value>>().await {
-                    candidates.extend(json);
-                }
-            }
-        }
-    }
-
-    if candidates.is_empty() {
-        return Err("No LRCLib results".into());
-    }
-
-    // Prefer entries with syncedLyrics but return whatever available
-    let chosen = candidates
+    let chosen = results
         .iter()
-        .find(|item| {
-            item.get("syncedLyrics")
-                .and_then(|v| v.as_str())
-                .map(|s| !s.trim().is_empty())
-                .unwrap_or(false)
-        })
-        .cloned()
-        .or_else(|| candidates.get(0).cloned())
-        .ok_or_else(|| "No valid result".to_string())?;
-
-    // Shape a compact JSON with relevant fields
-    let track = serde_json::json!({
-        "trackName": chosen.get("trackName").and_then(|v| v.as_str()).unwrap_or(""),
-        "artistName": chosen.get("artistName").and_then(|v| v.as_str()).unwrap_or(""),
-        "albumName": chosen.get("albumName").and_then(|v| v.as_str()).unwrap_or(""),
-        "duration": chosen.get("duration").and_then(|v| v.as_f64()).unwrap_or(0.0),
-        "plainLyrics": chosen.get("plainLyrics").and_then(|v| v.as_str()).unwrap_or("") ,
-        "syncedLyrics": chosen.get("syncedLyrics").and_then(|v| v.as_str()).unwrap_or("") ,
-    });
-
-    Ok(track)
+        .find(|r| r["syncedLyrics"].as_str().is_some_and(|s| !s.trim().is_empty()))
+        .or(results.first())
+        .ok_or("No LRCLib results")?;
+    let text = |k: &str| chosen[k].as_str().unwrap_or("");
+    Ok(serde_json::json!({
+        "trackName": text("trackName"),
+        "artistName": text("artistName"),
+        "albumName": text("albumName"),
+        "duration": chosen["duration"].as_f64().unwrap_or(0.0),
+        "plainLyrics": text("plainLyrics"),
+        "syncedLyrics": text("syncedLyrics"),
+    }))
 }
 
+static LRC_LINE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\[(\d{2}):(\d{2})(?:\.(\d{2}))?\](.*)$").unwrap());
+
 pub fn parse_lrc_format(lrc_content: &str) -> Vec<LyricLine> {
-    let mut lyrics = Vec::new();
-
-    for line in lrc_content.lines() {
-        // Match LRC timestamp format: [mm:ss.xx] or [mm:ss]
-        if let Some(caps) = regex::Regex::new(r"^\[(\d{2}):(\d{2})(?:\.(\d{2}))?\](.*)$")
-            .unwrap()
-            .captures(line)
-        {
-            let minutes: f64 = caps[1].parse().unwrap_or(0.0);
-            let seconds: f64 = caps[2].parse().unwrap_or(0.0);
-            let centiseconds: f64 = caps
-                .get(3)
-                .map(|m| m.as_str().parse().unwrap_or(0.0))
-                .unwrap_or(0.0);
+    let mut lyrics: Vec<LyricLine> = lrc_content
+        .lines()
+        .filter_map(|line| {
+            let caps = LRC_LINE.captures(line)?;
             let text = caps[4].trim().to_string();
+            let num = |i: usize| caps.get(i).map_or(0.0, |m| m.as_str().parse().unwrap_or(0.0));
+            (!text.is_empty()).then(|| LyricLine {
+                time: num(1) * 60.0 + num(2) + num(3) / 100.0,
+                text,
+                duration: None,
+            })
+        })
+        .collect();
 
-            if !text.is_empty() {
-                let time_in_seconds = minutes * 60.0 + seconds + centiseconds / 100.0;
-
-                lyrics.push(LyricLine {
-                    time: time_in_seconds,
-                    text,
-                    duration: None, // Will be calculated later
-                });
-            }
-        }
-    }
-
-    // Sort by time and calculate durations
-    lyrics.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap());
-
+    lyrics.sort_by(|a, b| a.time.total_cmp(&b.time));
     for i in 0..lyrics.len().saturating_sub(1) {
         lyrics[i].duration = Some(lyrics[i + 1].time - lyrics[i].time);
     }
-
-    // Set duration for last line (default 3 seconds)
+    // The last line gets 3 seconds.
     if let Some(last) = lyrics.last_mut() {
         last.duration = Some(3.0);
     }
-
     lyrics
 }
 
@@ -1449,6 +711,7 @@ pub fn parse_lrc_format(lrc_content: &str) -> Vec<LyricLine> {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::sync::Mutex;
 
     #[test]
     fn exact_path_takes_only_real_synced_records() {
@@ -1458,16 +721,18 @@ mod tests {
         });
         assert_eq!(synced_from_record(&synced).unwrap()[0].text, "a");
 
-        // Plain-only goes to the search path (upgrade or uncached estimate).
+        // Plain-only is settled separately (upgrade or uncached estimate).
         let plain = json!({"syncedLyrics": "  ", "plainLyrics": "one\ntwo\nthree"});
         assert!(synced_from_record(&plain).is_none());
+        assert!(has_lyrics(&plain));
 
         // A real junk record that /api/get returned for a popular song.
         let junk = json!({"syncedLyrics": "[00:00.00]probe", "plainLyrics": "probe"});
         assert!(synced_from_record(&junk).is_none());
+        assert!(!has_lyrics(&junk));
 
         let instrumental = json!({"instrumental": true, "syncedLyrics": null, "plainLyrics": null});
-        assert!(synced_from_record(&instrumental).is_none());
+        assert!(!has_lyrics(&instrumental));
     }
 
     #[test]
@@ -1479,10 +744,29 @@ mod tests {
         }
     }
 
-    /// Offline stand-in for the sources and the cache, recording what routing did.
+    const SYNCED: &str = "[00:10.00]one\n[00:20.00]two\n[00:30.00]three";
+
+    fn record(track: &str, artist: &str, duration: f64, synced: bool) -> Value {
+        json!({
+            "trackName": track,
+            "artistName": artist,
+            "duration": duration,
+            "syncedLyrics": if synced { Some(SYNCED) } else { None },
+            "plainLyrics": "one\ntwo\nthree\nfour",
+        })
+    }
+
+    /// Offline stand-in for LRCLIB, the LLM, the sources and the cache,
+    /// recording what the lookup did.
     #[derive(Default)]
     struct Fake {
+        negative_cached: bool,
+        /// The first rule whose text is in the URL answers; otherwise 404.
+        lrclib: Vec<(&'static str, Reply)>,
+        names: Option<Names>,
         answer: Option<Found>,
+        urls: Mutex<Vec<String>>,
+        llm_calls: Mutex<u32>,
         /// One entry per sources call: how many known lines it was given.
         calls: Mutex<Vec<Option<usize>>>,
         saved: Mutex<Vec<TimingSource>>,
@@ -1491,8 +775,17 @@ mod tests {
 
     impl Fake {
         fn answering(provider: Provider) -> Self {
-            let lines = parse_lrc_format("[00:10.00]one\n[00:20.00]two\n[00:30.00]three");
-            Fake { answer: Some(Found { provider, lines }), ..Default::default() }
+            Fake { answer: Some(Found { provider, lines: parse_lrc_format(SYNCED) }), ..Default::default() }
+        }
+        fn rule(mut self, needle: &'static str, reply: Reply) -> Self {
+            self.lrclib.push((needle, reply));
+            self
+        }
+        fn urls(&self) -> Vec<String> {
+            self.urls.lock().unwrap().clone()
+        }
+        fn asked(&self, needle: &str) -> usize {
+            self.urls().iter().filter(|u| u.contains(needle)).count()
         }
         fn calls(&self) -> Vec<Option<usize>> {
             self.calls.lock().unwrap().clone()
@@ -1500,9 +793,28 @@ mod tests {
         fn saved(&self) -> Vec<TimingSource> {
             self.saved.lock().unwrap().clone()
         }
+        fn saved_none(&self) -> u32 {
+            *self.saved_none.lock().unwrap()
+        }
+        fn llm_calls(&self) -> u32 {
+            *self.llm_calls.lock().unwrap()
+        }
     }
 
     impl Effects for Fake {
+        fn cached(&self, _artist: &str, _track: &str) -> CacheResult {
+            if self.negative_cached { CacheResult::NegativeHit } else { CacheResult::Miss }
+        }
+        fn lrclib(&self, url: &str) -> impl Future<Output = Reply> + Send {
+            self.urls.lock().unwrap().push(url.to_string());
+            let reply = self.lrclib.iter().find(|(n, _)| url.contains(n)).map_or(Reply::NotFound, |(_, r)| r.clone());
+            async move { reply }
+        }
+        fn names(&self, _artist: &str, _title: &str) -> impl Future<Output = Option<Names>> + Send {
+            *self.llm_calls.lock().unwrap() += 1;
+            let names = self.names.clone();
+            async move { names }
+        }
         fn sources(&self, _q: &sources::Query, plain: Option<&[String]>) -> impl Future<Output = Option<Found>> + Send {
             self.calls.lock().unwrap().push(plain.map(<[String]>::len));
             let answer = self.answer.clone();
@@ -1520,35 +832,138 @@ mod tests {
         Request::new("Koi".into(), "Minori".into(), Some(265.0))
     }
 
-    fn plain() -> Lrclib {
-        Lrclib::Plain {
-            estimate: timing::estimate_plain("one\ntwo\nthree\nfour", 265.0),
-            src: PlainSource { track: "Koi".into(), artist: "Minori Chihara".into(), duration: 266.0 },
-        }
+    fn json_reply(v: Value) -> Reply {
+        Reply::Json(v)
     }
 
-    fn missing() -> Lrclib {
-        Lrclib::Missing { error: "No lyrics found".into(), cached: false }
+    fn overloaded() -> Reply {
+        Reply::Failed("HTTP status server error (503 Service Unavailable)".into())
     }
 
     #[tokio::test]
-    async fn synced_hit_never_asks_sources() {
-        let fx = Fake::answering(Provider::Qq);
-        let lines = parse_lrc_format("[00:01.00]a\n[00:02.00]b\n[00:03.00]c");
-        let (timed, upgrade) = resolve(&fx, &req(), Lrclib::Synced(lines), true).await.unwrap();
+    async fn exact_hit_costs_one_request_and_never_asks_sources() {
+        let fx = Fake::answering(Provider::Qq).rule("/get?", json_reply(record("Koi", "Minori", 265.0, true)));
+        let (timed, upgrade) = fetch_timed(&fx, &req(), true).await.unwrap();
         assert_eq!((timed.source, timed.pending), (TimingSource::Lrclib, false));
         assert!(upgrade.is_none());
+        assert_eq!(fx.urls().len(), 1);
         assert!(fx.calls().is_empty());
+        assert_eq!(fx.llm_calls(), 0);
         assert_eq!(fx.saved(), vec![TimingSource::Lrclib]);
+    }
+
+    /// The real 'SYNC' / 'Daoko' log: /api/get and the structured search answer
+    /// "nothing", and the full-text search is overloaded on every attempt.
+    fn sync_daoko(fx: Fake) -> Fake {
+        fx.rule("search?track_name=", json_reply(json!([]))).rule("q=", overloaded())
+    }
+
+    #[tokio::test]
+    async fn lrclib_down_falls_back_to_sources_but_never_caches_a_miss() {
+        let fx = sync_daoko(Fake::answering(Provider::Netease));
+        let req = Request::new("SYNC".into(), "Daoko".into(), Some(222.0));
+        let (timed, _) = fetch_timed(&fx, &req, true).await.unwrap();
+        assert_eq!(timed.source, TimingSource::Netease);
+        assert_eq!(fx.calls(), vec![None], "no known text: sources use their own lines");
+        assert_eq!(fx.saved(), vec![TimingSource::Netease], "a source hit is real timing");
+        assert_eq!(fx.saved_none(), 0);
+        assert_eq!(fx.asked("q="), 1, "one full-text search");
+        assert_eq!(fx.urls().len(), 3, "get, search, q");
+        assert_eq!(fx.llm_calls(), 0, "the sources answered first");
+
+        // Nobody answers: an error, and no "no lyrics" entry (LRCLIB never said so).
+        let fx = sync_daoko(Fake::default());
+        assert!(fetch_timed(&fx, &req, true).await.is_err());
+        assert_eq!(fx.calls().len(), 1);
+        assert_eq!(fx.saved_none(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_bilingual_title_is_asked_for_whole_and_matches_either_half() {
+        // YouTube Music sends the artist separately: the dash is part of the title.
+        let fx = Fake::default().rule("search?track_name=", json_reply(json!([record("心に穴が空いた", "ヨルシカ", 230.0, true)])));
+        let req = Request::new("心に穴が空いた - Hole In The Heart".into(), "Yorushika".into(), Some(230.0));
+        let (timed, _) = fetch_timed(&fx, &req, false).await.unwrap();
+        assert_eq!(timed.source, TimingSource::Lrclib);
+        let urls = fx.urls();
+        assert_eq!(urls.len(), 2, "one get (the cleaned title is the same), one search: {urls:#?}");
+        assert!(urls.iter().all(|u| u.contains("Hole%20In%20The%20Heart")), "never the English half alone");
+    }
+
+    #[tokio::test]
+    async fn an_incomplete_lookup_is_not_negative_cached() {
+        let fx = sync_daoko(Fake::default());
+        let req = Request::new("SYNC".into(), "Daoko".into(), Some(222.0));
+        assert!(fetch_timed(&fx, &req, false).await.is_err());
+        assert!(fx.calls().is_empty(), "sources are off");
+        assert_eq!(fx.llm_calls(), 1);
+        assert_eq!(fx.saved_none(), 0);
+    }
+
+    #[tokio::test]
+    async fn request_cap_holds_when_everything_misses() {
+        let names = Names { artist: "Chihara Minori".into(), title: "Koi no Uta".into() };
+        let fx = Fake { names: Some(names), ..Default::default() }.rule("search?", json_reply(json!([])));
+        let req = Request::new("Minori - Koi (Official Video)".into(), "Minori".into(), Some(265.0));
+        assert!(fetch_timed(&fx, &req, false).await.is_err());
+
+        let urls = fx.urls();
+        assert_eq!(urls.len(), MAX_REQUESTS, "{urls:#?}");
+        assert!(urls[0].contains("/get?track_name=Minori%20-%20Koi"), "raw title first");
+        assert!(urls[1].contains("/get?track_name=Koi&"), "then the cleaned title");
+        assert!(urls[2].contains("/search?track_name=Koi&"));
+        assert!(urls[3].contains("/search?q=Koi%20Minori"));
+        assert!(urls[4].contains("/get?track_name=Koi%20no%20Uta&artist_name=Chihara%20Minori"));
+        assert_eq!(fx.llm_calls(), 1);
+        assert_eq!(fx.saved_none(), 1, "a complete miss is negative-cached");
+    }
+
+    #[tokio::test]
+    async fn llm_names_find_what_the_player_names_did_not() {
+        let fx = Fake { names: Some(Names { artist: "なとり".into(), title: "Overdose".into() }), ..Default::default() }
+            .rule("artist_name=%E3%81%AA%E3%81%A8%E3%82%8A", json_reply(json!([record("Overdose", "なとり", 266.0, true)])))
+            .rule("search?", json_reply(json!([])));
+        let req = Request::new("Overdose".into(), "Natori".into(), None);
+        let (timed, _) = fetch_timed(&fx, &req, false).await.unwrap();
+        assert_eq!(timed.source, TimingSource::Lrclib);
+        assert_eq!(fx.asked("/get?"), 0, "no length, no exact lookups");
+        assert_eq!(fx.urls().len(), 3, "search, q, LLM search");
+    }
+
+    #[tokio::test]
+    async fn a_structured_hit_skips_full_text_and_llm() {
+        let results = json!([record("Koi (Live)", "Minori", 300.0, true), record("Koi", "Minori", 266.0, true)]);
+        let fx = Fake::default().rule("search?track_name=", json_reply(results));
+        let (timed, _) = fetch_timed(&fx, &req(), false).await.unwrap();
+        assert_eq!(timed.source, TimingSource::Lrclib);
+        assert_eq!((fx.asked("q="), fx.llm_calls()), (0, 0));
+        assert_eq!(fx.urls().len(), 2, "get, search");
+    }
+
+    #[test]
+    fn best_match_weighs_name_and_length() {
+        let want = Want { titles: vec!["Koi".into()], artists: vec!["Minori".into()], duration: Some(265.0) };
+        let pick = |results: Vec<Value>| best_match(results, &want).map(|r| r["duration"].as_f64().unwrap());
+        // Same name: the closer length wins, synced or not.
+        assert_eq!(pick(vec![record("Koi", "Minori", 300.0, true), record("Koi", "Minori", 266.0, false)]), Some(266.0));
+        // A cover of the right length loses to the song.
+        assert_eq!(pick(vec![record("Koi (Cover)", "Minori", 265.0, true), record("Koi", "Minori", 270.0, true)]), Some(270.0));
+        // Some other song is no match at all.
+        assert_eq!(pick(vec![record("Hello", "Adele", 265.0, true)]), None);
+        // The right song at a very different length (a video with an intro) still is.
+        assert_eq!(pick(vec![record("Koi", "Minori", 330.0, true)]), Some(330.0));
     }
 
     #[tokio::test]
     async fn plain_only_answers_estimate_now_and_upgrades_later() {
-        let fx = Fake::answering(Provider::Qq);
-        let (timed, upgrade) = resolve(&fx, &req(), plain(), true).await.unwrap();
+        let fx = Fake::answering(Provider::Qq)
+            .rule("artist_name=Minori%20Chihara", json_reply(json!([record("Koi", "Minori Chihara", 266.0, false)])))
+            .rule("search?track_name=Koi&artist_name=Minori", json_reply(json!([record("Koi", "Minori Chihara", 266.0, false)])));
+        let (timed, upgrade) = fetch_timed(&fx, &req(), true).await.unwrap();
         assert_eq!((timed.source, timed.pending, timed.lines.len()), (TimingSource::LrclibEstimate, true, 4));
         assert!(fx.calls().is_empty(), "nothing slow before answering");
         assert!(fx.saved().is_empty(), "estimates are not cached");
+        assert_eq!(fx.urls().len(), 3, "get, search, same-recording search");
 
         let job = upgrade.unwrap();
         assert_eq!((job.query.track.as_str(), job.query.duration), ("Koi", 265.0), "LRCLIB's spelling, player's length");
@@ -1560,50 +975,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn plain_only_upgrades_to_a_synced_entry_of_the_same_recording() {
+        let fx = Fake::default()
+            .rule("/get?", json_reply(record("Koi", "Minori Chihara", 266.0, false)))
+            .rule("artist_name=Minori%20Chihara", json_reply(json!([record("Koi", "Minori Chihara", 265.5, true)])));
+        let (timed, upgrade) = fetch_timed(&fx, &req(), true).await.unwrap();
+        assert_eq!((timed.source, timed.pending), (TimingSource::Lrclib, false));
+        assert!(upgrade.is_none());
+        assert_eq!(fx.saved(), vec![TimingSource::Lrclib]);
+    }
+
+    #[tokio::test]
     async fn plain_only_without_the_setting_or_a_find_stays_estimated() {
-        let fx = Fake::answering(Provider::Qq);
-        let (timed, upgrade) = resolve(&fx, &req(), plain(), false).await.unwrap();
+        let plain = || json_reply(record("Koi", "Minori", 266.0, false));
+        let fx = Fake::answering(Provider::Qq).rule("/get?", plain());
+        let (timed, upgrade) = fetch_timed(&fx, &req(), false).await.unwrap();
         assert_eq!((timed.source, timed.pending), (TimingSource::LrclibEstimate, false));
         assert!(upgrade.is_none());
 
-        let fx = Fake::default();
-        let (_, upgrade) = resolve(&fx, &req(), plain(), true).await.unwrap();
+        let fx = Fake::default().rule("/get?", plain());
+        let (_, upgrade) = fetch_timed(&fx, &req(), true).await.unwrap();
         assert!(run_upgrade(&fx, &req(), upgrade.unwrap()).await.is_none());
         assert!(fx.saved().is_empty());
     }
 
     #[tokio::test]
-    async fn nothing_on_lrclib_tries_sources_inline() {
-        let fx = Fake::answering(Provider::Netease);
-        let (timed, upgrade) = resolve(&fx, &req(), missing(), true).await.unwrap();
-        assert_eq!((timed.source, timed.pending), (TimingSource::Netease, false));
-        assert!(upgrade.is_none());
-        assert_eq!(fx.calls(), vec![None], "no known text: sources use their own lines");
-        assert_eq!(fx.saved(), vec![TimingSource::Netease]);
-        assert_eq!(*fx.saved_none.lock().unwrap(), 0);
-    }
-
-    #[tokio::test]
     async fn nothing_anywhere_is_negative_cached_once() {
         let fx = Fake::default();
-        assert!(resolve(&fx, &req(), missing(), true).await.is_err());
+        assert!(fetch_timed(&fx, &req(), true).await.is_err());
         assert_eq!(fx.calls().len(), 1);
-        assert_eq!(*fx.saved_none.lock().unwrap(), 1);
+        assert_eq!(fx.saved_none(), 1);
 
-        // Already negative-cached: retry the sources, don't refresh the entry.
-        let fx = Fake::default();
-        let cached = Lrclib::Missing { error: "cached".into(), cached: true };
-        assert!(resolve(&fx, &req(), cached, true).await.is_err());
-        assert_eq!((fx.calls().len(), *fx.saved_none.lock().unwrap()), (1, 0));
+        // Already negative-cached: retry the sources only; no LRCLIB, no LLM.
+        let fx = Fake { negative_cached: true, ..Default::default() };
+        assert!(fetch_timed(&fx, &req(), true).await.is_err());
+        assert_eq!((fx.calls().len(), fx.saved_none()), (1, 0));
+        assert!(fx.urls().is_empty());
+        assert_eq!(fx.llm_calls(), 0);
     }
 
     #[tokio::test]
-    async fn sources_stay_off_without_the_setting_a_length_or_a_working_lrclib() {
+    async fn sources_stay_off_without_the_setting_or_a_length() {
         let fx = Fake::answering(Provider::Qq);
-        assert!(resolve(&fx, &req(), missing(), false).await.is_err());
+        assert!(fetch_timed(&fx, &req(), false).await.is_err());
         let no_length = Request::new("Koi".into(), "Minori".into(), None);
-        assert!(resolve(&fx, &no_length, missing(), true).await.is_err());
-        assert!(resolve(&fx, &req(), Lrclib::Unavailable("down".into()), true).await.is_err());
+        assert!(fetch_timed(&fx, &no_length, true).await.is_err());
         assert!(fx.calls().is_empty());
         assert!(fx.saved().is_empty());
     }
@@ -1635,5 +1051,67 @@ mod tests {
     fn user_agent_follows_lrclib_format() {
         assert!(LRCLIB_USER_AGENT.starts_with("Lyryc v"));
         assert!(LRCLIB_USER_AGENT.ends_with("(https://github.com/Error0229/Lyryc)"));
+    }
+
+    /// Live LRCLIB (and, with a length, the extra sources), without the user's
+    /// cache or LLM. `cargo test --lib live_lookup -- --ignored --nocapture`
+    struct LiveNoCache(Mutex<Vec<String>>);
+
+    impl Effects for LiveNoCache {
+        fn cached(&self, _artist: &str, _track: &str) -> CacheResult {
+            CacheResult::Miss
+        }
+        async fn lrclib(&self, url: &str) -> Reply {
+            let reply = Live.lrclib(url).await;
+            let status = match &reply {
+                Reply::Json(_) => "ok".to_string(),
+                Reply::NotFound => "404".to_string(),
+                Reply::Failed(e) => e.clone(),
+            };
+            println!("  {url} -> {status}");
+            self.0.lock().unwrap().push(status);
+            reply
+        }
+        async fn names(&self, _artist: &str, _title: &str) -> Option<Names> {
+            None
+        }
+        fn sources(&self, q: &sources::Query, plain: Option<&[String]>) -> impl Future<Output = Option<Found>> + Send {
+            sources::find(q, plain)
+        }
+        fn save(&self, _artist: &str, _track: &str, _lines: &[LyricLine], _source: TimingSource) {}
+        fn save_none(&self, _artist: &str, _track: &str) {}
+    }
+
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn live_lookup() {
+        let songs = [
+            ("SYNC", "Daoko", None),
+            ("雪国 - Snow Country", "Yorushika", Some(288.0)),
+            ("Mr. Brightside", "The Killers", Some(222.0)),
+            ("Hype Boy", "NewJeans", Some(179.0)),
+            ("YOASOBI「夜に駆ける」 Official Music Video", "Ayase / YOASOBI", Some(261.0)),
+        ];
+        for (title, artist, duration) in songs {
+            println!("'{title}' by '{artist}' ({duration:?})");
+            let fx = LiveNoCache(Mutex::new(Vec::new()));
+            let started = std::time::Instant::now();
+            let result = fetch_timed(&fx, &Request::new(title.into(), artist.into(), duration), true).await;
+            let outcome = match result {
+                Ok((t, _)) => format!("{} lines, {:?}, pending {}", t.lines.len(), t.source, t.pending),
+                Err(e) => e,
+            };
+            let statuses = fx.0.lock().unwrap().clone();
+            println!("  => {outcome}; {} LRCLIB request(s), {:.1}s
+", statuses.len(), started.elapsed().as_secs_f64());
+            assert!(!statuses.iter().any(|s| s.contains("429")), "rate-limited; stopping");
+        }
+    }
+
+    #[test]
+    fn parses_lrc() {
+        let lines = parse_lrc_format("[00:02.50]b\n[00:01.00]a\n[00:03]\nnot a line");
+        let got: Vec<(f64, &str, Option<f64>)> = lines.iter().map(|l| (l.time, l.text.as_str(), l.duration)).collect();
+        assert_eq!(got, vec![(1.0, "a", Some(1.5)), (2.5, "b", Some(3.0))]);
     }
 }
