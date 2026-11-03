@@ -29,6 +29,11 @@ describe("accepts", () => {
     expect(accepts({ track: song, source: "lrclib-estimate" }, { track: song, source: "lrclib-estimate" })).toBe(true);
   });
 
+  it("treats YouTube Music's plain lyrics as an estimate too", () => {
+    expect(accepts({ track: song, source: "ytmusic-estimate" }, { track: song, source: "qq" })).toBe(true);
+    expect(accepts({ track: song, source: "ytmusic" }, { track: song, source: "ytmusic-estimate" })).toBe(false);
+  });
+
   it("still lets real timing be re-timed", () => {
     expect(accepts({ track: song, source: "lrclib" }, { track: song, source: "lrclib" })).toBe(true);
   });

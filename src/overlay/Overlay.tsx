@@ -52,7 +52,7 @@ function EstimatedBadge() {
   return (
     <motion.span
       className="pointer-events-none absolute right-3 bottom-1 text-2xs font-medium text-(--lyric-text) [text-shadow:var(--lyric-shadow)]"
-      title="LRCLIB has no timing for this track; lines advance on a guess"
+      title="No synced timing for this track; lines advance on a guess"
       initial={{ opacity: 0 }}
       animate={{ opacity: 0.5 }}
       exit={{ opacity: 0 }}

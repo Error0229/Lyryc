@@ -16,7 +16,7 @@
 //! title and an artist from the song's names and no version marker (live,
 //! cover, ...) that its names lack.
 
-mod align;
+pub(crate) mod align;
 mod breaker;
 #[cfg(test)]
 mod diag;
