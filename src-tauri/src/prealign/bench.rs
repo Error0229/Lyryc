@@ -32,19 +32,22 @@ fn read_wav(path: &Path) -> Vec<f32> {
     panic!("no data chunk in {}", path.display());
 }
 
+/// (current, peak) working set in MB.
 #[cfg(windows)]
-fn peak_rss_mb() -> f64 {
+fn rss_mb() -> (f64, f64) {
     let pid = std::process::id();
     let out = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-Command", &format!("(Get-Process -Id {pid}).PeakWorkingSet64")])
+        .args(["-NoProfile", "-Command", &format!("$p = Get-Process -Id {pid}; \"$($p.WorkingSet64) $($p.PeakWorkingSet64)\"")])
         .output()
         .unwrap();
-    String::from_utf8_lossy(&out.stdout).trim().parse::<f64>().unwrap_or(0.0) / 1048576.0
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut it = text.split_whitespace().map(|v| v.parse::<f64>().unwrap_or(0.0) / 1048576.0);
+    (it.next().unwrap_or(0.0), it.next().unwrap_or(0.0))
 }
 
 #[cfg(not(windows))]
-fn peak_rss_mb() -> f64 {
-    0.0
+fn rss_mb() -> (f64, f64) {
+    (0.0, 0.0)
 }
 
 #[tokio::test]
@@ -70,6 +73,7 @@ async fn parity() {
     let t0 = Instant::now();
     let mut m = model::Model::load(&paths.runtime(), &paths.model(), threads).expect("model");
     let load_s = t0.elapsed().as_secs_f64();
+    println!("after model load: RSS {:.0} MB (peak {:.0})", rss_mb().0, rss_mb().1);
 
     let mut preds = serde_json::Map::new();
     let mut speed = serde_json::Map::new();
@@ -100,6 +104,8 @@ async fn parity() {
             secs,
             align_s / secs
         );
+        let (now, peak) = rss_mb();
+        println!("  RSS {now:.0} MB, peak {peak:.0} MB");
         let lines_json: Vec<Value> = lines
             .iter()
             .zip(&out)
@@ -111,7 +117,7 @@ async fn parity() {
         preds.insert(id.clone(), json!({"text_src": t["text_src"], "lines": lines_json}));
         speed.insert(id, json!({"audio_s": secs, "download_s": download_s, "decode_s": decode_s, "align_s": align_s, "rtf": align_s / secs}));
     }
-    let rss = peak_rss_mb();
+    let rss = rss_mb().1;
     println!("threads {threads} load {load_s:.1}s peak RSS {rss:.0} MB");
     std::fs::write(env("PREALIGN_OUT"), serde_json::to_string(&Value::Object(preds)).unwrap()).unwrap();
     let speed_out = env("PREALIGN_OUT").replace(".json", ".speed.json");

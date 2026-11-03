@@ -13,8 +13,59 @@ use symphonia::core::probe::Hint;
 
 /// Decode the first audio track, downmix to mono and resample to 16 kHz.
 pub fn decode_16k(path: &Path) -> Result<Vec<f32>, String> {
-    let (mono, rate) = decode_mono(path)?;
+    let (mut mono, rate) = decode_mono(path)?;
+    // symphonia 0.5 ignores the MP4 edit list: drop the encoder priming it
+    // names (1600 samples, 36 ms, on YouTube's format 140) or every onset is late.
+    let head = std::fs::read(path).map(|b| b[..b.len().min(1 << 20)].to_vec()).unwrap_or_default();
+    if let Some((media_time, timescale)) = edit_list_start(&head) {
+        let skip = (media_time as f64 * rate as f64 / timescale as f64).round() as usize;
+        mono.drain(..skip.min(mono.len()));
+    }
     Ok(resample(&mono, rate, SAMPLE_RATE as u32))
+}
+
+/// (media_time, timescale) of the first track's first edit (`moov/trak/edts/elst`
+/// and `moov/trak/mdia/mdhd`): where playback starts in the decoded stream.
+fn edit_list_start(b: &[u8]) -> Option<(u64, u32)> {
+    let moov = find_box(b, b"moov")?;
+    let trak = find_box(moov, b"trak")?;
+    let elst = find_box(find_box(trak, b"edts")?, b"elst")?;
+    let mdhd = find_box(find_box(trak, b"mdia")?, b"mdhd")?;
+    let be32 = |s: &[u8], at: usize| s.get(at..at + 4).map(|x| u32::from_be_bytes(x.try_into().unwrap()));
+    let be64 = |s: &[u8], at: usize| s.get(at..at + 8).map(|x| u64::from_be_bytes(x.try_into().unwrap()));
+    // Full boxes: 1 byte version, 3 bytes flags.
+    let media_time = match elst.first()? {
+        0 => be32(elst, 12).map(u64::from).filter(|&t| t != u32::MAX as u64)?, // entries, segment_duration, media_time
+        1 => be64(elst, 16).filter(|&t| t != u64::MAX)?,
+        _ => return None,
+    };
+    let timescale = match mdhd.first()? {
+        0 => be32(mdhd, 12)?, // creation, modification, timescale
+        1 => be32(mdhd, 20)?,
+        _ => return None,
+    };
+    (timescale > 0).then_some((media_time, timescale))
+}
+
+/// The payload of the first child box of type `kind` in `b`.
+fn find_box<'a>(mut b: &'a [u8], kind: &[u8; 4]) -> Option<&'a [u8]> {
+    while b.len() >= 8 {
+        let size = u32::from_be_bytes(b[..4].try_into().ok()?) as u64;
+        let (header, size) = match size {
+            1 => (16, u64::from_be_bytes(b.get(8..16)?.try_into().ok()?)),
+            0 => (8, b.len() as u64),
+            n => (8, n),
+        };
+        let size = usize::try_from(size).ok()?.min(b.len());
+        if size < header {
+            return None;
+        }
+        if &b[4..8] == kind {
+            return Some(&b[header..size]);
+        }
+        b = &b[size..];
+    }
+    None
 }
 
 fn decode_mono(path: &Path) -> Result<(Vec<f32>, u32), String> {
@@ -147,6 +198,24 @@ mod tests {
 
     fn rms(x: &[f32]) -> f64 {
         (x.iter().map(|&v| (v as f64).powi(2)).sum::<f64>() / x.len() as f64).sqrt()
+    }
+
+    fn mp4_box(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut b = ((payload.len() + 8) as u32).to_be_bytes().to_vec();
+        b.extend_from_slice(kind);
+        b.extend_from_slice(payload);
+        b
+    }
+
+    #[test]
+    fn reads_the_edit_list_priming() {
+        // The layout of a real YouTube format-140 file: elst media_time 1600, mdhd timescale 44100.
+        let elst = mp4_box(b"elst", &[[0u8; 4], 1u32.to_be_bytes(), 181_335u32.to_be_bytes(), 1600u32.to_be_bytes(), [0, 1, 0, 0]].concat());
+        let mdhd = mp4_box(b"mdhd", &[[0u8; 12].as_slice(), &44_100u32.to_be_bytes(), &[0u8; 8]].concat());
+        let trak = mp4_box(b"trak", &[mp4_box(b"tkhd", &[0; 20]), mp4_box(b"edts", &elst), mp4_box(b"mdia", &mdhd)].concat());
+        let file = [mp4_box(b"ftyp", b"M4A mp42"), mp4_box(b"moov", &[mp4_box(b"mvhd", &[0; 20]), trak].concat())].concat();
+        assert_eq!(edit_list_start(&file), Some((1600, 44_100)));
+        assert_eq!(edit_list_start(&mp4_box(b"ftyp", b"x")), None);
     }
 
     #[test]

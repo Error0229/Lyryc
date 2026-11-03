@@ -4,7 +4,7 @@
 //! CTC path, and a line's confidence is the mean posterior of its tokens.
 
 use super::ctc::{self, Emissions};
-use super::romanize::{self, Piece};
+use super::romanize::Piece;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -129,12 +129,11 @@ fn log_softmax_rows(data: &mut [f32], v: usize) {
     }
 }
 
-/// Force-align `lines` to the emissions of a track `samples` long.
-pub fn align_lines(em: &Emissions, lines: &[String], samples: usize) -> Result<Vec<AlignedLine>, AlignError> {
+/// Force-align `lines` (cut into `plan`, see `romanize::plan`) to the
+/// emissions of a track `samples` long.
+pub fn align_lines(em: &Emissions, lines: &[String], plan: &[Vec<Piece>], samples: usize) -> Result<Vec<AlignedLine>, AlignError> {
     let dict: HashMap<char, usize> = VOCAB.iter().enumerate().filter_map(|(i, s)| Some((single(s)?, i))).collect();
     let star = VOCAB.len();
-    let japanese = romanize::is_japanese(lines.iter().map(String::as_str));
-    let plan: Vec<Vec<Piece>> = lines.iter().map(|l| romanize::pieces(l, japanese)).collect();
 
     let mut targets = Vec::new();
     let mut owner: Vec<Option<(usize, usize)>> = Vec::new();
@@ -168,7 +167,7 @@ pub fn align_lines(em: &Emissions, lines: &[String], samples: usize) -> Result<V
 
     Ok(lines
         .iter()
-        .zip(&plan)
+        .zip(plan)
         .enumerate()
         .map(|(li, (text, ps))| {
             let chars: Vec<char> = text.chars().collect();
@@ -264,7 +263,8 @@ mod tests {
     fn words_land_on_their_letters() {
         let em = spelled("hey you", 2);
         let samples = em.frames * HOP;
-        let out = align_lines(&em, &["hey you".to_string()], samples).unwrap();
+        let lines = ["hey you".to_string()];
+        let out = align_lines(&em, &lines, &super::super::romanize::plan(&lines), samples).unwrap();
         let w = &out[0].words;
         assert_eq!(w.len(), 2);
         assert_eq!(w[0].text, "hey");

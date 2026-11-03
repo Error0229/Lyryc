@@ -13,7 +13,6 @@ use lindera_core::mode::Mode;
 use lindera_dictionary::{DictionaryConfig, DictionaryKind};
 use lindera_tokenizer::tokenizer::{Tokenizer, TokenizerConfig};
 use pinyin::ToPinyin;
-use std::sync::LazyLock;
 
 /// One unit of word timing: `chars` characters of the line from character `pos`.
 #[derive(Clone, Debug, PartialEq)]
@@ -46,11 +45,19 @@ pub fn is_japanese<'a>(lines: impl IntoIterator<Item = &'a str>) -> bool {
     lines.into_iter().any(|l| l.chars().any(|c| matches!(c, '\u{3041}'..='\u{30FA}')))
 }
 
+/// Pieces for every line of a song. The UniDic tokenizer (~550 MB resident) is
+/// built only if some line needs Japanese readings, and dropped on return.
+pub fn plan(lines: &[String]) -> Vec<Vec<Piece>> {
+    let japanese = is_japanese(lines.iter().map(String::as_str));
+    let tokenizer = (japanese || lines.iter().any(|l| l.chars().any(is_kana))).then(tokenizer).flatten();
+    lines.iter().map(|l| pieces_with(l, japanese, tokenizer.as_ref())).collect()
+}
+
 /// Pieces of one line. `japanese`: read kanji as Japanese, not Mandarin.
-pub fn pieces(text: &str, japanese: bool) -> Vec<Piece> {
+fn pieces_with(text: &str, japanese: bool, tokenizer: Option<&Tokenizer>) -> Vec<Piece> {
     let chars: Vec<char> = text.chars().collect();
     if japanese || chars.iter().copied().any(is_kana) {
-        return ja_pieces(&chars);
+        return ja_pieces(&chars, tokenizer);
     }
     let mut out = Vec::new();
     let mut i = 0;
@@ -149,19 +156,19 @@ pub fn hangul_roman(c: char) -> String {
 // ---------------------------------------------------------------------------
 // Japanese.
 
-static TOKENIZER: LazyLock<Option<Tokenizer>> = LazyLock::new(|| {
+fn tokenizer() -> Option<Tokenizer> {
     let config = TokenizerConfig {
         dictionary: DictionaryConfig { kind: Some(DictionaryKind::UniDic), path: None },
         user_dictionary: None,
         mode: Mode::Normal,
     };
     Tokenizer::from_config(config).map_err(|e| log::warn!("UniDic tokenizer unavailable: {e}")).ok()
-});
+}
 
 /// UniDic's kana reading of a token (発音形出現形 in katakana), if it has one.
 const READING_FIELD: usize = 9;
 
-fn ja_pieces(chars: &[char]) -> Vec<Piece> {
+fn ja_pieces(chars: &[char], tokenizer: Option<&Tokenizer>) -> Vec<Piece> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < chars.len() {
@@ -170,7 +177,7 @@ fn ja_pieces(chars: &[char]) -> Vec<Piece> {
             while i < chars.len() && is_ja(chars[i]) {
                 i += 1;
             }
-            out.extend(ja_run(&chars[start..i], start));
+            out.extend(ja_run(&chars[start..i], start, tokenizer));
         } else if is_latin(chars[i]) {
             while i < chars.len() && is_latin(chars[i]) {
                 i += 1;
@@ -190,10 +197,9 @@ fn is_ja(c: char) -> bool {
 
 /// A run of Japanese text: tokenized for kanji readings, then romanized as one
 /// sequence so a small tsu doubles the next consonant even across tokens.
-fn ja_run(run: &[char], offset: usize) -> Vec<Piece> {
+fn ja_run(run: &[char], offset: usize, tokenizer: Option<&Tokenizer>) -> Vec<Piece> {
     let text: String = run.iter().collect();
-    let tokens: Vec<(Vec<char>, Option<String>)> = TOKENIZER
-        .as_ref()
+    let tokens: Vec<(Vec<char>, Option<String>)> = tokenizer
         .and_then(|t| t.tokenize(&text).ok())
         .map(|mut toks| {
             toks.iter_mut()
@@ -401,6 +407,13 @@ fn kana_romaji(c: char) -> &'static str {
         'ワ' => "wa", 'ヰ' => "i", 'ヱ' => "e", 'ヲ' => "wo", 'ン' => "n", 'ヴ' => "vu",
         _ => "",
     }
+}
+
+/// One line's pieces with a tokenizer shared across tests.
+#[cfg(test)]
+pub fn pieces(text: &str, japanese: bool) -> Vec<Piece> {
+    static TOK: std::sync::LazyLock<Option<Tokenizer>> = std::sync::LazyLock::new(tokenizer);
+    pieces_with(text, japanese, TOK.as_ref())
 }
 
 #[cfg(test)]
