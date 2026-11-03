@@ -1,12 +1,14 @@
-//! Lyrics lookup: a short, sequential conversation with LRCLIB, then the
-//! opt-in extra sources, then one LLM-assisted retry.
+//! Lyrics lookup: a short, sequential conversation with LRCLIB, then one
+//! LLM call for the song's real names, then the opt-in extra sources.
 //!
 //! 1. Cache.
 //! 2. `/api/get` with the player's title, then with the regex-cleaned title.
 //! 3. One structured `/api/search` for the cleaned title; one full-text `q=`
 //!    search only if nothing so far found the song.
-//! 4. Extra sources (QQ / NetEase / Kugou), when enabled: also when LRCLIB failed.
-//! 5. One LLM call for canonical names, then `/api/get` + search with them.
+//! 4. One LLM call for canonical names, then `/api/get` + search with them.
+//! 5. Extra sources (QQ / NetEase / Kugou), when enabled: also when LRCLIB
+//!    failed. They search by the identified native names first, then the
+//!    player's: QQ and co. list 雪国 / ヨルシカ, not "Snow Country" / Yorushika.
 //!
 //! At most `MAX_REQUESTS` LRCLIB requests per song, one at a time, and no URL
 //! twice. A plain-only hit spends one of them looking for a synced entry of the
@@ -16,6 +18,7 @@ use crate::cleaning::{clean_title, normalize_name, Names};
 use crate::llm;
 use crate::lyrics_cache::{cache_lyrics, cache_no_lyrics, get_cached_lyrics, CacheResult};
 use crate::sources::{self, Found, Provider};
+use crate::llm::identify::SongIdentity;
 use crate::timing;
 use crate::types::LyricLine;
 use anyhow::Result;
@@ -365,10 +368,10 @@ impl<E: Effects> Lookup<'_, E> {
         self.find(&titles, &artist, true).await
     }
 
-    /// Step 5: one LLM call, then an exact lookup and a search with its names.
-    async fn llm_pass(&mut self) -> Option<Lrclib> {
-        let names = self.fx.names(self.req).await?;
-        self.find(&[names.title], &names.artist, false).await
+    /// Step 4: an exact lookup and a search with the identified names.
+    async fn identified_pass(&mut self, names: &[Names]) -> Option<Lrclib> {
+        let best = names.first()?;
+        self.find(&[best.title.clone()], &best.artist, false).await
     }
 }
 
@@ -469,8 +472,9 @@ trait Effects: Send + Sync {
     fn cached(&self, artist: &str, track: &str) -> CacheResult;
     /// Send one LRCLIB request.
     fn lrclib(&self, url: &str) -> impl Future<Output = Reply> + Send;
-    /// The LLM's names for the song; None when it is not set up, failed or is unsure.
-    fn names(&self, req: &Request) -> impl Future<Output = Option<Names>> + Send;
+    /// The LLM's names for the song, native first; empty when it is not set
+    /// up, failed or is unsure.
+    fn names(&self, req: &Request) -> impl Future<Output = Vec<Names>> + Send;
     fn sources(&self, q: &sources::Query, plain: Option<&[String]>) -> impl Future<Output = Option<Found>> + Send;
     fn save(&self, artist: &str, track: &str, lines: &[LyricLine], source: TimingSource);
     fn save_none(&self, artist: &str, track: &str);
@@ -498,13 +502,15 @@ impl Effects for Live {
     }
     /// Song identification as measured in docs/research/llm-search (search off):
     /// the release's own names, e.g. "Snow Country" / Yorushika -> 雪国 / ヨルシカ.
-    async fn names(&self, req: &Request) -> Option<Names> {
-        let id = llm::identify::identify_song(&req.title, &req.artist, req.duration, false).await?;
+    async fn names(&self, req: &Request) -> Vec<Names> {
+        let Some(id) = llm::identify::identify_song(&req.title, &req.artist, req.duration, false).await else {
+            return Vec::new();
+        };
         info!(
             "Identified '{}' by '{}' as '{}' by '{}'",
             req.title, req.artist, id.title_native, id.artist_native
         );
-        Some(Names { artist: id.artist_native, title: id.title_native })
+        identified_names(&id)
     }
     fn sources(&self, q: &sources::Query, plain: Option<&[String]>) -> impl Future<Output = Option<Found>> + Send {
         sources::find(q, plain)
@@ -574,11 +580,13 @@ async fn fetch_timed<E: Effects>(
     let mut run = Lookup { fx, req, asked: HashMap::new(), incomplete: false };
     let mut found = if negative { None } else { run.regex_pass().await };
     if found.is_none() {
-        if let Some(timed) = from_sources(fx, req, extra).await {
-            return Ok((timed, None));
-        }
-        if !negative {
-            found = run.llm_pass().await;
+        // A negative-cached song already had its LLM call; it retries the sources only.
+        let names = if negative { Vec::new() } else { fx.names(req).await };
+        found = run.identified_pass(&names).await;
+        if found.is_none() {
+            if let Some(timed) = from_sources(fx, req, &names, extra).await {
+                return Ok((timed, None));
+            }
         }
     }
     info!(
@@ -614,12 +622,11 @@ async fn fetch_timed<E: Effects>(
     }
 }
 
-/// Step 4: with the setting on and a length to match recordings by, the extra
+/// Step 5: with the setting on and a length to match recordings by, the extra
 /// sources, whether LRCLIB had nothing or could not answer. A hit is cached.
-async fn from_sources<E: Effects>(fx: &E, req: &Request, extra: bool) -> Option<TimedLyrics> {
+async fn from_sources<E: Effects>(fx: &E, req: &Request, names: &[Names], extra: bool) -> Option<TimedLyrics> {
     let duration = req.duration.filter(|_| extra)?;
-    let track = clean_title(&req.title, &req.artist);
-    let q = sources::Query { track, artist: req.artist.clone(), duration };
+    let q = source_query(&req.title, &req.artist, names, duration);
     let found = fx.sources(&q, None).await?;
     let source = TimingSource::from(found.provider);
     info!("LRCLIB had nothing for '{}'; {} did", req.title, source.as_str());
@@ -627,11 +634,26 @@ async fn from_sources<E: Effects>(fx: &E, req: &Request, extra: bool) -> Option<
     Some(TimedLyrics { lines: found.lines, source, pending: false })
 }
 
+/// The names the sources search for, best first: the identified native ones,
+/// then the player's (title regex-cleaned), then the other identified
+/// spellings, which only count as the song's names.
+pub(crate) fn source_query(title: &str, artist: &str, names: &[Names], duration: f64) -> sources::Query {
+    let name = |n: &Names| sources::Name { title: n.title.clone(), artist: n.artist.clone() };
+    let player = sources::Name { title: clean_title(title, artist), artist: artist.to_string() };
+    let all = names.first().map(name).into_iter().chain([player]).chain(names.iter().skip(1).map(name));
+    sources::Query::new(all, duration)
+}
+
+/// The identification's (title, artist) spellings, native first.
+pub(crate) fn identified_names(id: &SongIdentity) -> Vec<Names> {
+    id.queries().into_iter().map(|(title, artist)| Names { artist, title }).collect()
+}
+
 /// Look up LRCLIB's spelling of the song, for the length being played.
 fn upgrade_job(req: &Request, estimate: &[LyricLine], src: &PlainSource) -> Option<Upgrade> {
     let duration = req.duration.or((src.duration > 0.0).then_some(src.duration))?;
     Some(Upgrade {
-        query: sources::Query { track: src.track.clone(), artist: src.artist.clone(), duration },
+        query: sources::Query::new([sources::Name { title: src.track.clone(), artist: src.artist.clone() }], duration),
         plain: estimate.iter().map(|l| l.text.clone()).collect(),
     })
 }
@@ -768,12 +790,14 @@ mod tests {
         negative_cached: bool,
         /// The first rule whose text is in the URL answers; otherwise 404.
         lrclib: Vec<(&'static str, Reply)>,
-        names: Option<Names>,
+        names: Vec<Names>,
         answer: Option<Found>,
         urls: Mutex<Vec<String>>,
         llm_calls: Mutex<u32>,
         /// One entry per sources call: how many known lines it was given.
         calls: Mutex<Vec<Option<usize>>>,
+        /// One entry per sources call: the names it was given, as "title / artist".
+        searched: Mutex<Vec<Vec<String>>>,
         saved: Mutex<Vec<TimingSource>>,
         saved_none: Mutex<u32>,
     }
@@ -795,6 +819,9 @@ mod tests {
         fn calls(&self) -> Vec<Option<usize>> {
             self.calls.lock().unwrap().clone()
         }
+        fn searched(&self) -> Vec<Vec<String>> {
+            self.searched.lock().unwrap().clone()
+        }
         fn saved(&self) -> Vec<TimingSource> {
             self.saved.lock().unwrap().clone()
         }
@@ -815,13 +842,14 @@ mod tests {
             let reply = self.lrclib.iter().find(|(n, _)| url.contains(n)).map_or(Reply::NotFound, |(_, r)| r.clone());
             async move { reply }
         }
-        fn names(&self, _req: &Request) -> impl Future<Output = Option<Names>> + Send {
+        fn names(&self, _req: &Request) -> impl Future<Output = Vec<Names>> + Send {
             *self.llm_calls.lock().unwrap() += 1;
             let names = self.names.clone();
             async move { names }
         }
-        fn sources(&self, _q: &sources::Query, plain: Option<&[String]>) -> impl Future<Output = Option<Found>> + Send {
+        fn sources(&self, q: &sources::Query, plain: Option<&[String]>) -> impl Future<Output = Option<Found>> + Send {
             self.calls.lock().unwrap().push(plain.map(<[String]>::len));
+            self.searched.lock().unwrap().push(q.names.iter().map(|n| format!("{} / {}", n.title, n.artist)).collect());
             let answer = self.answer.clone();
             async move { answer }
         }
@@ -874,7 +902,8 @@ mod tests {
         assert_eq!(fx.saved_none(), 0);
         assert_eq!(fx.asked("q="), 1, "one full-text search");
         assert_eq!(fx.urls().len(), 3, "get, search, q");
-        assert_eq!(fx.llm_calls(), 0, "the sources answered first");
+        assert_eq!(fx.llm_calls(), 1, "identification runs before the sources");
+        assert_eq!(fx.searched(), [["SYNC / Daoko"]], "no LLM names: the player's, as before");
 
         // Nobody answers: an error, and no "no lyrics" entry (LRCLIB never said so).
         let fx = sync_daoko(Fake::default());
@@ -908,7 +937,7 @@ mod tests {
     #[tokio::test]
     async fn request_cap_holds_when_everything_misses() {
         let names = Names { artist: "Chihara Minori".into(), title: "Koi no Uta".into() };
-        let fx = Fake { names: Some(names), ..Default::default() }.rule("search?", json_reply(json!([])));
+        let fx = Fake { names: vec![names], ..Default::default() }.rule("search?", json_reply(json!([])));
         let req = Request::new("Minori - Koi (Official Video)".into(), "Minori".into(), Some(265.0));
         assert!(fetch_timed(&fx, &req, false).await.is_err());
 
@@ -925,7 +954,7 @@ mod tests {
 
     #[tokio::test]
     async fn llm_names_find_what_the_player_names_did_not() {
-        let fx = Fake { names: Some(Names { artist: "なとり".into(), title: "Overdose".into() }), ..Default::default() }
+        let fx = Fake { names: vec![Names { artist: "なとり".into(), title: "Overdose".into() }], ..Default::default() }
             .rule("artist_name=%E3%81%AA%E3%81%A8%E3%82%8A", json_reply(json!([record("Overdose", "なとり", 266.0, true)])))
             .rule("search?", json_reply(json!([])));
         let req = Request::new("Overdose".into(), "Natori".into(), None);
@@ -933,6 +962,77 @@ mod tests {
         assert_eq!(timed.source, TimingSource::Lrclib);
         assert_eq!(fx.asked("/get?"), 0, "no length, no exact lookups");
         assert_eq!(fx.urls().len(), 3, "search, q, LLM search");
+    }
+
+    fn snow_country() -> (Request, Vec<Names>) {
+        let req = Request::new("Snow Country".into(), "Yorushika".into(), Some(288.0));
+        let id = SongIdentity {
+            title_native: "雪国".into(),
+            title_romanized: Some("Yukiguni".into()),
+            artist_native: "ヨルシカ".into(),
+            artist_romanized: Some("Yorushika".into()),
+            album: None,
+            duration_s: Some(288.0),
+            isrc: None,
+            confidence: 0.9,
+            evidence_urls: vec![],
+        };
+        (req, identified_names(&id))
+    }
+
+    #[tokio::test]
+    async fn identified_names_go_to_lrclib_first_then_lead_the_sources() {
+        let (req, names) = snow_country();
+        let fx = Fake { names, ..Fake::answering(Provider::Qq) }.rule("search?", json_reply(json!([])));
+        let (timed, _) = fetch_timed(&fx, &req, true).await.unwrap();
+        assert_eq!(timed.source, TimingSource::Qq);
+        assert_eq!(fx.llm_calls(), 1);
+        let urls = fx.urls();
+        assert!(urls.len() <= MAX_REQUESTS, "{urls:#?}");
+        assert!(urls.iter().any(|u| u.contains("/get?track_name=%E9%9B%AA%E5%9B%BD&artist_name=%E3%83%A8")), "LRCLIB by the native names: {urls:#?}");
+        assert_eq!(
+            fx.searched(),
+            [[
+                "雪国 / ヨルシカ",
+                "Snow Country / Yorushika",
+                "雪国 / Yorushika",
+                "Yukiguni / ヨルシカ",
+                "Yukiguni / Yorushika"
+            ]],
+            "native names first, then the player's, then the other spellings"
+        );
+        assert_eq!(fx.saved(), vec![TimingSource::Qq]);
+    }
+
+    #[tokio::test]
+    async fn an_lrclib_hit_by_identified_names_never_asks_the_sources() {
+        let (req, names) = snow_country();
+        let fx = Fake { names, ..Fake::answering(Provider::Qq) }
+            .rule("artist_name=%E3%83%A8", json_reply(json!([record("雪国", "ヨルシカ", 288.0, true)])))
+            .rule("search?", json_reply(json!([])));
+        let (timed, _) = fetch_timed(&fx, &req, true).await.unwrap();
+        assert_eq!(timed.source, TimingSource::Lrclib);
+        assert!(fx.calls().is_empty());
+        assert_eq!(fx.saved(), vec![TimingSource::Lrclib]);
+    }
+
+    #[tokio::test]
+    async fn without_the_setting_identification_still_retries_lrclib_only() {
+        let (req, names) = snow_country();
+        let fx = Fake { names, ..Fake::answering(Provider::Qq) };
+        assert!(fetch_timed(&fx, &req, false).await.is_err());
+        assert_eq!(fx.llm_calls(), 1);
+        assert!(fx.calls().is_empty());
+        assert!(fx.asked("track_name=%E9%9B%AA%E5%9B%BD") > 0);
+    }
+
+    #[test]
+    fn source_names_drop_repeats_of_the_players() {
+        let names = vec![Names { artist: "YOASOBI".into(), title: "夜に駆ける".into() }];
+        let q = source_query("夜に駆ける", "YOASOBI", &names, 261.0);
+        assert_eq!(q.names.len(), 1);
+        let q = source_query("YOASOBI「夜に駆ける」 Official Music Video", "Ayase / YOASOBI", &[], 261.0);
+        assert_eq!((q.names[0].title.as_str(), q.names[0].artist.as_str()), ("夜に駆ける", "Ayase / YOASOBI"));
     }
 
     #[tokio::test]
@@ -971,7 +1071,8 @@ mod tests {
         assert_eq!(fx.urls().len(), 3, "get, search, same-recording search");
 
         let job = upgrade.unwrap();
-        assert_eq!((job.query.track.as_str(), job.query.duration), ("Koi", 265.0), "LRCLIB's spelling, player's length");
+        assert_eq!((job.query.names[0].title.as_str(), job.query.duration), ("Koi", 265.0), "LRCLIB's spelling, player's length");
+        assert_eq!(job.query.names.len(), 1);
         let update = run_upgrade(&fx, &req(), job).await.unwrap();
         assert_eq!((update.title.as_str(), update.artist.as_str()), ("Koi", "Minori"), "keyed by what was asked");
         assert_eq!(update.source, TimingSource::Qq);
@@ -1077,8 +1178,8 @@ mod tests {
             self.0.lock().unwrap().push(status);
             reply
         }
-        async fn names(&self, _req: &Request) -> Option<Names> {
-            None
+        async fn names(&self, _req: &Request) -> Vec<Names> {
+            Vec::new()
         }
         fn sources(&self, q: &sources::Query, plain: Option<&[String]>) -> impl Future<Output = Option<Found>> + Send {
             sources::find(q, plain)

@@ -1,18 +1,26 @@
 //! Hit-rate harness for the extra sources (research/sources-hits).
 //!
-//! For each case and provider it records the query, the candidates, what
-//! `best()` picked or why nothing, and whether the guards passed and why not.
-//! Every response is kept in `research/sources-hits/.http/`, so a rerun only
-//! pays for URLs it has not seen. Requests are sequential, 1 s apart, capped by
-//! `LYRYC_DIAG_BUDGET` (default 120), and a provider that fails `TRIP_AFTER`
-//! times in a row is dropped for the run, as the app's breaker would.
+//! For each case it builds the sources query the way the lookup does
+//! (`lyrics::source_query`), with the case's identified names ("after") and
+//! without them ("nollm", no LLM set up), and records per provider and search
+//! the query, the candidates, the pick and the verdict, then which provider
+//! the real `find_with` answers with. Every response is kept in
+//! `research/sources-hits/.http/`, so a rerun only pays for URLs it has not
+//! seen. Requests are sequential, 1 s apart, capped by `LYRYC_DIAG_BUDGET`
+//! (default 120), and a host that fails `TRIP_AFTER` times in a row is dropped
+//! for the run, as the app's breaker would.
 //!
 //! ```sh
-//! LYRYC_DIAG=before cargo test --lib sources::diag -- --ignored --nocapture
+//! LYRYC_DIAG=after cargo test --lib sources::diag -- --ignored --nocapture
 //! ```
+//!
+//! `results/before.jsonl` came from this harness at c8031b7 (one search per
+//! provider: mode a with the player's names, mode b with the native names).
 
 use super::*;
-use crate::cleaning::clean_title;
+use crate::cleaning::Names;
+use crate::llm::identify::SongIdentity;
+use crate::lyrics::{identified_names, source_query};
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
@@ -37,6 +45,23 @@ struct Identity {
     artist_native: String,
     title_romanized: Option<String>,
     artist_romanized: Option<String>,
+}
+
+impl Identity {
+    /// The names the lookup would get from `identify_song`.
+    fn names(&self) -> Vec<Names> {
+        identified_names(&SongIdentity {
+            title_native: self.title_native.clone(),
+            title_romanized: self.title_romanized.clone(),
+            artist_native: self.artist_native.clone(),
+            artist_romanized: self.artist_romanized.clone(),
+            album: None,
+            duration_s: None,
+            isrc: None,
+            confidence: 1.0,
+            evidence_urls: vec![],
+        })
+    }
 }
 
 fn dir() -> PathBuf {
@@ -80,32 +105,28 @@ impl Http {
         url.split('/').nth(2).unwrap_or("").to_string()
     }
 
-    fn tripped(&self, url: &str) -> bool {
-        let stats = self.stats.lock().unwrap();
-        stats.errors.get(&Self::host(url)).copied().unwrap_or(0) >= breaker::TRIP_AFTER
-    }
-
-    async fn get(&self, url: &str, referer: Option<&str>) -> Result<Value> {
-        let file = dir().join(".http").join(fnv(url) + ".json");
+    async fn get(&self, url: String, referer: Option<&'static str>) -> Result<Value> {
+        let file = dir().join(".http").join(fnv(&url) + ".json");
         if let Ok(text) = std::fs::read_to_string(&file) {
             self.stats.lock().unwrap().cached += 1;
             let stored: Value = serde_json::from_str(&text)?;
             return Ok(stored["body"].clone());
         }
-        if self.tripped(url) {
-            return Err(anyhow::anyhow!("{} tripped; not asking", Self::host(url)));
-        }
         {
             let mut stats = self.stats.lock().unwrap();
+            let host = Self::host(&url);
+            if stats.errors.get(&host).copied().unwrap_or(0) >= breaker::TRIP_AFTER {
+                return Err(anyhow::anyhow!("{host} tripped; not asking"));
+            }
             if stats.live >= self.budget {
                 return Err(anyhow::anyhow!("request budget spent"));
             }
             stats.live += 1;
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
-        let got = get_json(url, referer).await;
+        let got = get_json(url.clone(), referer).await;
         let mut stats = self.stats.lock().unwrap();
-        let errors = stats.errors.entry(Self::host(url)).or_default();
+        let errors = stats.errors.entry(Self::host(&url)).or_default();
         match &got {
             Ok(body) => {
                 *errors = 0;
@@ -121,105 +142,55 @@ impl Http {
     }
 }
 
-/// Does the candidate name the case's song (any of its known names)?
-fn names_song(title: &str, artist: &str, case: &Case) -> bool {
+/// The harness's own judge: does a result name the case's song, by the
+/// names in cases.json? Independent of the guards under test.
+fn is_the_song(title: &str, artist: &str, case: &Case) -> bool {
     let title_ok = case.titles.iter().any(|t| title_matches(title, t));
     let artist_ok = case.artists.iter().any(|a| {
         let (a, c) = (align::norm(a), align::norm(artist));
         !a.is_empty() && (c.contains(&a) || a.contains(&c) || char_sim(&c, &a) >= 0.6)
     });
-    title_ok && artist_ok && !cover_re().is_match(title)
+    title_ok && artist_ok && !version_re().is_match(title)
 }
 
-/// One provider, one query: the whole story as a JSON row.
-async fn probe(http: &Http, p: Provider, q: &Query, case: &Case) -> Value {
+/// One provider, one name, through the real `fetch`, with the story around it.
+async fn probe(http: &Http, p: Provider, name: &Name, q: &Query, case: &Case) -> Value {
+    let get = |url, referer| http.get(url, referer);
     let api = p.api();
-    let url = (api.search_url)(q);
-    let mut row = json!({"provider": p, "query": url, "track": q.track, "artist": q.artist});
-    let cands = match http.get(&url, api.referer).await.and_then(|v| (api.candidates)(&v)) {
-        Ok(c) => c,
-        Err(e) => {
-            row["outcome"] = json!("error");
-            row["error"] = json!(e.to_string());
-            return row;
-        }
-    };
-    let song: Vec<f64> = cands
-        .iter()
-        .filter(|c| names_song(&c.title, &c.artist, case))
-        .map(|c| c.duration - q.duration)
-        .collect();
-    row["candidates"] = json!(cands
-        .iter()
-        .map(|c| json!([c.title, c.artist, c.duration]))
-        .collect::<Vec<_>>());
-    row["song_deltas"] = json!(song);
-    let Some(pick) = best(cands.clone(), q) else {
-        row["outcome"] = json!(if cands.is_empty() { "empty" } else { "no_same_length" });
-        return row;
-    };
-    row["pick"] = json!([pick.title, pick.artist, pick.duration]);
-    row["pick_is_song"] = json!(names_song(&pick.title, &pick.artist, case));
-    // The title guard needs no lyric: don't download one it would throw away.
-    if !title_matches(&pick.title, &q.track) {
-        row["outcome"] = json!("rejected");
-        row["reject"] = json!(Reject::Title);
-        return row;
-    }
-    let lrc = match http
-        .get(&(api.lyric_url)(&pick), api.referer)
+    let url = (api.search_url)(name, q.duration);
+    let mut row = json!({"provider": p, "query": url, "track": name.title, "artist": name.artist});
+    // Cached by now or about to be: the same request `fetch` makes first.
+    if let Ok(cands) = get(url, api.referer)
         .await
-        .and_then(|v| (api.lyric)(&v))
+        .and_then(|v| (api.candidates)(&v))
     {
-        Ok(Some(lrc)) => lrc,
-        Ok(None) => {
-            row["outcome"] = json!("no_lyric");
-            return row;
+        let deltas: Vec<f64> = cands
+            .iter()
+            .filter(|c| is_the_song(&c.title, &c.artist, case))
+            .map(|c| c.duration - q.duration)
+            .collect();
+        row["song_deltas"] = json!(deltas);
+        row["candidates"] = json!(cands
+            .iter()
+            .map(|c| json!([c.title, c.artist, c.duration]))
+            .collect::<Vec<_>>());
+        if let Ok(pick) = best(cands, q, true) {
+            row["pick"] = json!([pick.title, pick.artist, pick.duration]);
+            row["pick_is_song"] = json!(is_the_song(&pick.title, &pick.artist, case));
         }
+    }
+    match fetch(&get, p, name, q, None).await {
         Err(e) => {
             row["outcome"] = json!("error");
             row["error"] = json!(e.to_string());
-            return row;
         }
-    };
-    let hit = Hit {
-        title: pick.title.clone(),
-        lrc,
-    };
-    match check(&hit, q, None) {
-        Ok(lines) => {
+        Ok(Err(miss)) => row["outcome"] = json!(miss),
+        Ok(Ok(lines)) => {
             row["outcome"] = json!("accepted");
             row["lines"] = json!(lines.len());
         }
-        Err(r) => {
-            row["outcome"] = json!("rejected");
-            row["reject"] = json!(r);
-        }
     }
     row
-}
-
-/// (a) what the app sends today; (b) the identified native names.
-fn queries(case: &Case, duration: f64) -> Vec<(&'static str, Query)> {
-    let mut out = vec![(
-        "a",
-        Query {
-            track: clean_title(&case.raw_title, &case.raw_artist),
-            artist: case.raw_artist.clone(),
-            duration,
-        },
-    )];
-    if let Some(id) = &case.identity {
-        out.push((
-            "b",
-            Query {
-                track: id.title_native.clone(),
-                artist: id.artist_native.clone(),
-                duration,
-            },
-        ));
-    }
-    out
 }
 
 fn cases() -> Vec<Case> {
@@ -236,26 +207,48 @@ async fn hit_rate() {
     for case in cases() {
         // The app never asks the sources without a length.
         let Some(duration) = case.play else { continue };
-        println!("#{} {} / {} ({}s, {})", case.id, case.raw_title, case.raw_artist, duration, case.kind);
-        for (mode, q) in queries(&case, duration) {
+        println!(
+            "#{} {} / {} ({}s, {})",
+            case.id, case.raw_title, case.raw_artist, duration, case.kind
+        );
+        let identified = case
+            .identity
+            .as_ref()
+            .map(Identity::names)
+            .unwrap_or_default();
+        for (mode, names) in [("after", identified), ("nollm", vec![])] {
+            let q = source_query(&case.raw_title, &case.raw_artist, &names, duration);
             for p in Provider::ALL {
-                let mut row = probe(&http, p, &q, &case).await;
-                row["id"] = json!(case.id);
-                row["mode"] = json!(mode);
-                println!(
-                    "  {mode} {:?} '{}' / '{}': {} {}",
-                    p,
-                    q.track,
-                    q.artist,
-                    row["outcome"].as_str().unwrap_or(""),
-                    row.get("pick").map_or(String::new(), |v| format!(
-                        "{v} song={} {}",
-                        row["pick_is_song"],
-                        row.get("reject").map_or(String::new(), Value::to_string)
-                    ))
-                );
-                rows.push(row);
+                // Alone, as its hit rate: its names in order until one passes.
+                for name in q.searches() {
+                    let mut row = probe(&http, p, name, &q, &case).await;
+                    row["id"] = json!(case.id);
+                    row["mode"] = json!(mode);
+                    println!(
+                        "  {mode} {p:?} '{}' / '{}': {} {}",
+                        name.title,
+                        name.artist,
+                        row["outcome"].as_str().unwrap_or(""),
+                        row.get("pick").map_or(String::new(), |v| format!(
+                            "{v} song={}",
+                            row["pick_is_song"]
+                        ))
+                    );
+                    let done = row["outcome"] == "accepted";
+                    rows.push(row);
+                    if done {
+                        break;
+                    }
+                }
             }
+            // Together, as the app runs them.
+            let get = |url, referer| http.get(url, referer);
+            let found = find_with(&Breaker::new(), &q, |p, n| fetch(&get, p, n, &q, None)).await;
+            let winner = found.map(|f| f.provider);
+            println!("  {mode} => {winner:?}");
+            rows.push(
+                json!({"id": case.id, "mode": format!("{mode}-pipeline"), "provider": winner}),
+            );
         }
     }
     let out = dir().join("results").join(format!("{label}.jsonl"));

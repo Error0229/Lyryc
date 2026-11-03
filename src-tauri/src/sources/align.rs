@@ -6,7 +6,7 @@
 //! gaps are interpolated.
 
 use regex::Regex;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 /// Below this bigram similarity two lines are never paired.
@@ -78,12 +78,30 @@ pub fn parse_lrc(lrc: &str, track: &str, artist: &str) -> Vec<(f64, String)> {
     out
 }
 
-/// Lowercase letters and digits only.
+/// Lowercase letters and digits only, Traditional Chinese and Japanese kanji
+/// folded to Simplified: players show 告白氣球 / 周杰倫 / 茅原実里, the
+/// sources list 告白气球 / 周杰伦 / 茅原实里.
 pub fn norm(s: &str) -> String {
     s.to_lowercase()
         .chars()
         .filter(|c| c.is_alphanumeric())
+        .map(simplified)
         .collect()
+}
+
+fn simplified(c: char) -> char {
+    static TABLE: OnceLock<HashMap<char, char>> = OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        include_str!("ts_chars.txt")
+            .lines()
+            .filter(|l| !l.starts_with('#'))
+            .filter_map(|l| {
+                let mut pair = l.chars();
+                Some((pair.next()?, pair.next()?))
+            })
+            .collect()
+    });
+    table.get(&c).copied().unwrap_or(c)
 }
 
 fn grams(s: &str) -> HashSet<String> {
@@ -188,6 +206,14 @@ mod tests {
                 (130.123, "repeat".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn norm_folds_traditional_to_simplified() {
+        assert_eq!(norm("告白氣球"), norm("告白气球"));
+        assert_eq!(norm("草東沒有派對"), "草东没有派对");
+        assert_eq!(norm("茅原実里"), norm("茅原实里"));
+        assert_eq!(norm("ヨルシカ 雪国!"), "ヨルシカ雪国");
     }
 
     #[test]
