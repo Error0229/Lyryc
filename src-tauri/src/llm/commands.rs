@@ -2,7 +2,7 @@
 
 use serde::Serialize;
 use std::time::Instant;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use super::presets::{Preset, PRESETS};
 use super::store::{lock, LegacyKeys, LlmProvider, LlmSettings, ProviderInput, Route};
@@ -14,6 +14,17 @@ pub struct LlmTestResult {
     pub latency_ms: u64,
     pub model: String,
     pub sample: String,
+}
+
+/// Providers or routes changed, from any window. The overlay retries a
+/// translation that failed for want of a provider.
+const SETTINGS_CHANGED: &str = "llm-settings-changed";
+
+fn announce<T>(app: &AppHandle, result: Result<T, String>) -> Result<T, String> {
+    if result.is_ok() {
+        let _ = app.emit(SETTINGS_CHANGED, ());
+    }
+    result
 }
 
 #[tauri::command]
@@ -28,24 +39,26 @@ pub fn llm_get_settings(state: State<'_, LlmState>) -> LlmSettings {
 
 #[tauri::command]
 pub fn llm_upsert_provider(
+    app: AppHandle,
     input: ProviderInput,
     state: State<'_, LlmState>,
 ) -> Result<LlmProvider, String> {
-    lock(&state).upsert(input)
+    announce(&app, lock(&state).upsert(input))
 }
 
 #[tauri::command]
-pub fn llm_remove_provider(id: String, state: State<'_, LlmState>) -> Result<(), String> {
-    lock(&state).remove(&id)
+pub fn llm_remove_provider(app: AppHandle, id: String, state: State<'_, LlmState>) -> Result<(), String> {
+    announce(&app, lock(&state).remove(&id))
 }
 
 #[tauri::command]
 pub fn llm_set_route(
+    app: AppHandle,
     task: Task,
     route: Option<Route>,
     state: State<'_, LlmState>,
 ) -> Result<(), String> {
-    lock(&state).set_route(task, route)
+    announce(&app, lock(&state).set_route(task, route))
 }
 
 #[tauri::command]
@@ -89,8 +102,9 @@ pub async fn llm_test(
 
 #[tauri::command]
 pub fn llm_import_legacy_keys(
+    app: AppHandle,
     keys: LegacyKeys,
     state: State<'_, LlmState>,
 ) -> Result<LlmSettings, String> {
-    lock(&state).import_legacy(&keys)
+    announce(&app, lock(&state).import_legacy(&keys))
 }

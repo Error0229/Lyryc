@@ -31,6 +31,7 @@ export function useBackendEvents() {
       },
       clickThrough: (on) => useSession.setState({ clickThrough: on }),
       lyrics: ({ track, lines, source }) => applyLyrics(track, lines, source),
+      llmSettings: () => useSession.setState((s) => ({ llmRevision: s.llmRevision + 1 })),
     });
   }, []);
 }
@@ -73,6 +74,9 @@ function remember(key: string, map: Record<string, string>) {
 export function useTranslations() {
   const lyrics = useSession((s) => s.lyrics);
   const p = useSettings((s) => s.translation);
+  // A provider set up after a failure retries; a translation that succeeded is
+  // in `recent` and costs nothing.
+  const llmRevision = useSession((s) => s.llmRevision);
   const signature = useMemo(() => textSignature(lyrics), [lyrics]);
   const translatedSignature = useRef("");
 
@@ -111,7 +115,7 @@ export function useTranslations() {
     };
     // Prefs fields are listed individually (and the filter by value: cross-window
     // sync rebuilds objects) so display-only changes don't retranslate.
-  }, [signature, p.enabled, p.sourceLanguage, p.targetLanguage, p.style, p.customPrompt, p.preserveRhyme, p.preserveMeaning, p.maintainStructure, p.filter.mode, p.filter.languages.join()]);
+  }, [signature, llmRevision, p.enabled, p.sourceLanguage, p.targetLanguage, p.style, p.customPrompt, p.preserveRhyme, p.preserveMeaning, p.maintainStructure, p.filter.mode, p.filter.languages.join()]);
 }
 
 const pending = new Set<string>();

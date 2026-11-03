@@ -22,6 +22,8 @@ export interface Session {
   retimedAt: number;
   /** "Search again" is running for this track. */
   refetching: boolean;
+  /** Bumped when AI providers or routes change: a failed translation retries. */
+  llmRevision: number;
   playing: boolean;
   clickThrough: boolean;
 }
@@ -35,6 +37,7 @@ export const useSession = create<Session>()(() => ({
   furigana: {},
   retimedAt: 0,
   refetching: false,
+  llmRevision: 0,
   playing: false,
   clickThrough: false,
 }));

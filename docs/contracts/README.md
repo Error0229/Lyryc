@@ -70,8 +70,8 @@ interface TimedLyrics {
   says the recording has no words. Cached, so a replay does no lookups at all.
   "Search again" (`refetch`) doubts it and runs every pass; it only answers
   `instrumental` again when nothing is found. The user can also mark a track
-  by hand: `invoke("mark_instrumental", { trackName, artistName })` writes the
-  same cache entry.
+  by hand: `invoke("mark_instrumental", { trackName, artistName, videoId? })` writes
+  the same cache entry, once a lookup of the song still running is done.
 - `source: "aligned"`: word-level timing from the opt-in pre-aligner (below).
   Lines carry `words: { time, text, duration? }[]`; a word without `duration`
   runs until the next word. Lines that failed the reject rule have no `words`

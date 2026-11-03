@@ -777,11 +777,15 @@ fn forget_song(req: &Request) {
 
 /// The user says the song has no words: remembered like a found instrumental,
 /// so no lookup runs for it again. "Search again" forgets it.
+/// Written once the song's running lookup is done: it would overwrite the mark.
 #[tauri::command]
-pub fn mark_instrumental(track_name: String, artist_name: String) {
-    info!("Marked '{}' by '{}' instrumental", track_name, artist_name);
-    correct(&artist_name, &track_name);
-    cache_instrumental(&artist_name, &track_name);
+pub async fn mark_instrumental(track_name: String, artist_name: String, video_id: Option<String>) {
+    let mut req = Request::new(track_name, artist_name, None);
+    req.video_id = video_id.filter(|id| ytmusic::is_video_id(id));
+    let _song = song_lock(&req).await;
+    info!("Marked '{}' by '{}' instrumental", req.title, req.artist);
+    correct(&req.artist, &req.title);
+    cache_instrumental(&req.artist, &req.title);
 }
 
 /// The serving hook: swap in pre-aligned timing when there is some, or mark

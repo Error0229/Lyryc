@@ -28,6 +28,8 @@ export interface BackendEvents {
   lyrics: (p: { track: Pick<Track, "title" | "artist">; lines: LyricLine[]; source: LyricsSource }) => void;
   /** Word-level timing: download progress and state changes (`prealign-status`). */
   prealign: (s: PrealignStatus) => void;
+  /** AI providers or routes changed, in any window (`llm-settings-changed`). */
+  llmSettings: () => void;
 }
 
 export interface Backend {
@@ -109,7 +111,7 @@ const tauriBackend: Backend = {
       videoId: t.videoId ?? null,
     }),
 
-  markInstrumental: (t) => invoke<void>("mark_instrumental", { trackName: t.title, artistName: t.artist }),
+  markInstrumental: (t) => invoke<void>("mark_instrumental", { trackName: t.title, artistName: t.artist, videoId: t.videoId ?? null }),
 
   async translate(lines, prefs) {
     const lyrics = lines.map(({ time, text, duration }) => ({ time, text, duration: duration ?? null }));
@@ -159,6 +161,7 @@ const tauriBackend: Backend = {
           on.lyrics!({ track: { title: p.title, artist: p.artist }, lines: p.lines, source: p.source }),
         ),
       on.prealign && listen<PrealignStatus>("prealign-status", (e) => on.prealign!(e.payload)),
+      on.llmSettings && listen("llm-settings-changed", () => on.llmSettings!()),
     ].filter((p): p is Promise<() => void> => !!p);
     return () => pending.forEach((p) => void p.then((off) => off()));
   },
