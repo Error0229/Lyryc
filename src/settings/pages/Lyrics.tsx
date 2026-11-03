@@ -11,6 +11,7 @@ import { Slider } from "../../ui/Slider";
 import { Switch } from "../../ui/Switch";
 import { PageHeader } from "../Page";
 import { useCurrentTrack } from "../useTrack";
+import { WordTiming } from "./WordTiming";
 
 const RANGE = OFFSET_LIMIT / 2;
 
@@ -66,6 +67,7 @@ export function LyricsPage() {
         >
           <Switch label="Extra lyric sources" checked={extraSources} onChange={settings.setExtraSources} />
         </Row>
+        <WordTiming />
       </Section>
 
       <Section title="Sync" description="Positive values show lyrics earlier. The overlay's ± buttons adjust the current track.">

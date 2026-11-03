@@ -68,6 +68,11 @@ export interface Settings {
   wordHighlight: boolean;
   /** Ask QQ Music / NetEase / Kugou for timing LRCLIB lacks. Opt-in: unofficial endpoints. */
   extraSources: boolean;
+  /**
+   * Word-level timing for YouTube Music: downloads each queued song's audio
+   * with yt-dlp and aligns the lyrics locally. Opt-in, experimental.
+   */
+  prealign: boolean;
   lyric: LyricStyle;
   translation: TranslationPrefs;
   furigana: FuriganaPrefs;
@@ -98,6 +103,7 @@ export const defaultSettings: Settings = {
   theme: "system",
   wordHighlight: true,
   extraSources: false,
+  prealign: false,
   lyric: defaultLyric,
   translation: {
     enabled: false,

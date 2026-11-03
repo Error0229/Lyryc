@@ -19,6 +19,15 @@ describe("mergeSettings (loading lyryc-settings)", () => {
     expect(mergeSettings(undefined).extraSources).toBe(false);
   });
 
+  it("gives settings saved before word-level timing existed the default: off", () => {
+    const { prealign: _, ...saved } = { ...defaultSettings, extraSources: true };
+    const s = mergeSettings(saved);
+    expect(s.prealign).toBe(false);
+    expect(s.extraSources).toBe(true);
+    expect(mergeSettings(undefined).prealign).toBe(false);
+    expect(mergeSettings({ ...defaultSettings, prealign: true }).prealign).toBe(true);
+  });
+
   it("gives translation prefs saved before the language filter existed: translate all", () => {
     const { filter: _, ...translation } = { ...defaultSettings.translation, targetLanguage: "zh-tw" };
     const s = mergeSettings({ ...defaultSettings, translation });

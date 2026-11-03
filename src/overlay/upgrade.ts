@@ -11,14 +11,15 @@ export function sameTrack(a: Named | null, b: Named | null): boolean {
 }
 
 /**
- * Lyrics are for the track on screen, and never trade real timing for an
- * estimate. The second rule covers a background upgrade that lands before the
- * estimate it replaces: the estimate must not undo it.
+ * Lyrics are for the track on screen, never trade real timing for an
+ * estimate, and never trade word timing for line timing. The last two cover
+ * a background upgrade that lands before the answer it replaces.
  */
 export function accepts(
   current: { track: Named | null; source: LyricsSource | null },
   incoming: { track: Named; source: LyricsSource },
 ): boolean {
   if (!sameTrack(current.track, incoming.track)) return false;
+  if (current.source === "aligned") return incoming.source === "aligned";
   return !(isEstimate(incoming.source) && current.source !== null && !isEstimate(current.source));
 }

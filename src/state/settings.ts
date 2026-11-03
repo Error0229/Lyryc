@@ -46,6 +46,7 @@ export const settings = {
   setTheme: (theme: UiTheme) => set({ theme }),
   setWordHighlight: (wordHighlight: boolean) => set({ wordHighlight }),
   setExtraSources: (extraSources: boolean) => set({ extraSources }),
+  setPrealign: (prealign: boolean) => set({ prealign }),
   lyric: (p: Partial<LyricStyle>) => set((s) => ({ lyric: { ...s.lyric, ...p } })),
   resetLyric: () => set({ lyric: defaultLyric }),
   translation: (p: Partial<TranslationPrefs>) => set((s) => ({ translation: { ...s.translation, ...p } })),

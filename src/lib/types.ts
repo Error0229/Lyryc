@@ -9,9 +9,8 @@ export interface Track {
 }
 
 /**
- * Word timing inside a line. The backend does not emit these yet; this is the
- * shape the frontend expects when the timing stream adds them (seconds, same
- * naming as LyricLine).
+ * Word timing inside a line (seconds, same naming as LyricLine). Sent only with
+ * source "aligned". Without `duration` a word runs until the next one starts.
  */
 export interface LyricWord {
   time: number;
@@ -30,8 +29,23 @@ export interface LyricLine {
 /**
  * Where a lyric list's timing came from. `lrclib-estimate` is plain text
  * spread over the track: good for scrolling, never for highlighting.
+ * `aligned`: the opt-in pre-aligner's timing, with per-word `words`.
  */
-export type LyricsSource = "lrclib" | "lrclib-estimate" | "qq" | "netease" | "kugou";
+export type LyricsSource = "lrclib" | "lrclib-estimate" | "qq" | "netease" | "kugou" | "aligned";
+
+/** `prealign_status` / `prealign-status`: the word-level timing feature's state. */
+export interface PrealignStatus {
+  enabled: boolean;
+  state: "off" | "downloading" | "ready" | "error";
+  download: { file: "model" | "runtime" | "yt-dlp"; done: number; total: number | null } | null;
+  error: string | null;
+  /** Model, runtime and yt-dlp on disk. */
+  diskBytes: number;
+  /** "Title — Artist" being aligned right now. */
+  workingOn: string | null;
+  /** Songs aligned this session. */
+  aligned: number;
+}
 
 /** `fetch_lyrics_timed` payload. `pending`: a better timing may still arrive. */
 export interface TimedLyrics {

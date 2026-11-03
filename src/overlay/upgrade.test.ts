@@ -29,6 +29,14 @@ describe("accepts", () => {
     expect(accepts({ track: song, source: "lrclib-estimate" }, { track: song, source: "lrclib-estimate" })).toBe(true);
   });
 
+  it("keeps word timing once it has it", () => {
+    expect(accepts({ track: song, source: "lrclib" }, { track: song, source: "aligned" })).toBe(true);
+    expect(accepts({ track: song, source: "lrclib-estimate" }, { track: song, source: "aligned" })).toBe(true);
+    expect(accepts({ track: song, source: "aligned" }, { track: song, source: "qq" })).toBe(false);
+    expect(accepts({ track: song, source: "aligned" }, { track: song, source: "lrclib-estimate" })).toBe(false);
+    expect(accepts({ track: song, source: "aligned" }, { track: song, source: "aligned" })).toBe(true);
+  });
+
   it("still lets real timing be re-timed", () => {
     expect(accepts({ track: song, source: "lrclib" }, { track: song, source: "lrclib" })).toBe(true);
   });

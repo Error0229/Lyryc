@@ -34,7 +34,7 @@ invoke<TimedLyrics>("fetch_lyrics_timed", {
   extraSources: boolean,   // the user's "Extra lyric sources" setting
 });
 
-type LyricsSource = "lrclib" | "lrclib-estimate" | "qq" | "netease" | "kugou";
+type LyricsSource = "lrclib" | "lrclib-estimate" | "qq" | "netease" | "kugou" | "aligned";
 interface TimedLyrics {
   lines: LyricLine[];
   source: LyricsSource;
@@ -45,6 +45,10 @@ interface TimedLyrics {
 - `source: "lrclib-estimate"`: LRCLIB has only plain text; times are a
   syllable-weighted guess (~8 s median error). Show the lines, but do **not**
   drive word/line highlighting from them.
+- `source: "aligned"`: word-level timing from the opt-in pre-aligner (below).
+  Lines carry `words: { time, text, duration? }[]`; a word without `duration`
+  runs until the next word. Lines that failed the reject rule have no `words`
+  and keep their line time.
 - The backend keeps no copy of the setting. The frontend passes it on every call.
 
 Routing:
@@ -72,3 +76,43 @@ Emitted once, when a background upgrade of an estimate succeeds. `title` and
 `artist` are exactly the `trackName`/`artistName` of the request, so a listener
 ignores updates whose track is no longer playing. The lines are LRCLIB's lines
 with new times, so they can be swapped in place.
+
+Also emitted (once) with `source: "aligned"` when the pre-aligner finishes the
+track that is playing. The lines are the request's lines, re-timed, with `words`.
+A listener should not replace `aligned` lines with any other source.
+
+## Word-level timing (pre-align, opt-in, YouTube Music)
+
+`fetch_lyrics` never carries `words` (the field is omitted when absent, so its
+payload is unchanged). `fetch_lyrics_timed` answers `source: "aligned"` when the
+playing YouTube Music video has a cached alignment for these lyrics, or
+`pending: true` while one is being made. Details: `docs/prealign.md`.
+
+The backend keeps no copy of the setting: the overlay mirrors it.
+
+```ts
+invoke<PrealignStatus>("prealign_configure", { enabled: boolean, extraSources: boolean });
+invoke<PrealignStatus>("prealign_status");
+invoke<PrealignStatus>("prealign_remove_files"); // deletes the downloads, turns it off
+
+// Event "prealign-status": PrealignStatus, on state changes and download progress.
+interface PrealignStatus {
+  enabled: boolean;
+  state: "off" | "downloading" | "ready" | "error";
+  download: { file: "model" | "runtime" | "yt-dlp"; done: number; total: number | null } | null;
+  error: string | null;
+  diskBytes: number;
+  workingOn: string | null; // "Title — Artist"
+  aligned: number;          // this session
+}
+```
+
+Extension → app WebSocket message (YouTube Music only):
+
+```ts
+{ message_type: "UPCOMING_TRACKS", data: {
+    current: QueueEntry | null; position: number; upNext: QueueEntry[]; // ≤ 3
+    ad: boolean } }
+interface QueueEntry { videoId: string; title: string | null; artist: string | null;
+                       length: string | null /* "3:45" */; type: string | null /* MUSIC_VIDEO_TYPE_ATV|OMV */ }
+```

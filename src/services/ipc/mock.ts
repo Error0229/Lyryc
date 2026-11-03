@@ -13,7 +13,7 @@
  * `estimate` serves LRCLIB-style plain lyrics: the right text, guessed timing.
  */
 import type { Backend, BackendEvents } from "./backend";
-import type { LyricLine, Span } from "../../lib/types";
+import type { LyricLine, PrealignStatus, Span } from "../../lib/types";
 import { translationKey } from "../../lib/lyrics";
 import { englishSong, japaneseSong, readings, type MockSong } from "./mockData";
 
@@ -54,6 +54,30 @@ function changeSong(step: number) {
 }
 
 if (typeof window !== "undefined") setInterval(emitTime, 700);
+
+/** Word-level timing: a pretend download that finishes in a few seconds. */
+const MODEL_BYTES = 356_289_622;
+let prealign: PrealignStatus = { enabled: false, state: "off", download: null, error: null, diskBytes: 0, workingOn: null, aligned: 0 };
+
+function setPrealign(p: Partial<PrealignStatus>) {
+  prealign = { ...prealign, ...p };
+  emit("prealign", prealign);
+}
+
+function fakeDownload() {
+  let done = 0;
+  const step = () => {
+    if (!prealign.enabled) return;
+    done = Math.min(MODEL_BYTES, done + MODEL_BYTES / 20);
+    if (done < MODEL_BYTES) {
+      setPrealign({ state: "downloading", download: { file: "model", done, total: MODEL_BYTES } });
+      setTimeout(step, 200);
+    } else {
+      setPrealign({ state: "ready", download: null, diskBytes: MODEL_BYTES + 12_418_080 + 18_000_000 });
+    }
+  };
+  step();
+}
 
 /** Simulates the backend delivering better timing mid-song. */
 function pushRetimed() {
@@ -152,6 +176,18 @@ export const mockBackend: Backend = {
   startDrag: async () => {},
   openUrl: async (url) => void window.open(url, "_blank", "noopener"),
   appVersion: async () => "0.1.0-dev",
+
+  async prealignConfigure(enabled) {
+    if (enabled === prealign.enabled) return prealign;
+    setPrealign({ enabled, state: enabled ? (prealign.diskBytes ? "ready" : "downloading") : "off" });
+    if (enabled && !prealign.diskBytes) fakeDownload();
+    return prealign;
+  },
+  prealignStatus: async () => prealign,
+  async prealignRemoveFiles() {
+    setPrealign({ enabled: false, state: "off", download: null, diskBytes: 0 });
+    return prealign;
+  },
 
   subscribe(on) {
     subscribers.add(on);
