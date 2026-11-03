@@ -27,6 +27,13 @@ export interface LyricStyle {
   backgroundOpacity: number; // 0..100
 }
 
+/** Which songs get translated, by lyric language. "all" ignores `languages`. */
+export type LanguageFilterMode = "all" | "only" | "except";
+export interface LanguageFilter {
+  mode: LanguageFilterMode;
+  languages: string[]; // language codes, e.g. "ja", "zh-tw"
+}
+
 export interface TranslationPrefs {
   enabled: boolean;
   sourceLanguage: string;
@@ -40,6 +47,7 @@ export interface TranslationPrefs {
   scale: number; // relative to lyric size
   color: string;
   opacity: number; // 0..1
+  filter: LanguageFilter;
 }
 
 export interface FuriganaPrefs {
@@ -104,6 +112,7 @@ export const defaultSettings: Settings = {
     scale: 0.6,
     color: "#dbe4ff",
     opacity: 0.9,
+    filter: { mode: "all", languages: [] },
   },
   furigana: {
     enabled: false,

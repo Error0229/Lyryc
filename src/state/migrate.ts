@@ -121,6 +121,8 @@ export function fromLegacy(v2: Obj | null, oldOffsets: Obj | null): Settings {
       scale: translatedScale,
       color: color(cols.translated, d.translation.color),
       opacity: num(op.translated, d.translation.opacity, 0.1, 1),
+      // The old app had no language filter: translate every song, as it did.
+      filter: d.translation.filter,
     },
     furigana: {
       enabled: bool(hira.enabled, d.furigana.enabled),

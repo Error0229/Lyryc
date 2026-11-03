@@ -2,6 +2,7 @@
 import { useEffect, useMemo, type RefObject } from "react";
 import { backend } from "../services/ipc/backend";
 import { textSignature, translationKey } from "../lib/lyrics";
+import { detectLanguage, shouldTranslate } from "../lib/language";
 import { hasKanji, isJapaneseSong } from "../lib/japanese";
 import { useSession } from "../state/session";
 import { useSettings } from "../state/settings";
@@ -43,6 +44,12 @@ export function useTranslations() {
   useEffect(() => {
     const lines = useSession.getState().lyrics;
     if (!p.enabled || lines.length === 0) return;
+    const lang = p.sourceLanguage === "auto" ? detectLanguage(lines.map((l) => l.text)) : p.sourceLanguage;
+    if (!shouldTranslate(lang, p.targetLanguage, p.filter)) {
+      // Filtered out before any LLM call: no cost for songs the user doesn't want translated.
+      useSession.setState({ translations: {} });
+      return;
+    }
     let live = true;
     backend
       .translate(lines, p)
@@ -56,8 +63,9 @@ export function useTranslations() {
     return () => {
       live = false;
     };
-    // Prefs fields are listed individually so display-only changes don't retranslate.
-  }, [signature, p.enabled, p.sourceLanguage, p.targetLanguage, p.style, p.customPrompt, p.preserveRhyme, p.preserveMeaning, p.maintainStructure]);
+    // Prefs fields are listed individually (and the filter by value: cross-window
+    // sync rebuilds objects) so display-only changes don't retranslate.
+  }, [signature, p.enabled, p.sourceLanguage, p.targetLanguage, p.style, p.customPrompt, p.preserveRhyme, p.preserveMeaning, p.maintainStructure, p.filter.mode, p.filter.languages.join()]);
 }
 
 const pending = new Set<string>();

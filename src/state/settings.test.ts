@@ -18,4 +18,11 @@ describe("mergeSettings (loading lyryc-settings)", () => {
   it("is off for a fresh install", () => {
     expect(mergeSettings(undefined).extraSources).toBe(false);
   });
+
+  it("gives translation prefs saved before the language filter existed: translate all", () => {
+    const { filter: _, ...translation } = { ...defaultSettings.translation, targetLanguage: "zh-tw" };
+    const s = mergeSettings({ ...defaultSettings, translation });
+    expect(s.translation.filter).toEqual({ mode: "all", languages: [] });
+    expect(s.translation.targetLanguage).toBe("zh-tw");
+  });
 });
