@@ -11,10 +11,10 @@
   ],
   
   "host_permissions": [
-    "*://open.spotify.com/*",
-    "*://music.youtube.com/*",
-    "*://music.apple.com/*",
-    "*://soundcloud.com/*",
+    "https://open.spotify.com/*",
+    "https://music.youtube.com/*",
+    "https://music.apple.com/*",
+    "https://soundcloud.com/*",
     "ws://localhost:8765/*",
     "http://localhost:8765/*"
   ],
@@ -26,21 +26,21 @@
   "content_scripts": [
     {
       "matches": [
-        "*://open.spotify.com/*"
+        "https://open.spotify.com/*"
       ],
       "js": ["spotify-detector.js"],
       "run_at": "document_idle"
     },
     {
       "matches": [
-        "*://music.youtube.com/*"
+        "https://music.youtube.com/*"
       ],
       "js": ["youtube-detector.js"],
       "run_at": "document_idle"
     },
     {
       "matches": [
-        "*://music.youtube.com/*"
+        "https://music.youtube.com/*"
       ],
       "js": ["youtube-queue.js"],
       "world": "MAIN",
@@ -48,14 +48,14 @@
     },
     {
       "matches": [
-        "*://music.apple.com/*"
+        "https://music.apple.com/*"
       ],
       "js": ["apple-music-detector.js"],
       "run_at": "document_idle"
     },
     {
       "matches": [
-        "*://soundcloud.com/*"
+        "https://soundcloud.com/*"
       ],
       "js": ["soundcloud-detector.js"],
       "run_at": "document_idle"

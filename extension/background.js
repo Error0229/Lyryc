@@ -116,10 +116,10 @@ async function handlePlaybackCommand(commandData) {
     // Get all tabs with music sites
     const tabs = await chrome.tabs.query({
       url: [
-        '*://open.spotify.com/*',
-        '*://music.youtube.com/*', 
-        '*://music.apple.com/*',
-        '*://soundcloud.com/*'
+        'https://open.spotify.com/*',
+        'https://music.youtube.com/*', 
+        'https://music.apple.com/*',
+        'https://soundcloud.com/*'
       ]
     });
     
