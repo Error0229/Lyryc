@@ -18,6 +18,7 @@ mod types;
 mod websocket;
 mod websocket_commands;
 mod window_management;
+mod ytmusic;
 
 // Import types and functions from modules
 use commands::{

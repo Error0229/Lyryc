@@ -1,0 +1,849 @@
+[
+ {
+  "id": 1,
+  "kind": "bilingual",
+  "raw_title": "雪国 - Snow Country",
+  "raw_artist": "Yorushika",
+  "album": 288,
+  "play": 288,
+  "mv": false,
+  "titles": [
+   "雪国",
+   "Snow Country",
+   "Yukiguni"
+  ],
+  "artists": [
+   "ヨルシカ",
+   "Yorushika"
+  ],
+  "identity": {
+   "title_native": "雪国",
+   "artist_native": "ヨルシカ",
+   "title_romanized": "Yukiguni",
+   "artist_romanized": "Yorushika"
+  },
+  "identity_by": "gemini"
+ },
+ {
+  "id": 2,
+  "kind": "yt-video",
+  "raw_title": "【MV】私じゃなかったんだね。(Official Video)",
+  "raw_artist": "マカロニえんぴつ",
+  "album": 244,
+  "play": 244,
+  "mv": false,
+  "titles": [
+   "私じゃなかったんだね。",
+   "Watashi ja Nakattan da ne."
+  ],
+  "artists": [
+   "りりあ。",
+   "Riria.",
+   "Lilia"
+  ],
+  "identity": {
+   "title_native": "私じゃなかったんだね。",
+   "artist_native": "マカロニえんぴつ",
+   "title_romanized": "Watashi Ja Nakattan Dane.",
+   "artist_romanized": "Macaroni Empitsu"
+  },
+  "identity_by": "gemini"
+ },
+ {
+  "id": 3,
+  "kind": "unverified",
+  "raw_title": "SYNC",
+  "raw_artist": "Daoko",
+  "album": null,
+  "play": null,
+  "mv": false,
+  "titles": [],
+  "artists": [],
+  "identity": {
+   "title_native": "SYNC",
+   "artist_native": "DAOKO",
+   "title_romanized": "Sync",
+   "artist_romanized": "Daoko"
+  },
+  "identity_by": "gemini"
+ },
+ {
+  "id": 4,
+  "kind": "romanized",
+  "raw_title": "Odoriko",
+  "raw_artist": "Vaundy",
+  "album": 229,
+  "play": 229,
+  "mv": false,
+  "titles": [
+   "踊り子",
+   "Odoriko"
+  ],
+  "artists": [
+   "Vaundy"
+  ],
+  "identity": {
+   "title_native": "踊り子",
+   "artist_native": "Vaundy",
+   "title_romanized": "Odoriko",
+   "artist_romanized": "Vaundy"
+  },
+  "identity_by": "gemini"
+ },
+ {
+  "id": 5,
+  "kind": "romanized",
+  "raw_title": "Kaikai Kitan",
+  "raw_artist": "Eve",
+  "album": 221,
+  "play": 221,
+  "mv": false,
+  "titles": [
+   "廻廻奇譚",
+   "Kaikai Kitan"
+  ],
+  "artists": [
+   "Eve"
+  ],
+  "identity": {
+   "title_native": "回回奇譚",
+   "artist_native": "Eve",
+   "title_romanized": "Kaikai Kitan",
+   "artist_romanized": "Eve"
+  },
+  "identity_by": "gemini"
+ },
+ {
+  "id": 6,
+  "kind": "romanized",
+  "raw_title": "Shinunoga E-Wa",
+  "raw_artist": "Fujii Kaze",
+  "album": 191,
+  "play": 191,
+  "mv": false,
+  "titles": [
+   "死ぬのがいいわ",
+   "Shinunoga E-Wa"
+  ],
+  "artists": [
+   "藤井風",
+   "藤井 風",
+   "Fujii Kaze"
+  ],
+  "identity": {
+   "title_native": "死ぬのがいいわ",
+   "artist_native": "藤井風",
+   "title_romanized": "Shinunoga E-Wa",
+   "artist_romanized": "Fujii Kaze"
+  },
+  "identity_by": "gemini"
+ },
+ {
+  "id": 7,
+  "kind": "romanized",
+  "raw_title": "Qing Tian",
+  "raw_artist": "Jay Chou",
+  "album": 270,
+  "play": 270,
+  "mv": false,
+  "titles": [
+   "晴天",
+   "Qing Tian",
+   "Sunny Day"
+  ],
+  "artists": [
+   "周杰倫",
+   "周杰伦",
+   "Jay Chou"
+  ],
+  "identity": {
+   "title_native": "晴天",
+   "artist_native": "周杰倫",
+   "title_romanized": "Qing Tian",
+   "artist_romanized": "Jay Chou"
+  },
+  "identity_by": "gemini"
+ },
+ {
+  "id": 8,
+  "kind": "translated",
+  "raw_title": "Through the Night",
+  "raw_artist": "IU",
+  "album": 283,
+  "play": 283,
+  "mv": false,
+  "titles": [
+   "밤편지",
+   "Through the Night"
+  ],
+  "artists": [
+   "아이유",
+   "IU"
+  ],
+  "identity": {
+   "title_native": "밤편지",
+   "artist_native": "아이유",
+   "title_romanized": "Through the Night",
+   "artist_romanized": "IU"
+  },
+  "identity_by": "gemini"
+ },
+ {
+  "id": 9,
+  "kind": "translated",
+  "raw_title": "Spring Day",
+  "raw_artist": "BTS",
+  "album": 274,
+  "play": 274,
+  "mv": false,
+  "titles": [
+   "봄날",
+   "Spring Day"
+  ],
+  "artists": [
+   "방탄소년단",
+   "BTS"
+  ],
+  "identity": {
+   "title_native": "봄날",
+   "artist_native": "방탄소년단",
+   "title_romanized": "Spring Day",
+   "artist_romanized": "BTS"
+  },
+  "identity_by": "gemini"
+ },
+ {
+  "id": 10,
+  "kind": "romanized",
+  "raw_title": "Itte.",
+  "raw_artist": "YORUSHIKA",
+  "album": 262,
+  "play": 262,
+  "mv": false,
+  "titles": [
+   "言って。",
+   "Itte",
+   "Say It"
+  ],
+  "artists": [
+   "ヨルシカ",
+   "Yorushika"
+  ],
+  "identity": {
+   "title_native": "言って。",
+   "artist_native": "ヨルシカ",
+   "title_romanized": "Itte.",
+   "artist_romanized": "Yorushika"
+  },
+  "identity_by": "gemini"
+ },
+ {
+  "id": 11,
+  "kind": "yt-video",
+  "raw_title": "YOASOBI「アイドル」 Official Music Video",
+  "raw_artist": "Ayase / YOASOBI",
+  "album": 214,
+  "play": 226,
+  "mv": true,
+  "titles": [
+   "アイドル",
+   "Idol"
+  ],
+  "artists": [
+   "YOASOBI"
+  ],
+  "identity": {
+   "title_native": "アイドル",
+   "artist_native": "YOASOBI",
+   "title_romanized": "Idol",
+   "artist_romanized": "YOASOBI"
+  },
+  "identity_by": "gemini"
+ },
+ {
+  "id": 12,
+  "kind": "yt-video",
+  "raw_title": "米津玄師 MV「KICK BACK」",
+  "raw_artist": "米津玄師",
+  "album": 194,
+  "play": 194,
+  "mv": false,
+  "titles": [
+   "KICK BACK"
+  ],
+  "artists": [
+   "米津玄師",
+   "Kenshi Yonezu"
+  ],
+  "identity": {
+   "title_native": "KICK BACK",
+   "artist_native": "米津玄師",
+   "title_romanized": "KICK BACK",
+   "artist_romanized": "Kenshi Yonezu"
+  },
+  "identity_by": "gemini"
+ },
+ {
+  "id": 13,
+  "kind": "yt-video",
+  "raw_title": "周杰倫 Jay Chou【稻香 Rice Field】-Official Music Video",
+  "raw_artist": "周杰倫 Jay Chou",
+  "album": 224,
+  "play": 224,
+  "mv": true,
+  "titles": [
+   "稻香",
+   "Dao Xiang",
+   "Rice Field"
+  ],
+  "artists": [
+   "周杰倫",
+   "周杰伦",
+   "Jay Chou"
+  ],
+  "identity": {
+   "title_native": "稻香",
+   "artist_native": "周杰倫",
+   "title_romanized": "Rice Field",
+   "artist_romanized": "Jay Chou"
+  },
+  "identity_by": "gemini"
+ },
+ {
+  "id": 14,
+  "kind": "yt-video",
+  "raw_title": "[MV] IU(아이유) _ Blueming(블루밍)",
+  "raw_artist": "1theK (원더케이)",
+  "album": 217,
+  "play": 222,
+  "mv": true,
+  "titles": [
+   "Blueming",
+   "블루밍"
+  ],
+  "artists": [
+   "아이유",
+   "IU"
+  ],
+  "identity": {
+   "title_native": "Blueming",
+   "artist_native": "아이유",
+   "title_romanized": "Blueming",
+   "artist_romanized": "IU"
+  },
+  "identity_by": "gemini"
+ },
+ {
+  "id": 15,
+  "kind": "yt-video",
+  "raw_title": "Official髭男dism - Subtitle［Official Video］",
+  "raw_artist": "Official髭男dism",
+  "album": 306,
+  "play": 322,
+  "mv": true,
+  "titles": [
+   "Subtitle"
+  ],
+  "artists": [
+   "Official髭男dism",
+   "Official HIGE DANdism"
+  ],
+  "identity": {
+   "title_native": "Subtitle",
+   "artist_native": "Official髭男dism",
+   "title_romanized": "Subtitle",
+   "artist_romanized": "Official HIGE DANdism"
+  },
+  "identity_by": "gemini"
+ },
+ {
+  "id": 16,
+  "kind": "yt-video",
+  "raw_title": "ヨルシカ - 晴る (OFFICIAL VIDEO)",
+  "raw_artist": "ヨルシカ",
+  "album": 271,
+  "play": 277,
+  "mv": true,
+  "titles": [
+   "晴る",
+   "Haru"
+  ],
+  "artists": [
+   "ヨルシカ",
+   "Yorushika"
+  ],
+  "identity": {
+   "title_native": "晴る",
+   "artist_native": "ヨルシカ",
+   "title_romanized": "Haru",
+   "artist_romanized": "Yorushika"
+  },
+  "identity_by": "gemini"
+ },
+ {
+  "id": 17,
+  "kind": "romanized-artist",
+  "raw_title": "Lemon",
+  "raw_artist": "Kenshi Yonezu",
+  "album": 256,
+  "play": 256,
+  "mv": false,
+  "titles": [
+   "Lemon"
+  ],
+  "artists": [
+   "米津玄師",
+   "Kenshi Yonezu"
+  ],
+  "identity": {
+   "title_native": "Lemon",
+   "artist_native": "米津玄師",
+   "title_romanized": "Lemon",
+   "artist_romanized": "Kenshi Yonezu"
+  },
+  "identity_by": "gemini"
+ },
+ {
+  "id": 18,
+  "kind": "romanized-artist",
+  "raw_title": "Pretender",
+  "raw_artist": "Official HIGE DANdism",
+  "album": 326,
+  "play": 326,
+  "mv": false,
+  "titles": [
+   "Pretender"
+  ],
+  "artists": [
+   "Official髭男dism",
+   "Official HIGE DANdism"
+  ],
+  "identity": {
+   "title_native": "Pretender",
+   "artist_native": "Official髭男dism",
+   "title_romanized": "Pretender",
+   "artist_romanized": "Official HIGE DANdism"
+  },
+  "identity_by": "gemini"
+ },
+ {
+  "id": 19,
+  "kind": "romanized",
+  "raw_title": "Yoru ni Kakeru",
+  "raw_artist": "YOASOBI",
+  "album": 261,
+  "play": 261,
+  "mv": false,
+  "titles": [
+   "夜に駆ける",
+   "Yoru ni Kakeru",
+   "Into the Night"
+  ],
+  "artists": [
+   "YOASOBI"
+  ],
+  "identity": {
+   "title_native": "夜に駆ける",
+   "artist_native": "YOASOBI",
+   "title_romanized": "Yoru ni Kakeru",
+   "artist_romanized": "YOASOBI"
+  },
+  "identity_by": "gemini"
+ },
+ {
+  "id": 20,
+  "kind": "clean",
+  "raw_title": "夜に駆ける",
+  "raw_artist": "YOASOBI",
+  "album": 261,
+  "play": 261,
+  "mv": false,
+  "titles": [
+   "夜に駆ける",
+   "Yoru ni Kakeru",
+   "Into the Night"
+  ],
+  "artists": [
+   "YOASOBI"
+  ],
+  "identity": {
+   "title_native": "夜に駆ける",
+   "artist_native": "YOASOBI",
+   "title_romanized": "Yoru ni Kakeru",
+   "artist_romanized": "YOASOBI"
+  },
+  "identity_by": "gemini"
+ },
+ {
+  "id": 21,
+  "kind": "clean",
+  "raw_title": "Blinding Lights",
+  "raw_artist": "The Weeknd",
+  "album": 200,
+  "play": 200,
+  "mv": false,
+  "titles": [
+   "Blinding Lights"
+  ],
+  "artists": [
+   "The Weeknd"
+  ],
+  "identity": {
+   "title_native": "Blinding Lights",
+   "artist_native": "The Weeknd",
+   "title_romanized": "Blinding Lights",
+   "artist_romanized": "The Weeknd"
+  },
+  "identity_by": "gemini"
+ },
+ {
+  "id": 22,
+  "kind": "yt-video",
+  "raw_title": "Queen – Bohemian Rhapsody (Official Video Remastered)",
+  "raw_artist": "Queen Official",
+  "album": 354,
+  "play": 354,
+  "mv": false,
+  "titles": [
+   "Bohemian Rhapsody"
+  ],
+  "artists": [
+   "Queen"
+  ],
+  "identity": {
+   "title_native": "Bohemian Rhapsody",
+   "artist_native": "Queen",
+   "title_romanized": "Bohemian Rhapsody",
+   "artist_romanized": "Queen"
+  },
+  "identity_by": "gemini"
+ },
+ {
+  "id": 23,
+  "kind": "obscure",
+  "raw_title": "ずっと真夜中でいいのに。『ミラーチューン』MV",
+  "raw_artist": "ずっと真夜中でいいのに。 ZUTOMAYO",
+  "album": 254,
+  "play": 254,
+  "mv": true,
+  "titles": [
+   "ミラーチューン",
+   "Mirror Tune"
+  ],
+  "artists": [
+   "ずっと真夜中でいいのに。",
+   "ZUTOMAYO"
+  ],
+  "identity": {
+   "title_native": "ミラーチューン",
+   "artist_native": "ずっと真夜中でいいのに。",
+   "title_romanized": "Mirror Tune",
+   "artist_romanized": "ZUTOMAYO"
+  },
+  "identity_by": "gemini"
+ },
+ {
+  "id": 24,
+  "kind": "obscure",
+  "raw_title": "草東沒有派對 No Party For Cao Dong【山海 The Mountain and the Sea】Official Music Video",
+  "raw_artist": "草東沒有派對 No Party For Cao Dong",
+  "album": 252,
+  "play": 311,
+  "mv": true,
+  "titles": [
+   "山海",
+   "Shan Hai",
+   "The Mountain and the Sea"
+  ],
+  "artists": [
+   "草東沒有派對",
+   "草东没有派对",
+   "No Party For Cao Dong"
+  ],
+  "identity": {
+   "title_native": "山海",
+   "artist_native": "草東沒有派對",
+   "title_romanized": "The Mountain and the Sea",
+   "artist_romanized": "No Party For Cao Dong"
+  },
+  "identity_by": "gemini"
+ },
+ {
+  "id": 25,
+  "kind": "obscure",
+  "raw_title": "Kawaki wo Ameku",
+  "raw_artist": "Minami",
+  "album": 270,
+  "play": 270,
+  "mv": false,
+  "titles": [
+   "カワキヲアメク",
+   "Kawaki wo Ameku"
+  ],
+  "artists": [
+   "美波",
+   "Minami"
+  ],
+  "identity": {
+   "title_native": "カワキヲアメク",
+   "artist_native": "美波",
+   "title_romanized": "Kawaki wo Ameku",
+   "artist_romanized": "Minami"
+  },
+  "identity_by": "gemini"
+ },
+ {
+  "id": 26,
+  "kind": "translated",
+  "raw_title": "How can I love the heartbreak, you're the one I love",
+  "raw_artist": "AKMU",
+  "album": 290,
+  "play": 290,
+  "mv": false,
+  "titles": [
+   "어떻게 이별까지 사랑하겠어, 널 사랑하는 거지",
+   "How can I love the heartbreak, you're the one I love"
+  ],
+  "artists": [
+   "AKMU",
+   "악뮤"
+  ],
+  "identity": {
+   "title_native": "어떻게 이별까지 사랑하겠어, 널 사랑하는 거지",
+   "artist_native": "악뮤",
+   "title_romanized": "How can I love the heartbreak, you're the one I love",
+   "artist_romanized": "AKMU"
+  },
+  "identity_by": "gemini"
+ },
+ {
+  "id": 27,
+  "kind": "instrumental",
+  "raw_title": "Merry Christmas Mr. Lawrence",
+  "raw_artist": "Ryuichi Sakamoto",
+  "album": 240,
+  "play": 240,
+  "mv": false,
+  "titles": [
+   "Merry Christmas Mr. Lawrence",
+   "Merry Christmas, Mr. Lawrence",
+   "戦場のメリークリスマス"
+  ],
+  "artists": [
+   "坂本龍一",
+   "Ryuichi Sakamoto"
+  ],
+  "identity": {
+   "title_native": "Merry Christmas Mr. Lawrence",
+   "artist_native": "坂本龍一",
+   "title_romanized": "Merry Christmas Mr. Lawrence",
+   "artist_romanized": "Ryuichi Sakamoto"
+  },
+  "identity_by": "gemini"
+ },
+ {
+  "id": 28,
+  "kind": "not-a-song",
+  "raw_title": "lofi hip hop radio 📚 beats to relax/study to",
+  "raw_artist": "Lofi Girl",
+  "album": null,
+  "play": null,
+  "mv": false,
+  "titles": [],
+  "artists": [],
+  "identity": null,
+  "identity_by": "gemini"
+ },
+ {
+  "id": 29,
+  "kind": "romanized",
+  "raw_title": "Gurenge",
+  "raw_artist": "LiSA",
+  "album": 239,
+  "play": 239,
+  "mv": false,
+  "titles": [
+   "紅蓮華",
+   "Gurenge"
+  ],
+  "artists": [
+   "LiSA"
+  ],
+  "identity": {
+   "title_native": "紅蓮華",
+   "artist_native": "LiSA",
+   "title_romanized": "Gurenge",
+   "artist_romanized": "LiSA"
+  },
+  "identity_by": "hand"
+ },
+ {
+  "id": 30,
+  "kind": "romanized",
+  "raw_title": "Zankyou Sanka",
+  "raw_artist": "Aimer",
+  "album": 185,
+  "play": 185,
+  "mv": false,
+  "titles": [
+   "残響散歌",
+   "Zankyou Sanka",
+   "Zankyosanka"
+  ],
+  "artists": [
+   "Aimer"
+  ],
+  "identity": {
+   "title_native": "残響散歌",
+   "artist_native": "Aimer",
+   "title_romanized": "Zankyou Sanka",
+   "artist_romanized": "Aimer"
+  },
+  "identity_by": "hand"
+ },
+ {
+  "id": 31,
+  "kind": "romanized",
+  "raw_title": "Gao Bai Qi Qiu",
+  "raw_artist": "Jay Chou",
+  "album": 215,
+  "play": 215,
+  "mv": false,
+  "titles": [
+   "告白氣球",
+   "告白气球",
+   "Gao Bai Qi Qiu",
+   "Love Confession"
+  ],
+  "artists": [
+   "周杰倫",
+   "周杰伦",
+   "Jay Chou"
+  ],
+  "identity": {
+   "title_native": "告白氣球",
+   "artist_native": "周杰倫",
+   "title_romanized": "Gao Bai Qi Qiu",
+   "artist_romanized": "Jay Chou"
+  },
+  "identity_by": "hand"
+ },
+ {
+  "id": 33,
+  "kind": "romanized",
+  "raw_title": "Hai Kuo Tian Kong",
+  "raw_artist": "Beyond",
+  "album": 325,
+  "play": 325,
+  "mv": false,
+  "titles": [
+   "海闊天空",
+   "海阔天空",
+   "Hai Kuo Tian Kong",
+   "Boundless Oceans, Vast Skies"
+  ],
+  "artists": [
+   "Beyond"
+  ],
+  "identity": {
+   "title_native": "海闊天空",
+   "artist_native": "Beyond",
+   "title_romanized": "Hai Kuo Tian Kong",
+   "artist_romanized": "Beyond"
+  },
+  "identity_by": "hand"
+ },
+ {
+  "id": 34,
+  "kind": "romanized",
+  "raw_title": "Bam Yang Gang",
+  "raw_artist": "BIBI",
+  "album": 146,
+  "play": 146,
+  "mv": false,
+  "titles": [
+   "밤양갱",
+   "Bam Yang Gang"
+  ],
+  "artists": [
+   "비비",
+   "BIBI"
+  ],
+  "identity": {
+   "title_native": "밤양갱",
+   "artist_native": "비비",
+   "title_romanized": "Bam Yang Gang",
+   "artist_romanized": "BIBI"
+  },
+  "identity_by": "hand"
+ },
+ {
+  "id": 36,
+  "kind": "yt-video",
+  "raw_title": "【Ado】うっせぇわ",
+  "raw_artist": "Ado",
+  "album": 205,
+  "play": 203,
+  "mv": true,
+  "titles": [
+   "うっせぇわ",
+   "Usseewa"
+  ],
+  "artists": [
+   "Ado"
+  ],
+  "identity": {
+   "title_native": "うっせぇわ",
+   "artist_native": "Ado",
+   "title_romanized": "Usseewa",
+   "artist_romanized": "Ado"
+  },
+  "identity_by": "hand"
+ },
+ {
+  "id": 37,
+  "kind": "yt-video",
+  "raw_title": "LiSA『紅蓮華』-MUSiC CLiP-（テレビアニメ「鬼滅の刃」竈門炭治郎 立志編 オープニングテーマ）",
+  "raw_artist": "LiSA",
+  "album": 239,
+  "play": 236,
+  "mv": true,
+  "titles": [
+   "紅蓮華",
+   "Gurenge"
+  ],
+  "artists": [
+   "LiSA"
+  ],
+  "identity": {
+   "title_native": "紅蓮華",
+   "artist_native": "LiSA",
+   "title_romanized": "Gurenge",
+   "artist_romanized": "LiSA"
+  },
+  "identity_by": "hand"
+ },
+ {
+  "id": 38,
+  "kind": "romanized",
+  "raw_title": "Hakujitsu",
+  "raw_artist": "King Gnu",
+  "album": 275,
+  "play": 275,
+  "mv": false,
+  "titles": [
+   "白日",
+   "Hakujitsu"
+  ],
+  "artists": [
+   "King Gnu"
+  ],
+  "identity": {
+   "title_native": "白日",
+   "artist_native": "King Gnu",
+   "title_romanized": "Hakujitsu",
+   "artist_romanized": "King Gnu"
+  },
+  "identity_by": "hand"
+ }
+]

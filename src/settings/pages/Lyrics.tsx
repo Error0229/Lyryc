@@ -63,7 +63,7 @@ export function LyricsPage() {
       <Section title="Sources">
         <Row
           label="Extra lyric sources"
-          hint="Asks QQ Music, NetEase and Kugou for timing LRCLIB lacks, sending them the title and artist. Unofficial lookups: they use these services outside their terms and may stop working."
+          hint="Shows YouTube Music's own lyrics for the track playing there, and asks QQ Music, NetEase and Kugou for timing LRCLIB lacks, sending them the title and artist. Unofficial lookups: they use these services' internal APIs, not public ones, outside their terms, and may stop working."
         >
           <Switch label="Extra lyric sources" checked={extraSources} onChange={settings.setExtraSources} />
         </Row>

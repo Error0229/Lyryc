@@ -32,9 +32,14 @@ invoke<TimedLyrics>("fetch_lyrics_timed", {
   artistName: string,
   duration: number | null, // seconds; 0/absent = unknown
   extraSources: boolean,   // the user's "Extra lyric sources" setting
+  videoId?: string | null, // YouTube Music's id for the track (Track.videoId)
 });
 
-type LyricsSource = "lrclib" | "lrclib-estimate" | "qq" | "netease" | "kugou" | "aligned";
+type LyricsSource =
+  | "lrclib" | "lrclib-estimate"
+  | "qq" | "netease" | "kugou"
+  | "ytmusic" | "ytmusic-estimate"
+  | "aligned";
 interface TimedLyrics {
   lines: LyricLine[];
   source: LyricsSource;
@@ -44,7 +49,8 @@ interface TimedLyrics {
 
 - `source: "lrclib-estimate"`: LRCLIB has only plain text; times are a
   syllable-weighted guess (~8 s median error). Show the lines, but do **not**
-  drive word/line highlighting from them.
+  drive word/line highlighting from them. `ytmusic-estimate` is the same for
+  YouTube Music's plain text.
 - `source: "aligned"`: word-level timing from the opt-in pre-aligner (below).
   Lines carry `words: { time, text, duration? }[]`; a word without `duration`
   runs until the next word. Lines that failed the reject rule have no `words`
@@ -66,6 +72,24 @@ failures. A result is used only if it has ≥ 3 timed lines, the same length
 a matching title. With LRCLIB text, the lines stay LRCLIB's; only times come
 from the source. Real timing from any source is cached. Estimates are not.
 
+### YouTube Music lyrics (additive)
+
+`track-updated` (and `get_current_track`) carry `videoId` when the extension's
+`url` is a `music.youtube.com/watch?v=` page; the frontend passes it back as
+`videoId`. With `extraSources: true` and a `videoId`, YouTube Music's own lyrics
+(its "Lyrics" tab, through the internal InnerTube API) are asked for after the
+cache and before LRCLIB: it is the exact track, so no title matching.
+
+| YouTube Music has | Answer |
+|---|---|
+| timed lyrics | `ytmusic`, cached |
+| plain lyrics, LRCLIB synced for the song with ≥ 50% of lines matching | YouTube Music's lines with LRCLIB's times: `lrclib`, cached |
+| plain lyrics, no such timing | `ytmusic-estimate` (not cached); with a length, `pending: true` and the extra sources time YouTube Music's lines in the background |
+| nothing, or no answer | the routing above, unchanged |
+
+Two requests (`next`, then `browse`), 4 s timeout, no retries; skipped for the
+session after 3 consecutive failures. A changed response shape is a failure.
+
 ### Event `lyrics-timing-updated`
 
 ```ts
@@ -74,8 +98,8 @@ from the source. Real timing from any source is cached. Estimates are not.
 
 Emitted once, when a background upgrade of an estimate succeeds. `title` and
 `artist` are exactly the `trackName`/`artistName` of the request, so a listener
-ignores updates whose track is no longer playing. The lines are LRCLIB's lines
-with new times, so they can be swapped in place.
+ignores updates whose track is no longer playing. The lines are the estimate's
+lines (LRCLIB's or YouTube Music's) with new times, so they can be swapped in place.
 
 Also emitted (once) with `source: "aligned"` when the pre-aligner finishes the
 track that is playing. The lines are the request's lines, re-timed, with `words`.

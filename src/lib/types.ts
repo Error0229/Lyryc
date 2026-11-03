@@ -6,6 +6,8 @@ export interface Track {
   album?: string | null;
   duration?: number | null;
   thumbnail?: string | null;
+  /** YouTube Music's id for the track, when it plays there. */
+  videoId?: string | null;
 }
 
 /**
@@ -27,11 +29,20 @@ export interface LyricLine {
 }
 
 /**
- * Where a lyric list's timing came from. `lrclib-estimate` is plain text
- * spread over the track: good for scrolling, never for highlighting.
- * `aligned`: the opt-in pre-aligner's timing, with per-word `words`.
+/**
+ * Where a lyric list's timing came from. `*-estimate` is plain text spread
+ * over the track: good for scrolling, never for highlighting. `aligned`: the
+ * opt-in pre-aligner's timing, with per-word `words`.
  */
-export type LyricsSource = "lrclib" | "lrclib-estimate" | "qq" | "netease" | "kugou" | "aligned";
+export type LyricsSource =
+  | "lrclib"
+  | "lrclib-estimate"
+  | "qq"
+  | "netease"
+  | "kugou"
+  | "ytmusic"
+  | "ytmusic-estimate"
+  | "aligned";
 
 /** `prealign_status` / `prealign-status`: the word-level timing feature's state. */
 export interface PrealignStatus {

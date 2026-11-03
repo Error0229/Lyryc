@@ -240,7 +240,7 @@ async fn handle_connection(
                                 serde_json::from_value::<TrackUpdate>(extension_msg.data.clone())
                             {
                                 // println!("✅ Successfully parsed TrackUpdate: {:?}", track_update);
-                                crate::prealign::on_track(&track_update.title, &track_update.artist, &track_update.url);
+                                crate::prealign::on_track(&track_update.url);
                                 // Call the track callback if available
                                 if let Some(ref callback) = track_callback {
                                     callback(track_update);

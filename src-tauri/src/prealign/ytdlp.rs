@@ -17,11 +17,6 @@ pub fn command(exe: &Path) -> Command {
     cmd
 }
 
-/// YouTube ids are 11 characters of `[A-Za-z0-9_-]`; anything else is not passed on.
-pub fn valid_id(id: &str) -> bool {
-    id.len() == 11 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-}
-
 /// The downloaded file. Deleted when dropped, whatever happens in between.
 pub struct Audio {
     pub path: PathBuf,
@@ -36,7 +31,7 @@ impl Drop for Audio {
 }
 
 pub async fn fetch(exe: &Path, tmp: &Path, video_id: &str) -> Result<Audio, String> {
-    if !valid_id(video_id) {
+    if !crate::ytmusic::is_video_id(video_id) {
         return Err(format!("not a video id: {video_id:?}"));
     }
     std::fs::create_dir_all(tmp).map_err(|e| e.to_string())?;
@@ -85,15 +80,6 @@ fn cleanup(tmp: &Path, video_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn only_real_video_ids_reach_the_command_line() {
-        assert!(valid_id("xTvyyoF_LZY"));
-        assert!(valid_id("5OOa_TX9NoM"));
-        assert!(!valid_id("--exec=calc"));
-        assert!(!valid_id("short"));
-        assert!(!valid_id("abc def ghi"));
-    }
 
     #[test]
     fn audio_is_deleted_when_dropped() {

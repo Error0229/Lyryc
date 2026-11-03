@@ -2,7 +2,7 @@
 //! `/download` of a KRC file: base64 of "krc1" + XOR-scrambled zlib. KRC has
 //! word timing; LyricLine has no room for it yet, so it is dropped.
 
-use super::{str_of, Api, Candidate, Query};
+use super::{str_of, Api, Candidate, Name};
 use anyhow::{anyhow, Result};
 use base64::Engine;
 use regex::Regex;
@@ -22,11 +22,11 @@ const KRC_KEY: [u8; 16] = [
     64, 71, 97, 119, 94, 50, 116, 71, 81, 54, 49, 45, 206, 210, 110, 105,
 ];
 
-fn search_url(q: &Query) -> String {
+fn search_url(name: &Name, duration: f64) -> String {
     format!(
         "https://lyrics.kugou.com/search?ver=1&man=yes&client=pc&keyword={}&duration={}",
-        urlencoding::encode(&format!("{} - {}", q.artist, q.track)),
-        (q.duration * 1000.0).round() as u64
+        urlencoding::encode(&format!("{} - {}", name.artist, name.title)),
+        (duration * 1000.0).round() as u64
     )
 }
 
@@ -115,7 +115,10 @@ mod tests {
             (c[0].title.as_str(), c[0].artist.as_str(), c[0].duration),
             ("恋", "茅原実里", 265.0)
         );
-        assert_eq!(crate::sources::best(c, &koi()).unwrap().id, "49985390");
+        assert_eq!(
+            crate::sources::best(c, &koi(), true).unwrap().id,
+            "49985390"
+        );
     }
 
     #[test]

@@ -33,7 +33,7 @@ export interface BackendEvents {
 export interface Backend {
   initExtension(): Promise<void>;
   currentTrack(): Promise<Track | null>;
-  /** `extraSources`: the user's opt-in for QQ Music / NetEase / Kugou. */
+  /** `extraSources`: the user's opt-in for YouTube Music's lyrics and QQ Music / NetEase / Kugou. */
   fetchLyrics(track: Track, extraSources: boolean): Promise<TimedLyrics>;
   /** Empty when the lyrics are already in the target language. */
   translate(lines: LyricLine[], prefs: TranslationPrefs): Promise<Translated[]>;
@@ -96,6 +96,7 @@ const tauriBackend: Backend = {
       artistName: t.artist,
       duration: t.duration || null, // the extension sends 0 for "unknown"
       extraSources,
+      videoId: t.videoId ?? null,
     }),
 
   async translate(lines, prefs) {

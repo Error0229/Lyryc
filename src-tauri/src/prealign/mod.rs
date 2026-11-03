@@ -27,13 +27,14 @@ mod ytdlp;
 use crate::lyrics::{TimingSource, TimingUpdate, TIMING_UPDATED_EVENT};
 use crate::lyrics_cache::{cache_aligned, get_aligned, AlignedCache};
 use crate::types::LyricLine;
+use crate::ytmusic;
 use align::{AlignError, AlignedLine};
 use assets::Paths;
 use log::{debug, info, warn};
 use queue::{Job, Lyrics, Queue, Song};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex, MutexGuard, OnceLock};
 use tauri::{AppHandle, Emitter, Manager};
@@ -44,8 +45,6 @@ pub const STATUS_EVENT: &str = "prealign-status";
 const MIN_LINES: usize = 3;
 /// The downloaded audio may differ from the player's length by this much (s).
 const MAX_LENGTH_GAP: f64 = 3.0;
-/// How many (title, artist) → videoId sightings to remember.
-const KNOWN_VIDEOS: usize = 64;
 
 /// What the serving hook has for the lyrics being shown.
 #[derive(Clone, Debug, PartialEq)]
@@ -93,8 +92,6 @@ struct Waiter {
 #[derive(Default)]
 struct Shared {
     queue: Queue,
-    /// (normalized title, normalized artist, videoId), most recent last.
-    videos: VecDeque<(String, String, String)>,
     /// Requests showing estimate/line timing that an alignment would upgrade.
     waiters: HashMap<String, Waiter>,
     downloading: Option<DownloadProgress>,
@@ -150,21 +147,12 @@ pub fn init(app: &AppHandle) {
 // ---------------------------------------------------------------------------
 // Inputs: the extension and the settings.
 
-/// Every TRACK_* message: remember which videoId the player shows under these names.
-pub fn on_track(title: &str, artist: &str, url: &str) {
-    let Some(id) = video_id_from_url(url) else {
+/// Every TRACK_* message: a new video playing makes the old one's job moot.
+pub fn on_track(url: &str) {
+    let Some(id) = ytmusic::video_id_from_url(url) else {
         return;
     };
-    let key = (norm(title), norm(artist));
     let mut s = shared();
-    if s.videos.back().is_some_and(|(t, a, v)| (t, a) == (&key.0, &key.1) && *v == id) {
-        return;
-    }
-    s.videos.retain(|(t, a, _)| (t, a) != (&key.0, &key.1));
-    s.videos.push_back((key.0, key.1, id.clone()));
-    while s.videos.len() > KNOWN_VIDEOS {
-        s.videos.pop_front();
-    }
     s.queue.playing(&id);
     s.waiters.retain(|v, _| *v == id);
 }
@@ -181,7 +169,7 @@ pub fn on_upcoming(data: &serde_json::Value) {
 }
 
 fn song_from_json(v: &serde_json::Value) -> Option<Song> {
-    let video_id = v["videoId"].as_str().filter(|id| ytdlp::valid_id(id))?.to_string();
+    let video_id = v["videoId"].as_str().filter(|id| ytmusic::is_video_id(id))?.to_string();
     Some(Song {
         video_id,
         title: v["title"].as_str()?.to_string(),
@@ -193,18 +181,6 @@ fn song_from_json(v: &serde_json::Value) -> Option<Song> {
 /// "3:45" / "1:02:03" → seconds.
 fn parse_length(s: &str) -> Option<f64> {
     s.trim().split(':').try_fold(0.0, |acc, part| part.trim().parse::<u32>().ok().map(|n| acc * 60.0 + f64::from(n)))
-}
-
-/// The `v` of a music.youtube.com watch URL.
-fn video_id_from_url(url: &str) -> Option<String> {
-    let rest = url.split_once("music.youtube.com/")?.1;
-    let query = rest.split_once('?')?.1.split('#').next()?;
-    let id = query.split('&').find_map(|kv| kv.strip_prefix("v="))?;
-    ytdlp::valid_id(id).then(|| id.to_string())
-}
-
-fn norm(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
 }
 
 /// The lyric text an alignment belongs to.
@@ -222,16 +198,15 @@ pub fn text_key(lines: &[LyricLine]) -> String {
 // Serving.
 
 /// The serving hook for `fetch_lyrics_timed`: cached word timing for this
-/// track, or queue it if the player is on YouTube Music.
-pub fn serve(title: &str, artist: &str, duration: Option<f64>, lines: &[LyricLine], real_timing: bool) -> Served {
+/// YouTube Music video, or queue it. `video_id`: the player's (None elsewhere).
+pub fn serve(video_id: Option<&str>, title: &str, artist: &str, duration: Option<f64>, lines: &[LyricLine], real_timing: bool) -> Served {
+    let Some(id) = video_id.filter(|id| ytmusic::is_video_id(id)).map(str::to_string) else {
+        return Served::Off;
+    };
     if !enabled() || lines.len() < MIN_LINES {
         return Served::Off;
     }
-    let key = (norm(title), norm(artist));
     let mut s = shared();
-    let Some(id) = s.videos.iter().rev().find(|(t, a, _)| (t, a) == (&key.0, &key.1)).map(|v| v.2.clone()) else {
-        return Served::Off;
-    };
     let hash = text_key(lines);
     let lyrics = Lyrics { lines: lines.to_vec(), real_timing };
     match get_aligned(&id, &hash) {
@@ -356,7 +331,7 @@ async fn run(job: &Job, model: &mut Option<model::Model>, verified: &mut bool) -
         Some(l) => l.clone(),
         None => {
             let extra = P.extra_sources.load(Ordering::Relaxed);
-            let (lines, real_timing) = crate::lyrics::lookup_for_prealign(&song.title, &song.artist, song.duration, extra)
+            let (lines, real_timing) = crate::lyrics::lookup_for_prealign(&song.video_id, &song.title, &song.artist, song.duration, extra)
                 .await
                 .ok_or("no lyrics")?;
             Lyrics { lines, real_timing }
@@ -564,15 +539,6 @@ mod tests {
         assert_ne!(text_key(&a), text_key(&other));
         assert_ne!(text_key(&a), text_key(&joined), "line breaks do");
         assert_eq!(text_key(&a).len(), 32);
-    }
-
-    #[test]
-    fn video_ids_come_from_ytm_watch_urls_only() {
-        assert_eq!(video_id_from_url("https://music.youtube.com/watch?v=xTvyyoF_LZY&list=RDAMVM").as_deref(), Some("xTvyyoF_LZY"));
-        assert_eq!(video_id_from_url("https://music.youtube.com/watch?list=x&v=5OOa_TX9NoM").as_deref(), Some("5OOa_TX9NoM"));
-        assert_eq!(video_id_from_url("https://open.spotify.com/track/abc?v=xTvyyoF_LZY"), None);
-        assert_eq!(video_id_from_url("https://music.youtube.com/"), None);
-        assert_eq!(video_id_from_url("https://music.youtube.com/watch?v=bad"), None);
     }
 
     #[test]
