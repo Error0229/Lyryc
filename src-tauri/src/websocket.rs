@@ -6,7 +6,10 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
-use tokio_tungstenite::{accept_async, tungstenite::Message};
+use tokio_tungstenite::accept_hdr_async;
+use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request as Handshake, Response};
+use tokio_tungstenite::tungstenite::http::StatusCode;
+use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,7 +126,7 @@ impl WebSocketServer {
             }
         }
 
-        // Remove disconnected clients
+        let failed = disconnected_clients.len();
         for client_id in disconnected_clients {
             clients.remove(&client_id);
             warn!("Removed disconnected client: {}", client_id);
@@ -132,7 +135,7 @@ impl WebSocketServer {
         info!(
             "Message broadcast complete: {} successful, {} failed",
             successful_sends,
-            clients.len() - successful_sends
+            failed
         );
         Ok(())
     }
@@ -158,13 +161,33 @@ impl WebSocketServer {
     }
 }
 
+/// Browsers let any web page open a WebSocket to localhost, and say which page
+/// in `Origin`. Only the extension may drive the app. A client without an
+/// Origin is a local program, which could forge one anyway.
+fn origin_allowed(origin: Option<&str>) -> bool {
+    const EXTENSIONS: [&str; 3] = ["chrome-extension://", "moz-extension://", "safari-web-extension://"];
+    origin.is_none_or(|o| EXTENSIONS.iter().any(|scheme| o.starts_with(scheme)))
+}
+
+#[allow(clippy::result_large_err)] // the handshake callback's signature
+fn extension_only(req: &Handshake, resp: Response) -> Result<Response, ErrorResponse> {
+    let origin = req.headers().get("origin").map(|o| o.to_str().unwrap_or("?"));
+    if origin_allowed(origin) {
+        return Ok(resp);
+    }
+    warn!("Refused a WebSocket from {}", origin.unwrap_or_default());
+    let mut refused = ErrorResponse::new(Some("Only the Lyryc extension may connect".into()));
+    *refused.status_mut() = StatusCode::FORBIDDEN;
+    Err(refused)
+}
+
 async fn handle_connection(
     raw_stream: TcpStream,
     addr: SocketAddr,
     clients: ClientConnections,
     track_callback: Option<Arc<dyn Fn(TrackUpdate) + Send + Sync>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let ws_stream = match accept_async(raw_stream).await {
+    let ws_stream = match accept_hdr_async(raw_stream, extension_only).await {
         Ok(stream) => stream,
         Err(e) => {
             // Dev tools and port scanners probe local ports with plain HTTP and TLS.
@@ -308,4 +331,19 @@ async fn handle_connection(
 // Helper function to create a default WebSocket server instance
 pub fn create_websocket_server() -> WebSocketServer {
     WebSocketServer::new(8765) // Default port
+}
+
+#[cfg(test)]
+mod origin_tests {
+    use super::origin_allowed;
+
+    #[test]
+    fn only_the_extension_or_a_local_program_may_connect() {
+        assert!(origin_allowed(Some("chrome-extension://abcdefghijklmnop")));
+        assert!(origin_allowed(Some("moz-extension://0f1e2d3c")));
+        assert!(origin_allowed(None));
+        assert!(!origin_allowed(Some("https://example.com")));
+        assert!(!origin_allowed(Some("http://localhost:3000")));
+        assert!(!origin_allowed(Some("null")));
+    }
 }

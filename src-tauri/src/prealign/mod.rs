@@ -169,8 +169,12 @@ pub fn on_upcoming(data: &serde_json::Value) {
 }
 
 /// The songs in an `UPCOMING_TRACKS` message, next first.
+/// The queue sends at most this many songs; more is not the extension talking.
+const UP_NEXT_MAX: usize = 3;
+
 pub fn upcoming(data: &serde_json::Value) -> Vec<Song> {
-    data["upNext"].as_array().map(|a| a.iter().filter_map(song_from_json).collect()).unwrap_or_default()
+    let entries = data["upNext"].as_array().map(Vec::as_slice).unwrap_or_default();
+    entries.iter().take(UP_NEXT_MAX).filter_map(song_from_json).collect()
 }
 
 fn song_from_json(v: &serde_json::Value) -> Option<Song> {
@@ -536,6 +540,13 @@ pub async fn prealign_remove_files() -> Result<Status, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_queue_longer_than_the_extension_sends_is_cut_to_three() {
+        let entry = |n: usize| serde_json::json!({ "videoId": format!("abcdefghij{n}"), "title": "Song", "artist": "Band" });
+        let data = serde_json::json!({ "upNext": (0..9).map(entry).collect::<Vec<_>>() });
+        assert_eq!(super::upcoming(&data).len(), 3);
+    }
+
     use super::*;
 
     fn line(text: &str) -> LyricLine {
