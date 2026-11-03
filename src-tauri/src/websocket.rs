@@ -240,6 +240,7 @@ async fn handle_connection(
                                 serde_json::from_value::<TrackUpdate>(extension_msg.data.clone())
                             {
                                 // println!("✅ Successfully parsed TrackUpdate: {:?}", track_update);
+                                crate::prealign::on_track(&track_update.title, &track_update.artist, &track_update.url);
                                 // Call the track callback if available
                                 if let Some(ref callback) = track_callback {
                                     callback(track_update);
@@ -248,6 +249,7 @@ async fn handle_connection(
                                 error!("Failed to parse TrackUpdate from: {}", extension_msg.data);
                             }
                         }
+                        "UPCOMING_TRACKS" => crate::prealign::on_upcoming(&extension_msg.data),
                         "ping" => {
                             let pong_msg = ExtensionMessage {
                                 message_type: "pong".to_string(),

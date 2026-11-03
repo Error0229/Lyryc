@@ -14,6 +14,7 @@
 
 use crate::cleaning::{clean_title, normalize_name, Names};
 use crate::llm;
+use crate::prealign::{self, Served};
 use crate::lyrics_cache::{cache_lyrics, cache_no_lyrics, get_cached_lyrics, CacheResult};
 use crate::sources::{self, Found, Provider};
 use crate::timing;
@@ -385,6 +386,8 @@ pub enum TimingSource {
     Qq,
     Netease,
     Kugou,
+    /// Word-level timing from the opt-in pre-aligner (YouTube Music audio).
+    Aligned,
 }
 
 impl TimingSource {
@@ -396,6 +399,7 @@ impl TimingSource {
             TimingSource::Qq => "qq",
             TimingSource::Netease => "netease",
             TimingSource::Kugou => "kugou",
+            TimingSource::Aligned => "aligned",
         }
     }
 
@@ -474,6 +478,10 @@ trait Effects: Send + Sync {
     fn sources(&self, q: &sources::Query, plain: Option<&[String]>) -> impl Future<Output = Option<Found>> + Send;
     fn save(&self, artist: &str, track: &str, lines: &[LyricLine], source: TimingSource);
     fn save_none(&self, artist: &str, track: &str);
+    /// The pre-aligner's word timing for these lines (`prealign::serve`).
+    fn aligned(&self, _req: &Request, _lines: &[LyricLine], _source: TimingSource) -> Served {
+        Served::Off
+    }
 }
 
 struct Live;
@@ -515,6 +523,9 @@ impl Effects for Live {
     fn save_none(&self, artist: &str, track: &str) {
         cache_no_lyrics(artist, track);
     }
+    fn aligned(&self, req: &Request, lines: &[LyricLine], source: TimingSource) -> Served {
+        prealign::serve(&req.title, &req.artist, req.duration, lines, source != TimingSource::LrclibEstimate)
+    }
 }
 
 #[tauri::command]
@@ -541,7 +552,10 @@ pub async fn fetch_lyrics_timed(
     extra_sources: bool,
 ) -> Result<TimedLyrics, String> {
     let req = Request::new(track_name, artist_name, duration);
-    let (timed, upgrade) = fetch_timed(&Live, &req, extra_sources).await?;
+    let (mut timed, mut upgrade) = fetch_timed(&Live, &req, extra_sources).await?;
+    if with_aligned(&Live, &req, &mut timed) {
+        upgrade = None; // word timing beats anything a source could add
+    }
     if let Some(job) = upgrade {
         tauri::async_runtime::spawn(async move {
             let Some(update) = run_upgrade(&Live, &req, job).await else {
@@ -553,6 +567,43 @@ pub async fn fetch_lyrics_timed(
         });
     }
     Ok(timed)
+}
+
+/// The serving hook: swap in pre-aligned timing when there is some, or mark
+/// the answer pending while it is being made. True when swapped.
+fn with_aligned<E: Effects>(fx: &E, req: &Request, timed: &mut TimedLyrics) -> bool {
+    match fx.aligned(req, &timed.lines, timed.source) {
+        Served::Hit(lines) => {
+            *timed = TimedLyrics { lines, source: TimingSource::Aligned, pending: false };
+            true
+        }
+        Served::Pending => {
+            timed.pending = true;
+            false
+        }
+        Served::Off => false,
+    }
+}
+
+/// A song that is about to play, looked up the normal way (cache, LRCLIB with
+/// its budget and etiquette, the sources when enabled) for the pre-aligner.
+/// An estimate is upgraded inline when a source has real timing. The bool:
+/// the lines carry real timing.
+pub async fn lookup_for_prealign(
+    title: &str,
+    artist: &str,
+    duration: Option<f64>,
+    extra_sources: bool,
+) -> Option<(Vec<LyricLine>, bool)> {
+    let req = Request::new(title.to_string(), artist.to_string(), duration);
+    let (timed, upgrade) = fetch_timed(&Live, &req, extra_sources).await.ok()?;
+    if let Some(job) = upgrade {
+        if let Some(update) = run_upgrade(&Live, &req, job).await {
+            return Some((update.lines, true));
+        }
+    }
+    let real = timed.source != TimingSource::LrclibEstimate;
+    Some((timed.lines, real))
 }
 
 async fn fetch_timed<E: Effects>(
@@ -777,6 +828,9 @@ mod tests {
         calls: Mutex<Vec<Option<usize>>>,
         saved: Mutex<Vec<TimingSource>>,
         saved_none: Mutex<u32>,
+        /// What the pre-aligner answers, and the source it was asked with.
+        prealigned: Option<Served>,
+        aligned_asked: Mutex<Vec<(TimingSource, usize)>>,
     }
 
     impl Fake {
@@ -831,6 +885,10 @@ mod tests {
         }
         fn save_none(&self, _artist: &str, _track: &str) {
             *self.saved_none.lock().unwrap() += 1;
+        }
+        fn aligned(&self, _req: &Request, lines: &[LyricLine], source: TimingSource) -> Served {
+            self.aligned_asked.lock().unwrap().push((source, lines.len()));
+            self.prealigned.clone().unwrap_or(Served::Off)
         }
     }
 
@@ -1112,6 +1170,59 @@ mod tests {
 ", statuses.len(), started.elapsed().as_secs_f64());
             assert!(!statuses.iter().any(|s| s.contains("429")), "rate-limited; stopping");
         }
+    }
+
+    fn aligned_lines() -> Vec<LyricLine> {
+        let mut lines = parse_lrc_format(SYNCED);
+        lines[0].words = Some(vec![crate::types::LyricWord { time: 10.1, text: "one".into(), duration: Some(0.4) }]);
+        lines
+    }
+
+    #[tokio::test]
+    async fn cached_alignment_replaces_the_timing_and_is_not_saved_as_lyrics() {
+        let fx = Fake { prealigned: Some(Served::Hit(aligned_lines())), ..Fake::default() }
+            .rule("/get?", json_reply(record("Koi", "Minori", 265.0, true)));
+        let req = req();
+        let (mut timed, _) = fetch_timed(&fx, &req, false).await.unwrap();
+        assert!(with_aligned(&fx, &req, &mut timed));
+        assert_eq!((timed.source, timed.pending), (TimingSource::Aligned, false));
+        assert_eq!(timed.lines[0].words.as_ref().unwrap()[0].time, 10.1);
+        assert_eq!(*fx.aligned_asked.lock().unwrap(), vec![(TimingSource::Lrclib, 3)], "asked with LRCLIB's lines");
+        assert_eq!(fx.saved(), vec![TimingSource::Lrclib], "the lyrics cache keeps LRCLIB's timing");
+
+        let json = serde_json::to_value(&timed).unwrap();
+        assert_eq!(json["source"], "aligned");
+        assert_eq!(json["lines"][0]["words"][0]["text"], "one");
+        assert!(json["lines"][1].get("words").is_none(), "no words key without words");
+    }
+
+    #[tokio::test]
+    async fn an_alignment_in_progress_marks_the_answer_pending() {
+        let fx = Fake { prealigned: Some(Served::Pending), ..Fake::default() }
+            .rule("/get?", json_reply(record("Koi", "Minori", 265.0, true)));
+        let (mut timed, _) = fetch_timed(&fx, &req(), false).await.unwrap();
+        assert!(!with_aligned(&fx, &req(), &mut timed));
+        assert_eq!((timed.source, timed.pending), (TimingSource::Lrclib, true));
+    }
+
+    #[tokio::test]
+    async fn without_the_aligner_nothing_changes() {
+        let fx = Fake::default().rule("search?track_name=", json_reply(json!([record("Koi", "Minori", 265.0, false)])));
+        let (mut timed, _) = fetch_timed(&fx, &req(), false).await.unwrap();
+        let before = serde_json::to_value(&timed).unwrap();
+        assert!(!with_aligned(&fx, &req(), &mut timed));
+        assert_eq!(serde_json::to_value(&timed).unwrap(), before);
+        assert_eq!(fx.aligned_asked.lock().unwrap()[0].0, TimingSource::LrclibEstimate, "estimates are flagged as such");
+    }
+
+    #[test]
+    fn fetch_lyrics_payload_is_unchanged() {
+        let lines = parse_lrc_format(SYNCED);
+        let json = serde_json::to_value(&lines).unwrap();
+        assert_eq!(json[0], json!({"time": 10.0, "text": "one", "duration": 10.0}));
+        // Cached rows from before `words` existed still load.
+        let old: Vec<LyricLine> = serde_json::from_str(r#"[{"time":1.0,"text":"a","duration":null}]"#).unwrap();
+        assert_eq!(old[0].words, None);
     }
 
     #[test]
