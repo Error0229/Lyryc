@@ -6,7 +6,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
-use tokio_tungstenite::accept_hdr_async;
+use tokio_tungstenite::accept_hdr_async_with_config;
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request as Handshake, Response};
 use tokio_tungstenite::tungstenite::http::StatusCode;
 use tokio_tungstenite::tungstenite::Message;
@@ -187,7 +188,9 @@ async fn handle_connection(
     clients: ClientConnections,
     track_callback: Option<Arc<dyn Fn(TrackUpdate) + Send + Sync>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let ws_stream = match accept_hdr_async(raw_stream, extension_only).await {
+    // The extension's messages are a few KB; tungstenite would take 64 MiB.
+    let limits = WebSocketConfig { max_message_size: Some(1 << 20), max_frame_size: Some(1 << 20), ..Default::default() };
+    let ws_stream = match accept_hdr_async_with_config(raw_stream, extension_only, Some(limits)).await {
         Ok(stream) => stream,
         Err(e) => {
             // Dev tools and port scanners probe local ports with plain HTTP and TLS.

@@ -124,8 +124,13 @@ impl LegacyKeys {
     }
 }
 
-/// Development fallback: keys from `GITHUB_TOKEN` / `GEMINI_API_KEY`.
+/// Development fallback: keys from `GITHUB_TOKEN` / `GEMINI_API_KEY`, in dev
+/// builds only. A user's `GITHUB_TOKEN` is often a broad credential, and a
+/// release must never spend it without being asked.
 pub fn env_keys() -> Vec<AdhocKey> {
+    if !cfg!(debug_assertions) {
+        return Vec::new();
+    }
     LegacyKeys {
         github_api_key: std::env::var("GITHUB_TOKEN").ok(),
         gemini_api_key: std::env::var("GEMINI_API_KEY").ok(),
