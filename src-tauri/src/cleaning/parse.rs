@@ -6,26 +6,31 @@ use serde_json::Value;
 use super::prompt::clean_markdown_formatting;
 use super::types::{ArtistTrackCleaningResult, CleaningResult};
 
-/// First `cleaned_title` from one-JSON-object-per-line output
+/// First `cleaned_title` from the reply: a single (possibly pretty-printed) JSON
+/// object, or one object per line.
 pub fn parse_track_cleaning_response(response_text: &str) -> Result<String, String> {
     let cleaned_response = clean_markdown_formatting(response_text);
+    let text = cleaned_response.trim();
 
-    for line in cleaned_response.trim().lines() {
-        let trimmed = line.trim();
-        if !(trimmed.starts_with('{') && trimmed.ends_with('}')) {
-            continue;
-        }
-        let Ok(parsed) = serde_json::from_str::<Value>(trimmed) else {
-            continue;
-        };
-        if let Some(title) = parsed["cleaned_title"].as_str().map(str::trim) {
-            if !title.is_empty() {
-                return Ok(title.to_string());
-            }
-        }
-    }
+    // A pretty-printed object spans lines; if the outermost {...} isn't one
+    // object (one-per-line output), it fails to parse and the lines get a turn.
+    let whole = match (text.find('{'), text.rfind('}')) {
+        (Some(start), Some(end)) if start < end => Some(&text[start..=end]),
+        _ => None,
+    };
+    let title = whole
+        .into_iter()
+        .chain(text.lines().map(str::trim))
+        .filter_map(|candidate| serde_json::from_str::<Value>(candidate).ok())
+        .find_map(|parsed| {
+            let title = parsed["cleaned_title"].as_str()?.trim();
+            (!title.is_empty()).then(|| title.to_string())
+        });
 
-    Err("Could not parse valid cleaned title from LLM response".to_string())
+    title.ok_or_else(|| {
+        warn!("Unparseable cleaning reply: {}", text.chars().take(300).collect::<String>());
+        "Could not parse valid cleaned title from LLM response".to_string()
+    })
 }
 
 fn strings(v: &Value) -> Vec<String> {
@@ -96,6 +101,15 @@ mod tests {
         assert_eq!(parse_track_cleaning_response(reply).unwrap(), "火星人");
         assert!(parse_track_cleaning_response("no json here").is_err());
         assert!(parse_track_cleaning_response("{\"cleaned_title\": \"\"}").is_err());
+    }
+
+    #[test]
+    fn parses_pretty_printed_and_per_line_track_replies() {
+        let pretty = "{\n  \"cleaned_title\": \"雪国 - Snow Country\",\n  \"confidence\": 0.9\n}";
+        assert_eq!(parse_track_cleaning_response(pretty).unwrap(), "雪国 - Snow Country");
+
+        let per_line = "{\"cleaned_title\": \"A\"}\n{\"cleaned_title\": \"B\"}";
+        assert_eq!(parse_track_cleaning_response(per_line).unwrap(), "A");
     }
 
     #[test]
