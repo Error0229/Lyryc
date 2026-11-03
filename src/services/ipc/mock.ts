@@ -2,13 +2,18 @@
  * Browser-mode backend: a fake player driven by URL params so the UI can be
  * built and screenshotted without Tauri.
  *
- *   ?scenario=idle|playing|translation|furigana   (default: playing)
+ *   ?scenario=idle|playing|translation|furigana|estimate   (default: playing)
  *   &t=12.5     start at 12.5 s
  *   &paused     freeze the clock (deterministic screenshots)
  *   &retime     5 s in, push re-timed lyrics for the same track
+ *   &upgrade=4  with `estimate`: push real timing 4 s after the lyrics load,
+ *               as the backend does when "Extra lyric sources" finds some
+ *               (also on, after 4 s, when that setting is on)
+ *
+ * `estimate` serves LRCLIB-style plain lyrics: the right text, guessed timing.
  */
 import type { Backend, BackendEvents } from "./backend";
-import type { Span } from "../../lib/types";
+import type { LyricLine, Span } from "../../lib/types";
 import { translationKey } from "../../lib/lyrics";
 import { englishSong, japaneseSong, readings, type MockSong } from "./mockData";
 
@@ -57,9 +62,19 @@ function pushRetimed() {
     time: l.time + 0.35,
     words: l.words?.map((w) => ({ ...w, time: w.time + 0.35, duration: (w.duration ?? 0) * 0.8 })),
   }));
-  emit("lyrics", { track: song().track, lines });
+  emit("lyrics", { track: song().track, lines, source: "lrclib" });
 }
 if (typeof window !== "undefined" && params.has("retime")) setTimeout(pushRetimed, 5000);
+
+/** Plain lyrics spread evenly between 8% and 92% of the track, like the backend's estimate. */
+function estimated(s: MockSong): LyricLine[] {
+  const total = s.track.duration ?? 0;
+  const start = total * 0.08;
+  const step = (total * 0.84) / s.lines.length;
+  return s.lines.map((l, i) => ({ time: start + i * step, duration: step, text: l.text }));
+}
+
+const upgradeAfter = Number(params.get("upgrade")) || 4;
 
 /** Greedy longest-match furigana over the fixture dictionary. */
 function furigana(text: string): Span[] {
@@ -85,11 +100,18 @@ export const mockBackend: Backend = {
   initExtension: async () => {},
   currentTrack: async () => (mockScenario === "idle" ? null : song().track),
 
-  async fetchLyrics(track) {
+  async fetchLyrics(track, extraSources) {
     await wait(350);
     const found = songs.find((s) => s.track.title === track.title);
     if (!found) throw new Error("No lyrics found");
-    return found.lines;
+    if (mockScenario !== "estimate") return { lines: found.lines, source: "lrclib", pending: false };
+
+    const pending = extraSources || params.has("upgrade");
+    if (pending) {
+      const upgrade = { track: { title: track.title, artist: track.artist }, lines: found.lines, source: "qq" as const };
+      setTimeout(() => emit("lyrics", upgrade), upgradeAfter * 1000);
+    }
+    return { lines: estimated(found), source: "lrclib-estimate", pending };
   },
 
   async translate(lines, prefs) {

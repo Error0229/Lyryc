@@ -6,7 +6,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { LyricLine, PlaybackCommand, Span, TimeSample, Track } from "../../lib/types";
+import type { LyricLine, LyricsSource, PlaybackCommand, Span, TimedLyrics, TimeSample, Track } from "../../lib/types";
 import type { TranslationPrefs } from "../../state/schema";
 import { mockBackend } from "./mock";
 
@@ -21,16 +21,18 @@ export interface BackendEvents {
   playing: (p: boolean) => void;
   clickThrough: (on: boolean) => void;
   /**
-   * Better lyrics for a track that is already showing. The Rust side has no
-   * such event yet (see the frontend report); only the mock emits it.
+   * Better timing for a track that is already showing (`lyrics-timing-updated`).
+   * `track` is the title/artist the request was made with, so a late upgrade
+   * for an earlier song can be told apart.
    */
-  lyrics: (p: { track: Track; lines: LyricLine[] }) => void;
+  lyrics: (p: { track: Pick<Track, "title" | "artist">; lines: LyricLine[]; source: LyricsSource }) => void;
 }
 
 export interface Backend {
   initExtension(): Promise<void>;
   currentTrack(): Promise<Track | null>;
-  fetchLyrics(track: Track): Promise<LyricLine[]>;
+  /** `extraSources`: the user's opt-in for QQ Music / NetEase / Kugou. */
+  fetchLyrics(track: Track, extraSources: boolean): Promise<TimedLyrics>;
   /** Empty when the lyrics are already in the target language. */
   translate(lines: LyricLine[], prefs: TranslationPrefs): Promise<Translated[]>;
   furigana(text: string): Promise<Span[]>;
@@ -43,6 +45,14 @@ export interface Backend {
   openUrl(url: string): Promise<void>;
   appVersion(): Promise<string>;
   subscribe(on: Partial<BackendEvents>): () => void;
+}
+
+/** Wire shape of the `lyrics-timing-updated` payload. */
+interface TimingUpdate {
+  title: string;
+  artist: string;
+  lines: LyricLine[];
+  source: LyricsSource;
 }
 
 interface TranslationResult {
@@ -69,11 +79,12 @@ function translationConfig(p: TranslationPrefs) {
 const tauriBackend: Backend = {
   initExtension: () => invoke("init_extension_connection"),
   currentTrack: () => invoke<Track | null>("get_current_track"),
-  fetchLyrics: (t) =>
-    invoke<LyricLine[]>("fetch_lyrics", {
+  fetchLyrics: (t, extraSources) =>
+    invoke<TimedLyrics>("fetch_lyrics_timed", {
       trackName: t.title,
       artistName: t.artist,
       duration: t.duration || null, // the extension sends 0 for "unknown"
+      extraSources,
     }),
 
   async translate(lines, prefs) {
@@ -114,6 +125,10 @@ const tauriBackend: Backend = {
       on.playing && listen<boolean>("playback-state", (e) => on.playing!(e.payload)),
       on.clickThrough && listen("click-through-enabled", () => on.clickThrough!(true)),
       on.clickThrough && listen("click-through-disabled", () => on.clickThrough!(false)),
+      on.lyrics &&
+        listen<TimingUpdate>("lyrics-timing-updated", ({ payload: p }) =>
+          on.lyrics!({ track: { title: p.title, artist: p.artist }, lines: p.lines, source: p.source }),
+        ),
     ].filter((p): p is Promise<() => void> => !!p);
     return () => pending.forEach((p) => void p.then((off) => off()));
   },

@@ -43,6 +43,7 @@ function TrackOffsets({ offsets }: { offsets: Record<string, number> }) {
 
 export function LyricsPage() {
   const wordHighlight = useSettings((s) => s.wordHighlight);
+  const extraSources = useSettings((s) => s.extraSources);
   const { globalOffset, trackOffsets } = useSettings((s) => s.sync);
   const track = useCurrentTrack();
   const [confirm, setConfirm] = useState(false);
@@ -55,6 +56,15 @@ export function LyricsPage() {
       <Section title="Display">
         <Row label="Word-by-word highlight" hint="Sweeps each word when the lyrics have word timing. Off shows the line in one colour.">
           <Switch label="Word-by-word highlight" checked={wordHighlight} onChange={settings.setWordHighlight} />
+        </Row>
+      </Section>
+
+      <Section title="Sources">
+        <Row
+          label="Extra lyric sources"
+          hint="Asks QQ Music, NetEase and Kugou for timing LRCLIB lacks, sending them the title and artist. Unofficial lookups: they use these services outside their terms and may stop working."
+        >
+          <Switch label="Extra lyric sources" checked={extraSources} onChange={settings.setExtraSources} />
         </Row>
       </Section>
 

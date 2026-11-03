@@ -86,6 +86,8 @@ export function fromLegacy(v2: Obj | null, oldOffsets: Obj | null): Settings {
   return {
     theme: THEMES[String(s.themeId)] ?? d.theme,
     wordHighlight: s.viewMode !== "plain",
+    // The old app had no such option; it stays opt-in.
+    extraSources: false,
     lyric: {
       fontFamily: str(style.fontFamily, d.lyric.fontFamily),
       fontSize: num(style.fontSize, d.lyric.fontSize, 0.5, 6),

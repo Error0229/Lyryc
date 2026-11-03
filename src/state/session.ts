@@ -4,13 +4,15 @@
  * updates never re-render React.
  */
 import { create } from "zustand";
-import type { LyricLine, Span, Track } from "../lib/types";
+import type { LyricLine, LyricsSource, Span, Track } from "../lib/types";
 
 export type LyricsStatus = "idle" | "loading" | "ready" | "missing";
 
 export interface Session {
   track: Track | null;
   lyrics: LyricLine[];
+  /** Where the current lyrics' timing came from; null while none are shown. */
+  source: LyricsSource | null;
   status: LyricsStatus;
   /** Translated text keyed by translationKey(original). */
   translations: Record<string, string>;
@@ -25,6 +27,7 @@ export interface Session {
 export const useSession = create<Session>()(() => ({
   track: null,
   lyrics: [],
+  source: null,
   status: "idle",
   translations: {},
   furigana: {},

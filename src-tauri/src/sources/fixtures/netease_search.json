@@ -1,0 +1,211 @@
+{
+ "result": {
+  "songs": [
+   {
+    "album": {
+     "publishTime": 1459872000000,
+     "size": 16,
+     "artist": {
+      "img1v1Url": "https://p2.music.126.net/6y-UleORITEDbvrOLV0Q8A==/5639395138885805.jpg",
+      "musicSize": 0,
+      "albumSize": 0,
+      "img1v1": 0,
+      "name": "",
+      "alias": [],
+      "id": 0,
+      "picId": 0
+     },
+     "copyrightId": 2712527,
+     "name": "Innocent Age",
+     "id": 34609168,
+     "picId": 109951168958526079,
+     "mark": 0,
+     "status": 1
+    },
+    "fee": 1,
+    "duration": 265773,
+    "rtype": 0,
+    "ftype": 0,
+    "artists": [
+     {
+      "img1v1Url": "https://p2.music.126.net/6y-UleORITEDbvrOLV0Q8A==/5639395138885805.jpg",
+      "musicSize": 0,
+      "albumSize": 0,
+      "img1v1": 0,
+      "name": "茅原実里",
+      "alias": [],
+      "id": 17596,
+      "picId": 0
+     }
+    ],
+    "copyrightId": 2712527,
+    "mvid": 0,
+    "name": "恋",
+    "alias": [],
+    "id": 409430736,
+    "mark": 270336,
+    "status": -1
+   },
+   {
+    "album": {
+     "publishTime": 1580832000000,
+     "size": 15,
+     "artist": {
+      "img1v1Url": "https://p2.music.126.net/6y-UleORITEDbvrOLV0Q8A==/5639395138885805.jpg",
+      "musicSize": 0,
+      "albumSize": 0,
+      "img1v1": 0,
+      "name": "",
+      "alias": [],
+      "id": 0,
+      "picId": 0
+     },
+     "copyrightId": 2712527,
+     "name": "SANCTUARYⅡ ～Minori Chihara Best Album～ Artist Edition",
+     "id": 174327036,
+     "picId": 109951168958543445,
+     "mark": 0,
+     "status": -1
+    },
+    "fee": 1,
+    "duration": 268160,
+    "rtype": 0,
+    "ftype": 0,
+    "artists": [
+     {
+      "img1v1Url": "https://p2.music.126.net/6y-UleORITEDbvrOLV0Q8A==/5639395138885805.jpg",
+      "musicSize": 0,
+      "albumSize": 0,
+      "img1v1": 0,
+      "name": "茅原実里",
+      "alias": [],
+      "id": 17596,
+      "picId": 0
+     }
+    ],
+    "copyrightId": 2712527,
+    "mvid": 0,
+    "name": "恋",
+    "alias": [],
+    "id": 2080448368,
+    "mark": 270336,
+    "status": 0
+   },
+   {
+    "album": {
+     "publishTime": 1229443200000,
+     "size": 4,
+     "artist": {
+      "img1v1Url": "https://p2.music.126.net/6y-UleORITEDbvrOLV0Q8A==/5639395138885805.jpg",
+      "musicSize": 0,
+      "albumSize": 0,
+      "img1v1": 0,
+      "name": "",
+      "alias": [],
+      "id": 0,
+      "picId": 0
+     },
+     "copyrightId": 756010,
+     "transNames": [
+      "TV动画《南家三姐妹》角色歌集 春夏秋登场!!"
+     ],
+     "name": "春夏秋登場!!",
+     "id": 3190765,
+     "picId": 109951168228885620,
+     "alia": [
+      "南家三姐妹 角色歌集"
+     ],
+     "mark": 0,
+     "status": 1
+    },
+    "fee": 1,
+    "duration": 239804,
+    "rtype": 0,
+    "ftype": 0,
+    "artists": [
+     {
+      "img1v1Url": "https://p2.music.126.net/6y-UleORITEDbvrOLV0Q8A==/5639395138885805.jpg",
+      "musicSize": 0,
+      "albumSize": 0,
+      "img1v1": 0,
+      "name": "茅原実里",
+      "alias": [],
+      "id": 17596,
+      "picId": 0
+     }
+    ],
+    "copyrightId": 756010,
+    "transNames": [
+     "月夜恋秋"
+    ],
+    "mvid": 0,
+    "name": "月夜に愛秋",
+    "alias": [
+     "Tsukiyo ni Aishu"
+    ],
+    "id": 33367274,
+    "mark": 270336,
+    "status": -1
+   },
+   {
+    "album": {
+     "publishTime": 1410278400000,
+     "size": 40,
+     "artist": {
+      "img1v1Url": "https://p2.music.126.net/6y-UleORITEDbvrOLV0Q8A==/5639395138885805.jpg",
+      "musicSize": 0,
+      "albumSize": 0,
+      "img1v1": 0,
+      "name": "",
+      "alias": [],
+      "id": 0,
+      "picId": 0
+     },
+     "copyrightId": 2712527,
+     "name": "SANCTUARY ～Minori Chihara Best Album～",
+     "id": 3010004,
+     "picId": 109951168958559540,
+     "mark": 0,
+     "status": 1
+    },
+    "fee": 1,
+    "duration": 286066,
+    "rtype": 0,
+    "ftype": 0,
+    "artists": [
+     {
+      "img1v1Url": "https://p2.music.126.net/6y-UleORITEDbvrOLV0Q8A==/5639395138885805.jpg",
+      "musicSize": 0,
+      "albumSize": 0,
+      "img1v1": 0,
+      "name": "茅原実里",
+      "alias": [],
+      "id": 17596,
+      "picId": 0
+     }
+    ],
+    "copyrightId": 2712527,
+    "transNames": [
+     "Secret Season ～樱色的恋人～"
+    ],
+    "mvid": 10800135,
+    "name": "Secret Season ～桜色の恋人～",
+    "alias": [
+     "ゲーム「いますぐお兄ちゃんに妹だっていいたい!」OPテーマ"
+    ],
+    "id": 29343082,
+    "mark": 9007216434880512,
+    "status": -1
+   }
+  ],
+  "hasMore": true,
+  "songCount": 304
+ },
+ "code": 200,
+ "trp": {
+  "rules": [
+   "search_tab_song::29343071::searchAlg$isGlobalQuality$1",
+   "search_tab_song::3325234186::searchAlg$isGlobalQuality$1"
+  ]
+ }
+}

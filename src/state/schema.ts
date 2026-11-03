@@ -58,6 +58,8 @@ export interface SyncPrefs {
 export interface Settings {
   theme: UiTheme;
   wordHighlight: boolean;
+  /** Ask QQ Music / NetEase / Kugou for timing LRCLIB lacks. Opt-in: unofficial endpoints. */
+  extraSources: boolean;
   lyric: LyricStyle;
   translation: TranslationPrefs;
   furigana: FuriganaPrefs;
@@ -87,6 +89,7 @@ export const defaultLyric: LyricStyle = {
 export const defaultSettings: Settings = {
   theme: "system",
   wordHighlight: true,
+  extraSources: false,
   lyric: defaultLyric,
   translation: {
     enabled: false,

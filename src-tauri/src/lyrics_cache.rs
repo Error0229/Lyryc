@@ -69,6 +69,10 @@ fn init_db() -> Option<Connection> {
         return None;
     }
 
+    // Where the timing came from ("lrclib", "qq", ...). Added later; NULL rows
+    // predate it and are LRCLIB. Fails harmlessly once the column exists.
+    let _ = conn.execute("ALTER TABLE lyrics_cache ADD COLUMN source TEXT", []);
+
     // Create composite index for optimal lookups with TTL filtering
     if let Err(e) = conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_cache_lookup ON lyrics_cache(artist, track, cached_at DESC)",
@@ -109,8 +113,9 @@ fn now_timestamp() -> i64 {
 
 /// Cache lookup result
 pub enum CacheResult {
-    /// Lyrics found in cache
-    Hit(Vec<LyricLine>),
+    /// Lyrics found in cache, and where their timing came from (None: LRCLIB,
+    /// or a row written before sources were recorded)
+    Hit(Vec<LyricLine>, Option<String>),
     /// Cached as "no lyrics available" (negative cache)
     NegativeHit,
     /// Not in cache or cache unavailable
@@ -136,18 +141,18 @@ pub fn get_cached_lyrics(artist: &str, track: &str) -> CacheResult {
     let track_key = normalize_key(track);
     let min_timestamp = now_timestamp() - CACHE_TTL_SECONDS;
 
-    let result: Result<Option<String>, _> = conn.query_row(
-        "SELECT lyrics_json FROM lyrics_cache WHERE artist = ?1 AND track = ?2 AND cached_at > ?3",
+    let result: Result<(Option<String>, Option<String>), _> = conn.query_row(
+        "SELECT lyrics_json, source FROM lyrics_cache WHERE artist = ?1 AND track = ?2 AND cached_at > ?3",
         params![artist_key, track_key, min_timestamp],
-        |row| row.get(0),
+        |row| Ok((row.get(0)?, row.get(1)?)),
     );
 
     match result {
-        Ok(Some(lyrics_json)) => {
+        Ok((Some(lyrics_json), source)) => {
             match serde_json::from_str::<Vec<LyricLine>>(&lyrics_json) {
                 Ok(lyrics) => {
                     debug!("Cache HIT for '{}' by '{}' ({} lines)", track, artist, lyrics.len());
-                    CacheResult::Hit(lyrics)
+                    CacheResult::Hit(lyrics, source)
                 }
                 Err(e) => {
                     error!("Failed to deserialize cached lyrics: {}", e);
@@ -155,7 +160,7 @@ pub fn get_cached_lyrics(artist: &str, track: &str) -> CacheResult {
                 }
             }
         }
-        Ok(None) => {
+        Ok((None, _)) => {
             debug!("Cache NEGATIVE HIT for '{}' by '{}' (instrumental)", track, artist);
             CacheResult::NegativeHit
         }
@@ -171,7 +176,7 @@ pub fn get_cached_lyrics(artist: &str, track: &str) -> CacheResult {
 }
 
 /// Cache lyrics for future lookups. Silently fails if cache is disabled.
-pub fn cache_lyrics(artist: &str, track: &str, lyrics: Vec<LyricLine>) {
+pub fn cache_lyrics(artist: &str, track: &str, lyrics: &[LyricLine], source: &str) {
     let guard = match DB_CONNECTION.lock() {
         Ok(g) => g,
         Err(_) => return,
@@ -185,7 +190,7 @@ pub fn cache_lyrics(artist: &str, track: &str, lyrics: Vec<LyricLine>) {
     let artist_key = normalize_key(artist);
     let track_key = normalize_key(track);
 
-    let lyrics_json = match serde_json::to_string(&lyrics) {
+    let lyrics_json = match serde_json::to_string(lyrics) {
         Ok(json) => json,
         Err(e) => {
             error!("Failed to serialize lyrics: {}", e);
@@ -194,8 +199,8 @@ pub fn cache_lyrics(artist: &str, track: &str, lyrics: Vec<LyricLine>) {
     };
 
     if let Err(e) = conn.execute(
-        "INSERT OR REPLACE INTO lyrics_cache (artist, track, lyrics_json, cached_at) VALUES (?1, ?2, ?3, ?4)",
-        params![artist_key, track_key, lyrics_json, now_timestamp()],
+        "INSERT OR REPLACE INTO lyrics_cache (artist, track, lyrics_json, cached_at, source) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![artist_key, track_key, lyrics_json, now_timestamp(), source],
     ) {
         error!("Failed to cache lyrics: {}", e);
     } else {

@@ -10,6 +10,7 @@ mod furigana;
 mod llm;
 mod lyrics;
 mod lyrics_cache;
+mod sources;
 mod timing;
 mod translation;
 mod types;
@@ -27,7 +28,7 @@ use llm::commands::{
     llm_get_settings, llm_import_legacy_keys, llm_list_models, llm_list_presets, llm_remove_provider,
     llm_set_route, llm_test, llm_upsert_provider,
 };
-use lyrics::{fetch_lrclib_raw, fetch_lyrics};
+use lyrics::{fetch_lrclib_raw, fetch_lyrics, fetch_lyrics_timed};
 use types::{ClickThroughState, TrackState, WebSocketState};
 use websocket_commands::{
     control_playback, debug_websocket_server, get_websocket_clients_count, get_websocket_status,
@@ -173,6 +174,7 @@ pub fn run() {
             translate_lyrics_command,
             get_supported_languages,
             fetch_lyrics,
+            fetch_lyrics_timed,
             fetch_lrclib_raw,
             init_extension_connection,
             get_websocket_status,
