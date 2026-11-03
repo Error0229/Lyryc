@@ -1,0 +1,15 @@
+{
+  "content_scripts": [
+    {
+      "matches": ["*://music.youtube.com/*"],
+      "js": ["prototype-queue/queue-main.js"],
+      "world": "MAIN",
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://music.youtube.com/*"],
+      "js": ["prototype-queue/queue-bridge.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
