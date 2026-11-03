@@ -47,6 +47,7 @@ export const settings = {
   setWordHighlight: (wordHighlight: boolean) => set({ wordHighlight }),
   setExtraSources: (extraSources: boolean) => set({ extraSources }),
   setIdentifyWithSearch: (identifyWithSearch: boolean) => set({ identifyWithSearch }),
+  setPrealign: (prealign: boolean) => set({ prealign }),
   lyric: (p: Partial<LyricStyle>) => set((s) => ({ lyric: { ...s.lyric, ...p } })),
   resetLyric: () => set({ lyric: defaultLyric }),
   translation: (p: Partial<TranslationPrefs>) => set((s) => ({ translation: { ...s.translation, ...p } })),

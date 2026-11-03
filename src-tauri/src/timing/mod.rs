@@ -59,7 +59,7 @@ pub fn estimate_plain(plain: &str, track_secs: f64) -> Vec<LyricLine> {
         .zip(&weights)
         .map(|(text, w)| {
             let duration = w / total * span;
-            let line = LyricLine { time: t, text: text.to_string(), duration: Some(duration) };
+            let line = LyricLine { time: t, text: text.to_string(), duration: Some(duration), words: None };
             t += duration;
             line
         })

@@ -35,6 +35,18 @@ export function useBackendEvents() {
   }, []);
 }
 
+/**
+ * Mirror the word-level timing settings to the backend, which keeps no copy:
+ * on start and on every change (also from the settings window, via storage).
+ */
+export function usePrealignSync() {
+  const prealign = useSettings((s) => s.prealign);
+  const extraSources = useSettings((s) => s.extraSources);
+  useEffect(() => {
+    backend.prealignConfigure(prealign, extraSources).catch(log("prealign_configure"));
+  }, [prealign, extraSources]);
+}
+
 /** Translate when the lyric *text* or the translation prefs change; retiming alone does not. */
 export function useTranslations() {
   const lyrics = useSession((s) => s.lyrics);

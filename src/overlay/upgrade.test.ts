@@ -29,6 +29,14 @@ describe("accepts", () => {
     expect(accepts({ track: song, source: "lrclib-estimate" }, { track: song, source: "lrclib-estimate" })).toBe(true);
   });
 
+  it("keeps word timing once it has it", () => {
+    expect(accepts({ track: song, source: "lrclib" }, { track: song, source: "aligned" })).toBe(true);
+    expect(accepts({ track: song, source: "lrclib-estimate" }, { track: song, source: "aligned" })).toBe(true);
+    expect(accepts({ track: song, source: "aligned" }, { track: song, source: "qq" })).toBe(false);
+    expect(accepts({ track: song, source: "aligned" }, { track: song, source: "lrclib-estimate" })).toBe(false);
+    expect(accepts({ track: song, source: "aligned" }, { track: song, source: "aligned" })).toBe(true);
+  });
+
   it("treats YouTube Music's plain lyrics as an estimate too", () => {
     expect(accepts({ track: song, source: "ytmusic-estimate" }, { track: song, source: "qq" })).toBe(true);
     expect(accepts({ track: song, source: "ytmusic" }, { track: song, source: "ytmusic-estimate" })).toBe(false);

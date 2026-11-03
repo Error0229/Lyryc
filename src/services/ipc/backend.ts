@@ -6,7 +6,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { LyricLine, LyricsSource, PlaybackCommand, Span, TimedLyrics, TimeSample, Track } from "../../lib/types";
+import type { LyricLine, LyricsSource, PlaybackCommand, PrealignStatus, Span, TimedLyrics, TimeSample, Track } from "../../lib/types";
 import type { TranslationPrefs } from "../../state/schema";
 import { mockBackend } from "./mock";
 
@@ -26,6 +26,8 @@ export interface BackendEvents {
    * for an earlier song can be told apart.
    */
   lyrics: (p: { track: Pick<Track, "title" | "artist">; lines: LyricLine[]; source: LyricsSource }) => void;
+  /** Word-level timing: download progress and state changes (`prealign-status`). */
+  prealign: (s: PrealignStatus) => void;
 }
 
 export interface Backend {
@@ -44,6 +46,15 @@ export interface Backend {
   startDrag(): Promise<void>;
   openUrl(url: string): Promise<void>;
   appVersion(): Promise<string>;
+  /**
+   * Word-level timing (YouTube Music). The backend keeps no copy of the
+   * settings: the overlay mirrors `prealign` and `extraSources` here on start
+   * and on change. Turning it on starts the one-time downloads.
+   */
+  prealignConfigure(enabled: boolean, extraSources: boolean): Promise<PrealignStatus>;
+  prealignStatus(): Promise<PrealignStatus>;
+  /** Deletes the model, runtime and yt-dlp, and turns the feature off. */
+  prealignRemoveFiles(): Promise<PrealignStatus>;
   subscribe(on: Partial<BackendEvents>): () => void;
 }
 
@@ -120,6 +131,10 @@ const tauriBackend: Backend = {
     return getVersion();
   },
 
+  prealignConfigure: (enabled, extraSources) => invoke<PrealignStatus>("prealign_configure", { enabled, extraSources }),
+  prealignStatus: () => invoke<PrealignStatus>("prealign_status"),
+  prealignRemoveFiles: () => invoke<PrealignStatus>("prealign_remove_files"),
+
   subscribe(on) {
     const pending = [
       on.track && listen<Track>("track-updated", (e) => on.track!(e.payload)),
@@ -131,6 +146,7 @@ const tauriBackend: Backend = {
         listen<TimingUpdate>("lyrics-timing-updated", ({ payload: p }) =>
           on.lyrics!({ track: { title: p.title, artist: p.artist }, lines: p.lines, source: p.source }),
         ),
+      on.prealign && listen<PrealignStatus>("prealign-status", (e) => on.prealign!(e.payload)),
     ].filter((p): p is Promise<() => void> => !!p);
     return () => pending.forEach((p) => void p.then((off) => off()));
   },

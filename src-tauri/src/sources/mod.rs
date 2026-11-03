@@ -307,6 +307,7 @@ fn to_lines(timed: Vec<(f64, String)>) -> Vec<LyricLine> {
             time,
             text,
             duration: Some(end.map_or(LAST_LINE_SECS, |e| (e - time).max(0.0))),
+            words: None,
         })
         .collect()
 }

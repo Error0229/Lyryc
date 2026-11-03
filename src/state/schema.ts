@@ -70,6 +70,11 @@ export interface Settings {
   extraSources: boolean;
   /** When no source finds a song, let the AI provider search the web to identify it. Opt-in: paid. */
   identifyWithSearch: boolean;
+  /**
+   * Word-level timing for YouTube Music: downloads each queued song's audio
+   * with yt-dlp and aligns the lyrics locally. Opt-in, experimental.
+   */
+  prealign: boolean;
   lyric: LyricStyle;
   translation: TranslationPrefs;
   furigana: FuriganaPrefs;
@@ -101,6 +106,7 @@ export const defaultSettings: Settings = {
   wordHighlight: true,
   extraSources: false,
   identifyWithSearch: false,
+  prealign: false,
   lyric: defaultLyric,
   translation: {
     enabled: false,

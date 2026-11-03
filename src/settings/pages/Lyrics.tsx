@@ -12,6 +12,7 @@ import { Switch } from "../../ui/Switch";
 import { PageHeader } from "../Page";
 import { useCurrentTrack } from "../useTrack";
 import { presetOf, useLlm } from "../providers/useLlm";
+import { WordTiming } from "./WordTiming";
 
 const RANGE = OFFSET_LIMIT / 2;
 
@@ -91,6 +92,7 @@ export function LyricsPage() {
         >
           <Switch label="Identify songs with web search" checked={identifyWithSearch} onChange={settings.setIdentifyWithSearch} />
         </Row>
+        <WordTiming />
       </Section>
 
       <Section title="Sync" description="Positive values show lyrics earlier. The overlay's ± buttons adjust the current track.">

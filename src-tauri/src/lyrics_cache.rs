@@ -73,6 +73,8 @@ fn init_db() -> Option<Connection> {
     // predate it and are LRCLIB. Fails harmlessly once the column exists.
     let _ = conn.execute("ALTER TABLE lyrics_cache ADD COLUMN source TEXT", []);
 
+    create_aligned_table(&conn);
+
     // Create composite index for optimal lookups with TTL filtering
     if let Err(e) = conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_cache_lookup ON lyrics_cache(artist, track, cached_at DESC)",
@@ -233,6 +235,78 @@ pub fn cache_no_lyrics(artist: &str, track: &str) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Pre-aligned word timing (src/prealign). Keyed by the YouTube videoId and a
+// hash of the lyric text it was aligned to; kept until the user clears it.
+// `lines_json` NULL means the alignment was rejected: don't download again.
+
+/// A cached alignment for (videoId, text hash).
+#[derive(Debug, PartialEq)]
+pub enum AlignedCache {
+    /// The aligner's raw output (JSON), to be checked against the lyrics on use.
+    Hit(String),
+    /// Aligned before and rejected as a whole.
+    Rejected,
+    Miss,
+}
+
+fn create_aligned_table(conn: &Connection) {
+    if let Err(e) = conn.execute(
+        "CREATE TABLE IF NOT EXISTS aligned_cache (
+            video_id TEXT NOT NULL,
+            text_hash TEXT NOT NULL,
+            lines_json TEXT,
+            cached_at INTEGER NOT NULL,
+            PRIMARY KEY (video_id, text_hash)
+        )",
+        [],
+    ) {
+        warn!("Failed to create aligned_cache table: {}", e);
+    }
+}
+
+fn get_aligned_in(conn: &Connection, video_id: &str, text_hash: &str) -> AlignedCache {
+    let row: Result<Option<String>, _> = conn.query_row(
+        "SELECT lines_json FROM aligned_cache WHERE video_id = ?1 AND text_hash = ?2",
+        params![video_id, text_hash],
+        |row| row.get(0),
+    );
+    match row {
+        Ok(Some(json)) => AlignedCache::Hit(json),
+        Ok(None) => AlignedCache::Rejected,
+        Err(rusqlite::Error::QueryReturnedNoRows) => AlignedCache::Miss,
+        Err(e) => {
+            warn!("aligned_cache query error: {}", e);
+            AlignedCache::Miss
+        }
+    }
+}
+
+fn cache_aligned_in(conn: &Connection, video_id: &str, text_hash: &str, lines_json: Option<&str>) {
+    if let Err(e) = conn.execute(
+        "INSERT OR REPLACE INTO aligned_cache (video_id, text_hash, lines_json, cached_at) VALUES (?1, ?2, ?3, ?4)",
+        params![video_id, text_hash, lines_json, now_timestamp()],
+    ) {
+        error!("Failed to cache alignment: {}", e);
+    }
+}
+
+pub fn get_aligned(video_id: &str, text_hash: &str) -> AlignedCache {
+    match DB_CONNECTION.lock() {
+        Ok(guard) => guard.as_ref().map_or(AlignedCache::Miss, |c| get_aligned_in(c, video_id, text_hash)),
+        Err(_) => AlignedCache::Miss,
+    }
+}
+
+/// Store an alignment (`None`: rejected).
+pub fn cache_aligned(video_id: &str, text_hash: &str, lines_json: Option<&str>) {
+    if let Ok(guard) = DB_CONNECTION.lock() {
+        if let Some(conn) = guard.as_ref() {
+            cache_aligned_in(conn, video_id, text_hash, lines_json);
+        }
+    }
+}
+
 /// Clear the entire cache
 #[allow(dead_code)]
 pub fn clear_cache() {
@@ -270,4 +344,23 @@ pub fn get_cache_stats() -> Option<(usize, i64)> {
 #[allow(dead_code)]
 pub fn is_cache_available() -> bool {
     DB_CONNECTION.lock().map(|g| g.is_some()).unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn alignments_are_keyed_by_video_and_text() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_aligned_table(&conn);
+        assert_eq!(get_aligned_in(&conn, "vid1", "h1"), AlignedCache::Miss);
+        cache_aligned_in(&conn, "vid1", "h1", Some("[1]"));
+        cache_aligned_in(&conn, "vid1", "h2", None);
+        assert_eq!(get_aligned_in(&conn, "vid1", "h1"), AlignedCache::Hit("[1]".into()));
+        assert_eq!(get_aligned_in(&conn, "vid1", "h2"), AlignedCache::Rejected, "other lyrics, same video");
+        assert_eq!(get_aligned_in(&conn, "vid2", "h1"), AlignedCache::Miss, "same lyrics, other upload");
+        cache_aligned_in(&conn, "vid1", "h1", Some("[2]"));
+        assert_eq!(get_aligned_in(&conn, "vid1", "h1"), AlignedCache::Hit("[2]".into()));
+    }
 }

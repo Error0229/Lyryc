@@ -9,7 +9,7 @@ import { useSession, type Session } from "../state/session";
 import { useSettings } from "../state/settings";
 import { Toaster } from "../ui/Toast";
 import { Controls } from "./Controls";
-import { useBackendEvents, useFitWindow, useFurigana, useTranslations } from "./hooks";
+import { useBackendEvents, useFitWindow, useFurigana, usePrealignSync, useTranslations } from "./hooks";
 import { LineView } from "./Line";
 import { lineModel } from "./model";
 import { Stage, useActiveLine, useRetiming } from "./Stage";
@@ -80,6 +80,7 @@ function Status({ title, hint, pulse }: { title: string; hint?: string; pulse: b
 
 export function Overlay() {
   useBackendEvents();
+  usePrealignSync();
   useTranslations();
 
   const s = useSession();

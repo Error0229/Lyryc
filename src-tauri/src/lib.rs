@@ -10,6 +10,7 @@ mod furigana;
 mod llm;
 mod lyrics;
 mod lyrics_cache;
+mod prealign;
 mod sources;
 mod timing;
 mod translation;
@@ -30,6 +31,7 @@ use llm::commands::{
     llm_set_route, llm_test, llm_upsert_provider,
 };
 use lyrics::{fetch_lrclib_raw, fetch_lyrics, fetch_lyrics_timed};
+use prealign::{prealign_configure, prealign_remove_files, prealign_status};
 use types::{ClickThroughState, TrackState, WebSocketState};
 use websocket_commands::{
     control_playback, debug_websocket_server, get_websocket_clients_count, get_websocket_status,
@@ -60,6 +62,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             app.manage(llm::store::init(app.path().app_config_dir().ok()));
+            prealign::init(app.handle());
 
             #[cfg(desktop)]
             {
@@ -200,7 +203,10 @@ pub fn run() {
             llm_set_route,
             llm_list_models,
             llm_test,
-            llm_import_legacy_keys
+            llm_import_legacy_keys,
+            prealign_configure,
+            prealign_status,
+            prealign_remove_files
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
