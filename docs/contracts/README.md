@@ -35,6 +35,9 @@ invoke<TimedLyrics>("fetch_lyrics_timed", {
   videoId?: string | null, // YouTube Music's id for the track (Track.videoId)
   webSearch?: boolean,     // "Identify songs with web search": when no source finds the
                            // song, re-identify it with the provider's web search (paid)
+  refetch?: boolean,       // "Search again": forget the cached answer, the session's
+                           // identification and the aligner's "done" mark, then ask the
+                           // LLM with web search, then without, then the player's names
 });
 
 type LyricsSource =

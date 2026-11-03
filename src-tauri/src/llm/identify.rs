@@ -209,6 +209,11 @@ pub async fn identify_with(
 type Answers = HashMap<(String, String, bool), Option<SongIdentity>>;
 static ANSWERS: LazyLock<Mutex<Answers>> = LazyLock::new(Default::default);
 
+/// Drop the remembered answers for a song: the lyrics they led to were wrong.
+pub fn forget(raw_title: &str, raw_artist: &str) {
+    ANSWERS.lock().unwrap().retain(|(title, artist, _), _| title != raw_title || artist != raw_artist);
+}
+
 /// Canonical names for a raw player title, using the cleaning route. `None`
 /// when no provider is set up, the call failed, or the model is unsure.
 ///

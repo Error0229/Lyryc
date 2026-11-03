@@ -1,6 +1,6 @@
 /** Hover-revealed mini controls for the overlay strip. */
 import { motion } from "motion/react";
-import { EyeOff, GripVertical, Languages, Minus, Pause, Play, Plus, Settings2, SkipBack, SkipForward } from "lucide-react";
+import { EyeOff, GripVertical, Languages, Minus, Pause, Play, Plus, SearchCheck, Settings2, SkipBack, SkipForward } from "lucide-react";
 import { spring, fade } from "../design/motion";
 import { formatOffset, NUDGE_STEP, trackKey } from "../lib/offset";
 import { backend } from "../services/ipc/backend";
@@ -8,6 +8,7 @@ import { useSession } from "../state/session";
 import { settings, useSettings } from "../state/settings";
 import { openSettings } from "../state/nav";
 import { IconButton } from "../ui/IconButton";
+import { refetchLyrics } from "./actions";
 import { playhead } from "./playhead";
 
 const Divider = () => <span aria-hidden className="mx-1 h-4 w-px bg-glass-line" />;
@@ -43,6 +44,7 @@ export function Controls() {
   const track = useSession((s) => s.track);
   const playing = useSession((s) => s.playing);
   const translating = useSettings((s) => s.translation.enabled);
+  const refetching = useSession((s) => s.refetching);
 
   return (
     <motion.div
@@ -72,6 +74,15 @@ export function Controls() {
             <Divider />
             <OffsetNudge track={track} />
             <Divider />
+            <IconButton
+              tone="glass"
+              tooltip={false}
+              label={refetching ? "Searching again…" : "Wrong lyrics? Search again (skips the cache, asks the AI first)"}
+              icon={<SearchCheck />}
+              disabled={refetching}
+              className={refetching ? "animate-pulse" : undefined}
+              onClick={() => void refetchLyrics()}
+            />
           </>
         )}
         <IconButton

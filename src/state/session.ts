@@ -20,6 +20,8 @@ export interface Session {
   furigana: Record<string, Span[]>;
   /** performance.now() of the last same-track lyric swap; 0 if none. */
   retimedAt: number;
+  /** "Search again" is running for this track. */
+  refetching: boolean;
   playing: boolean;
   clickThrough: boolean;
 }
@@ -32,6 +34,7 @@ export const useSession = create<Session>()(() => ({
   translations: {},
   furigana: {},
   retimedAt: 0,
+  refetching: false,
   playing: false,
   clickThrough: false,
 }));

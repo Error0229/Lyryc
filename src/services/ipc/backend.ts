@@ -34,7 +34,11 @@ export interface Backend {
   initExtension(): Promise<void>;
   currentTrack(): Promise<Track | null>;
   /** `extraSources`: the user's opt-in for YouTube Music's lyrics and QQ Music / NetEase / Kugou. */
-  fetchLyrics(track: Track, extraSources: boolean, webSearch: boolean): Promise<TimedLyrics>;
+  /**
+   * `refetch`: "Search again". The backend forgets the cached answer and asks
+   * the LLM (with web search when the provider has it) before the player's names.
+   */
+  fetchLyrics(track: Track, extraSources: boolean, webSearch: boolean, refetch?: boolean): Promise<TimedLyrics>;
   /** Empty when the lyrics are already in the target language. */
   translate(lines: LyricLine[], prefs: TranslationPrefs): Promise<Translated[]>;
   furigana(text: string): Promise<Span[]>;
@@ -90,13 +94,14 @@ function translationConfig(p: TranslationPrefs) {
 const tauriBackend: Backend = {
   initExtension: () => invoke("init_extension_connection"),
   currentTrack: () => invoke<Track | null>("get_current_track"),
-  fetchLyrics: (t, extraSources, webSearch) =>
+  fetchLyrics: (t, extraSources, webSearch, refetch = false) =>
     invoke<TimedLyrics>("fetch_lyrics_timed", {
       trackName: t.title,
       artistName: t.artist,
       duration: t.duration || null, // the extension sends 0 for "unknown"
       extraSources,
       webSearch,
+      refetch,
       videoId: t.videoId ?? null,
     }),
 

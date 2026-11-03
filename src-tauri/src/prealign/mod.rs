@@ -197,6 +197,14 @@ pub fn text_key(lines: &[LyricLine]) -> String {
 // ---------------------------------------------------------------------------
 // Serving.
 
+/// "Search again" replaced the track's lyrics: align the new ones when served.
+/// (The aligned cache is keyed by the text, so the old alignment never matches.)
+pub fn forget(video_id: Option<&str>) {
+    if let Some(id) = video_id {
+        shared().queue.forget(id);
+    }
+}
+
 /// The serving hook for `fetch_lyrics_timed`: cached word timing for this
 /// YouTube Music video, or queue it. `video_id`: the player's (None elsewhere).
 pub fn serve(video_id: Option<&str>, title: &str, artist: &str, duration: Option<f64>, lines: &[LyricLine], real_timing: bool) -> Served {

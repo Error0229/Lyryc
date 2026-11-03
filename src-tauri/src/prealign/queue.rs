@@ -106,6 +106,11 @@ impl Queue {
         }
     }
 
+    /// Align this track again when it next asks: its lyrics changed.
+    pub fn forget(&mut self, video_id: &str) {
+        self.done.remove(video_id);
+    }
+
     pub fn is_done(&self, video_id: &str) -> bool {
         self.done.contains(video_id)
     }

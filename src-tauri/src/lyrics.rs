@@ -11,6 +11,10 @@
 //!    failed. They search by the identified native names first, then the
 //!    player's: QQ and co. list 雪国 / ヨルシカ, not "Snow Country" / Yorushika.
 //!
+//! "Search again" (`refetch`) forgets the cached answer and asks the LLM first,
+//! with web search, then falls back to the player's names: the regex pass is
+//! what usually found the wrong song.
+//!
 //! At most `MAX_REQUESTS` LRCLIB requests per song, one at a time, and no URL
 //! twice. A plain-only hit spends one of them looking for a synced entry of the
 //! same recording.
@@ -18,7 +22,7 @@
 use crate::cleaning::{clean_title, normalize_name, Names};
 use crate::llm;
 use crate::prealign::{self, Served};
-use crate::lyrics_cache::{cache_lyrics, cache_no_lyrics, get_cached_lyrics, CacheResult};
+use crate::lyrics_cache::{cache_lyrics, cache_no_lyrics, forget_lyrics, get_cached_lyrics, CacheResult};
 use crate::llm::identify::SongIdentity;
 use crate::sources::{self, align, Found, Provider};
 use crate::timing;
@@ -473,12 +477,14 @@ struct Request {
     /// Opt-in, paid: when identification without search finds nothing, retry
     /// it with the provider's web search.
     web_search: bool,
+    /// The user pressed "Search again": the last answer was wrong.
+    refetch: bool,
 }
 
 impl Request {
     fn new(title: String, artist: String, duration: Option<f64>) -> Self {
         let duration = duration.filter(|d| (1.0..=3600.0).contains(d));
-        Self { title, artist, duration, video_id: None, web_search: false }
+        Self { title, artist, duration, video_id: None, web_search: false, refetch: false }
     }
 }
 
@@ -583,6 +589,7 @@ pub async fn fetch_lyrics(
 /// timing in the background (`lyrics-timing-updated`), and a track LRCLIB
 /// lacks (or can't answer for) is looked up in the extra sources.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // flat on purpose: they are the invoke() fields
 pub async fn fetch_lyrics_timed(
     app: tauri::AppHandle,
     track_name: String,
@@ -591,10 +598,19 @@ pub async fn fetch_lyrics_timed(
     extra_sources: bool,
     video_id: Option<String>, // YouTube Music's id for the track, if it plays there
     web_search: Option<bool>, // the user's "identify with web search" opt-in
+    refetch: Option<bool>,    // "Search again": the lyrics on screen are wrong
 ) -> Result<TimedLyrics, String> {
     let mut req = Request::new(track_name, artist_name, duration);
     req.video_id = video_id.filter(|id| ytmusic::is_video_id(id));
     req.web_search = web_search.unwrap_or(false);
+    req.refetch = refetch.unwrap_or(false);
+    if req.refetch {
+        // Everything the app remembers about the song led to the wrong lyrics.
+        info!("Searching again for '{}' by '{}'", req.title, req.artist);
+        forget_lyrics(&req.artist, &req.title);
+        llm::identify::forget(&req.title, &req.artist);
+        prealign::forget(req.video_id.as_deref());
+    }
     let (mut timed, mut upgrade) = fetch_timed(&Live, &req, extra_sources).await?;
     if with_aligned(&Live, &req, &mut timed) {
         upgrade = None; // word timing beats anything a source could add
@@ -651,6 +667,32 @@ pub async fn lookup_for_prealign(
     Some((timed.lines, real))
 }
 
+/// One way of naming the song to LRCLIB and the sources.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Pass {
+    /// The player's names, raw and regex-cleaned: LRCLIB only.
+    Player,
+    /// The LLM's names, with or without web search: LRCLIB, then the sources.
+    Identified { web_search: bool },
+    /// No new names: the sources only. The song already missed LRCLIB and the LLM.
+    SourcesOnly,
+}
+
+/// Cheapest first, normally. "Search again" goes the other way: the player's
+/// names are what found the wrong song, so the LLM with web search leads (one
+/// paid call the user asked for; it falls through when the provider can't search).
+fn passes(req: &Request, negative: bool) -> &'static [Pass] {
+    use Pass::*;
+    const WEB: Pass = Identified { web_search: true };
+    const NO_WEB: Pass = Identified { web_search: false };
+    match (req.refetch, negative, req.web_search) {
+        (true, _, _) => &[WEB, NO_WEB, Player],
+        (false, true, _) => &[SourcesOnly],
+        (false, false, false) => &[Player, NO_WEB],
+        (false, false, true) => &[Player, NO_WEB, WEB],
+    }
+}
+
 async fn fetch_timed<E: Effects>(
     fx: &E,
     req: &Request,
@@ -671,35 +713,29 @@ async fn fetch_timed<E: Effects>(
 
     let started = std::time::Instant::now();
     let mut run = Lookup { fx, req, asked: HashMap::new(), incomplete: false };
-    let mut found = if negative { None } else { run.regex_pass().await };
-    if found.is_none() {
-        // Identification without search, then (opt-in, paid) with web search;
-        // each pass tries LRCLIB, then the sources, with the names it found. A
-        // negative-cached song already had its LLM calls: sources only.
-        let passes: &[Option<bool>] = match (negative, req.web_search) {
-            (true, _) => &[None],
-            (false, false) => &[Some(false)],
-            (false, true) => &[Some(false), Some(true)],
+    let mut found = None;
+    // Names the sources were already asked with (e.g. no LLM set up: always empty).
+    let mut tried: Vec<Vec<Names>> = Vec::new();
+    for &pass in passes(req, negative) {
+        let names = match pass {
+            Pass::Identified { web_search } => fx.names(req, web_search).await,
+            Pass::Player | Pass::SourcesOnly => Vec::new(),
         };
-        let mut tried: Option<Vec<Names>> = None;
-        for pass in passes {
-            let names = match pass {
-                Some(web_search) => fx.names(req, *web_search).await,
-                None => Vec::new(),
-            };
-            // Same names as the last pass (e.g. no LLM set up): nothing new to ask.
-            if tried.as_ref() == Some(&names) {
-                continue;
-            }
-            found = run.identified_pass(&names).await;
-            if found.is_some() {
-                break;
-            }
-            if let Some(timed) = from_sources(fx, req, &names, extra).await {
-                return Ok((timed, None));
-            }
-            tried = Some(names);
+        found = match pass {
+            Pass::Player => run.regex_pass().await,
+            _ => run.identified_pass(&names).await,
+        };
+        if found.is_some() {
+            break;
         }
+        // The player's names reach the sources with every other pass.
+        if pass == Pass::Player || tried.contains(&names) {
+            continue;
+        }
+        if let Some(timed) = from_sources(fx, req, &names, extra).await {
+            return Ok((timed, None));
+        }
+        tried.push(names);
     }
     info!(
         "Lyrics lookup for '{}' by '{}': {} after {} LRCLIB request(s) in {:.1}s",
@@ -1227,6 +1263,33 @@ mod tests {
         let fx = Fake::default().rule("search?", json_reply(json!([])));
         assert!(fetch_timed(&fx, &req, true).await.is_err());
         assert_eq!(fx.calls().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn search_again_asks_the_web_search_llm_before_the_players_names() {
+        // The player's names find some other song; the web search names find 雪国.
+        let (mut req, searched) = snow_country();
+        req.refetch = true;
+        let fx = Fake { names_searched: searched, ..Default::default() }
+            .rule("artist_name=%E3%83%A8", json_reply(json!([record("雪国", "ヨルシカ", 288.0, true)])))
+            .rule("Snow", json_reply(json!([record("Snow Country", "Someone Else", 288.0, true)])));
+        let (timed, _) = fetch_timed(&fx, &req, true).await.unwrap();
+        assert_eq!(timed.source, TimingSource::Lrclib);
+        assert_eq!(fx.llm_calls(), 1, "web search found it; no second LLM call");
+        assert_eq!(fx.asked("Snow"), 0, "the player's names were never asked");
+        assert_eq!(fx.saved(), vec![TimingSource::Lrclib]);
+    }
+
+    #[tokio::test]
+    async fn search_again_without_an_llm_still_tries_the_sources_then_the_players_names() {
+        let mut fx = Fake::default().rule("search?", json_reply(json!([])));
+        fx.negative_cached = true; // ignored: the user asked again
+        let mut req = req();
+        req.refetch = true;
+        assert!(fetch_timed(&fx, &req, true).await.is_err());
+        assert_eq!(fx.llm_calls(), 2, "web search, then without");
+        assert_eq!(fx.calls().len(), 1, "the sources once: the empty names repeat");
+        assert!(fx.asked("Koi") > 0, "the player's names last");
     }
 
     #[tokio::test]

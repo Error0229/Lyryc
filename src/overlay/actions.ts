@@ -1,7 +1,7 @@
 /** Overlay side effects that are not tied to a component. */
 import { backend } from "../services/ipc/backend";
 import { friendlyError, isNotConfigured } from "../services/ipc/llmClient";
-import { normalizeLines } from "../lib/lyrics";
+import { normalizeLines, textSignature } from "../lib/lyrics";
 import type { LyricLine, LyricsSource, Track } from "../lib/types";
 import { useSession } from "../state/session";
 import { useSettings } from "../state/settings";
@@ -14,7 +14,7 @@ let request = 0;
 
 export function setTrack(track: Track) {
   if (sameTrack(useSession.getState().track, track)) return;
-  useSession.setState({ track, lyrics: [], source: null, status: "loading", translations: {}, retimedAt: 0 });
+  useSession.setState({ track, lyrics: [], source: null, status: "loading", translations: {}, retimedAt: 0, refetching: false });
   playhead.reset();
   void loadLyrics(track);
 }
@@ -31,13 +31,43 @@ async function loadLyrics(track: Track) {
 }
 
 /**
+ * "Search again": the lyrics on screen are wrong (or missing). The backend
+ * skips its cache and searches harder; whatever it finds replaces them, even
+ * word timing, since the user asked. Nothing found keeps what is shown.
+ */
+export async function refetchLyrics() {
+  const { track, lyrics, source, refetching } = useSession.getState();
+  if (!track || refetching) return;
+  const id = ++request;
+  useSession.setState({ refetching: true });
+  try {
+    const { extraSources, identifyWithSearch } = useSettings.getState();
+    const r = await backend.fetchLyrics(track, extraSources, identifyWithSearch, true);
+    if (id !== request) return;
+    if (r.source === source && textSignature(r.lines) === textSignature(lyrics)) {
+      toast({ title: "Found the same lyrics again", description: "No source has a different version of this track." });
+    }
+    install(r.lines, r.source);
+  } catch (e) {
+    if (id !== request) return;
+    const title = lyrics.length ? "No other lyrics found" : "Still no lyrics for this track";
+    toast({ title, description: friendlyError(e), tone: "danger" });
+  } finally {
+    if (id === request) useSession.setState({ refetching: false });
+  }
+}
+
+/**
  * Install lyrics for the current track. A second call for the same track is a
  * timing swap: lines keep their identity and the fill eases to the new times.
  * Late arrivals for another track are dropped.
  */
 export function applyLyrics(track: Pick<Track, "title" | "artist">, raw: LyricLine[], source: LyricsSource) {
+  if (accepts(useSession.getState(), { track, source })) install(raw, source);
+}
+
+function install(raw: LyricLine[], source: LyricsSource) {
   const s = useSession.getState();
-  if (!accepts(s, { track, source })) return;
   const lines = normalizeLines(raw);
   useSession.setState({
     lyrics: lines,

@@ -235,6 +235,23 @@ pub fn cache_no_lyrics(artist: &str, track: &str) {
     }
 }
 
+/// Drop the song's entry, found or not: the user says it is wrong.
+pub fn forget_lyrics(artist: &str, track: &str) {
+    let guard = match DB_CONNECTION.lock() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+    let Some(conn) = guard.as_ref() else {
+        return;
+    };
+    if let Err(e) = conn.execute(
+        "DELETE FROM lyrics_cache WHERE artist = ?1 AND track = ?2",
+        params![normalize_key(artist), normalize_key(track)],
+    ) {
+        error!("Failed to forget cached lyrics: {}", e);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Pre-aligned word timing (src/prealign). Keyed by the YouTube videoId and a
 // hash of the lyric text it was aligned to; kept until the user clears it.

@@ -47,18 +47,19 @@ function statusText(s: Pick<Session, "track" | "status">): { title: string; hint
   return { title: s.track.title, hint: s.track.artist };
 }
 
-/** Estimated timing drives scrolling only; say so, quietly. */
-function EstimatedBadge() {
+/** A quiet corner note: estimated timing, or "Search again" at work. */
+function Badge({ text, title }: { text: string; title: string }) {
   return (
     <motion.span
+      key={text}
       className="pointer-events-none absolute right-3 bottom-1 text-2xs font-medium text-(--lyric-text) [text-shadow:var(--lyric-shadow)]"
-      title="No synced timing for this track; lines advance on a guess"
+      title={title}
       initial={{ opacity: 0 }}
       animate={{ opacity: 0.5 }}
       exit={{ opacity: 0 }}
       transition={fade("slow")}
     >
-      ≈ estimated timing
+      {text}
     </motion.span>
   );
 }
@@ -155,7 +156,14 @@ export function Overlay() {
           )}
         </Stage>
       </div>
-      <AnimatePresence>{estimated && model && !interactive && <EstimatedBadge />}</AnimatePresence>
+      <AnimatePresence>
+        {!interactive &&
+          (s.refetching ? (
+            <Badge text="searching again…" title="Looking for the right lyrics, skipping the cache" />
+          ) : (
+            estimated && model && <Badge text="≈ estimated timing" title="No synced timing for this track; lines advance on a guess" />
+          ))}
+      </AnimatePresence>
       <AnimatePresence>{interactive && <Controls />}</AnimatePresence>
       <Toaster placement="strip" />
     </div>
