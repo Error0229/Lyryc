@@ -258,10 +258,20 @@ fn apply_cached(json: &str, lyrics: &Lyrics) -> Option<Vec<LyricLine>> {
 
 /// The playing track's alignment just landed: push it to the overlay.
 fn notify_waiter(video_id: &str) {
+    let Some(hash) = shared().waiters.get(video_id).map(|w| w.hash.clone()) else {
+        return;
+    };
+    // The waiter may be for newer lyrics than the job that just ended
+    // ("Search again"): it waits for theirs.
+    let json = match get_aligned(video_id, &hash) {
+        AlignedCache::Miss => return,
+        AlignedCache::Rejected => None,
+        AlignedCache::Hit(json) => Some(json),
+    };
     let Some(w) = shared().waiters.remove(video_id) else {
         return;
     };
-    let AlignedCache::Hit(json) = get_aligned(video_id, &w.hash) else {
+    let Some(json) = json else {
         return;
     };
     let Some(lines) = apply_cached(&json, &w.lyrics) else {

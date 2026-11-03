@@ -39,6 +39,9 @@ pub struct Queue {
     /// Finished this session (aligned, rejected or failed): never retried.
     done: HashSet<String>,
     running: Option<String>,
+    /// The running job's lyrics were replaced while it ran ("Search again"):
+    /// its end does not count, and the replacement still runs.
+    outdated: bool,
 }
 
 impl Queue {
@@ -97,7 +100,7 @@ impl Queue {
         if self.running.as_deref() == Some(video_id) {
             self.running = None;
         }
-        if finished {
+        if finished && !std::mem::take(&mut self.outdated) {
             self.done.insert(video_id.to_string());
             if self.current.as_ref().is_some_and(|j| j.song.video_id == video_id) {
                 self.current = None;
@@ -109,6 +112,7 @@ impl Queue {
     /// Align this track again when it next asks: its lyrics changed.
     pub fn forget(&mut self, video_id: &str) {
         self.done.remove(video_id);
+        self.outdated |= self.running.as_deref() == Some(video_id);
     }
 
     pub fn is_done(&self, video_id: &str) -> bool {
@@ -152,6 +156,20 @@ mod tests {
         }
         assert_eq!(order, ["b", "c", "d"]);
         assert!(q.is_idle());
+    }
+
+    #[test]
+    fn new_lyrics_while_aligning_the_old_ones_still_get_aligned() {
+        let mut q = Queue::default();
+        q.set_current(Job { song: song("a"), lyrics: None });
+        assert_eq!(q.next().unwrap().song.video_id, "a");
+        q.forget("a"); // "Search again" found other lyrics
+        q.set_current(Job { song: song("a"), lyrics: None });
+        q.end("a", true); // the old lyrics' job
+        assert!(!q.is_done("a"));
+        assert_eq!(q.next().unwrap().song.video_id, "a", "the replacement runs");
+        q.end("a", true);
+        assert!(q.is_done("a"));
     }
 
     #[test]
