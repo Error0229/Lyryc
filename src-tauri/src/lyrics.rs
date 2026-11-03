@@ -2,6 +2,7 @@ use crate::cleaning::{
     clean_artist_and_track_names, clean_track_name, clean_track_name_sync, remove_artist_from_track,
 };
 use crate::lyrics_cache::{cache_lyrics, cache_no_lyrics, get_cached_lyrics, CacheResult};
+use crate::timing;
 use crate::types::LyricLine;
 use anyhow::{anyhow, Result};
 use log::{debug, info, warn};
@@ -93,6 +94,17 @@ struct LyricsFetchResult {
     candidate: LyricsCandidate,
     lyrics: Vec<LyricLine>,
     score: f32,
+    /// Set when `lyrics` are estimated from plainLyrics, so the caller can look
+    /// for real timing and must not cache the estimate.
+    plain_source: Option<PlainSource>,
+}
+
+/// The LRCLIB entry an estimated result came from.
+#[derive(Clone, Debug)]
+struct PlainSource {
+    track: String,
+    artist: String,
+    duration: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -417,15 +429,12 @@ fn with_jitter(wait: Duration) -> Duration {
 /// not a song. Rejecting it lets the search path find a real one.
 const MIN_RECORD_LINES: usize = 3;
 
-/// Lyrics from one LRCLIB record: synced if present, else plain. None for
-/// instrumentals, empty and junk records.
-fn lyrics_from_record(record: &serde_json::Value) -> Option<Vec<LyricLine>> {
-    let field = |name: &str| record[name].as_str().filter(|s| !s.trim().is_empty());
-    let lyrics = match (field("syncedLyrics"), field("plainLyrics")) {
-        (Some(synced), _) => parse_lrc_format(synced),
-        (None, Some(plain)) => convert_plain_lyrics_to_lines(plain),
-        (None, None) => return None,
-    };
+/// Synced lyrics from one LRCLIB record. None for plain-only, instrumental, empty
+/// and junk records: plain-only hits belong to the search path, which knows how
+/// to upgrade or estimate them without caching a guess.
+fn synced_from_record(record: &serde_json::Value) -> Option<Vec<LyricLine>> {
+    let synced = record["syncedLyrics"].as_str().filter(|s| !s.trim().is_empty())?;
+    let lyrics = parse_lrc_format(synced);
     (lyrics.len() >= MIN_RECORD_LINES).then_some(lyrics)
 }
 
@@ -460,7 +469,7 @@ async fn fetch_exact(
     .await;
 
     match record {
-        Ok(record) => record.as_ref().and_then(lyrics_from_record),
+        Ok(record) => record.as_ref().and_then(synced_from_record),
         Err(e) => {
             debug!("Exact lookup failed for '{}' by '{}': {}", track, artist, e);
             run.incomplete.store(true, Ordering::Relaxed);
@@ -492,6 +501,7 @@ async fn fetch_lyrics_from_url(
                 candidate,
                 lyrics: Vec::new(),
                 score: 0.0,
+                plain_source: None,
             });
         }
 
@@ -524,6 +534,7 @@ async fn fetch_lyrics_from_url(
             }
         }
 
+        let mut plain_source = None;
         let (lyrics, match_summary) = match best_index {
             Some(index) => {
                 let data = &json[index];
@@ -542,7 +553,13 @@ async fn fetch_lyrics_from_url(
                         "Found plain lyrics for {}, converting to unsynced format",
                         candidate.description
                     );
-                    convert_plain_lyrics_to_lines(plain_lyrics)
+                    let duration = data["duration"].as_f64().unwrap_or(0.0);
+                    plain_source = Some(PlainSource {
+                        track: track.to_string(),
+                        artist: artist.to_string(),
+                        duration,
+                    });
+                    timing::estimate_plain(plain_lyrics, duration)
                 } else {
                     Vec::new()
                 };
@@ -561,6 +578,7 @@ async fn fetch_lyrics_from_url(
             candidate,
             lyrics,
             score: best_score,
+            plain_source,
         })
     };
 
@@ -646,11 +664,10 @@ pub async fn fetch_lyrics(
             fast_candidates.len()
         );
 
-        if let Ok((winner, lyrics)) = execute_staged_search(fast_candidates, &run).await {
-            info!("Fast path success with: {}", winner.description);
+        if let Ok(result) = execute_staged_search(fast_candidates, &run).await {
+            info!("Fast path success with: {}", result.candidate.description);
             llm_handle.abort(); // Cancel LLM - we don't need it
-            cache_lyrics(&artist_name, &track_name, lyrics.clone());
-            return Ok(lyrics);
+            return Ok(finish_lyrics(&artist_name, &track_name, result, &run).await);
         }
         debug!("Fast path failed, waiting for LLM results");
     }
@@ -674,10 +691,9 @@ pub async fn fetch_lyrics(
     }
 
     match execute_staged_search(full_candidates, &run).await {
-        Ok((winner, lyrics)) => {
-            info!("Search success with: {}", winner.description);
-            cache_lyrics(&artist_name, &track_name, lyrics.clone());
-            Ok(lyrics)
+        Ok(result) => {
+            info!("Search success with: {}", result.candidate.description);
+            Ok(finish_lyrics(&artist_name, &track_name, result, &run).await)
         }
         Err(e) if run.incomplete.load(Ordering::Relaxed) => {
             warn!(
@@ -695,6 +711,64 @@ pub async fn fetch_lyrics(
             Err(format!("No lyrics found: {}", e))
         }
     }
+}
+
+/// Cache real timing; for a plain-only hit, try to upgrade it to a synced LRCLIB
+/// entry of the same recording first. Estimates are never cached, so a later
+/// play can still pick up real timing.
+async fn finish_lyrics(
+    artist_name: &str,
+    track_name: &str,
+    result: LyricsFetchResult,
+    run: &SearchRun,
+) -> Vec<LyricLine> {
+    let Some(src) = result.plain_source else {
+        cache_lyrics(artist_name, track_name, result.lyrics.clone());
+        return result.lyrics;
+    };
+    match find_synced_alternative(&src, run).await {
+        Some(lrc) => {
+            let lyrics = parse_lrc_format(&lrc);
+            if lyrics.is_empty() {
+                return result.lyrics;
+            }
+            info!("Upgraded plain lyrics to a synced LRCLIB entry for '{}'", src.track);
+            cache_lyrics(artist_name, track_name, lyrics.clone());
+            lyrics
+        }
+        None => {
+            info!("No synced timing for '{}'; returning estimated timing (not cached)", src.track);
+            result.lyrics
+        }
+    }
+}
+
+/// Other LRCLIB entries of the same song, under LRCLIB's own spelling of it,
+/// filtered to a synced one of the same recording.
+async fn find_synced_alternative(src: &PlainSource, run: &SearchRun) -> Option<String> {
+    if src.duration <= 0.0 {
+        return None;
+    }
+    let url = format!(
+        "https://lrclib.net/api/search?track_name={}&artist_name={}",
+        urlencoding::encode(&src.track),
+        urlencoding::encode(&src.artist)
+    );
+    if !run.tried.lock().unwrap().insert(url.clone()) {
+        return None;
+    }
+    let timeout = Duration::from_secs(PER_REQUEST_TIMEOUT_SECS);
+    let resp = lrclib_get(get_lyrics_http_client(), &url, timeout).await.ok()?;
+    let results: Vec<serde_json::Value> = resp.error_for_status().ok()?.json().await.ok()?;
+    let found = timing::pick_synced_alternative(&results, src.duration);
+    debug!(
+        "Synced alternative for '{}' by '{}' ({} results): {}",
+        src.track,
+        src.artist,
+        results.len(),
+        found.is_some()
+    );
+    found
 }
 
 /// Build all search candidates with proper priority and error handling
@@ -879,7 +953,7 @@ fn add_wildcard_only_candidate(
 async fn execute_staged_search(
     mut candidates: Vec<LyricsCandidate>,
     run: &SearchRun,
-) -> Result<(LyricsCandidate, Vec<LyricLine>)> {
+) -> Result<LyricsFetchResult> {
     const MIN_ACCEPTABLE_SCORE: f32 = 0.6;
     // Sort candidates by priority (highest first)
     candidates.sort_by_key(|c| std::cmp::Reverse(c.priority));
@@ -932,7 +1006,7 @@ async fn execute_staged_search(
                     result.candidate.description
                 );
                 if result.score >= MIN_ACCEPTABLE_SCORE {
-                    return Ok((result.candidate, result.lyrics));
+                    return Ok(result);
                 }
                 warn!(
                     "Stage {} best match score {:.2} below threshold {:.2}: {}",
@@ -1158,47 +1232,29 @@ pub fn parse_lrc_format(lrc_content: &str) -> Vec<LyricLine> {
     lyrics
 }
 
-pub fn convert_plain_lyrics_to_lines(plain_lyrics: &str) -> Vec<LyricLine> {
-    let mut lyrics = Vec::new();
-    let lines: Vec<&str> = plain_lyrics.lines().collect();
-
-    // Create unsynced lyrics with placeholder timing (5 seconds per line)
-    for (index, line) in lines.iter().enumerate() {
-        let text = line.trim();
-        if !text.is_empty() {
-            lyrics.push(LyricLine {
-                time: (index as f64) * 5.0, // 5 seconds per line
-                text: text.to_string(),
-                duration: Some(5.0),
-            });
-        }
-    }
-
-    lyrics
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
 
     #[test]
-    fn record_prefers_synced_then_plain_then_nothing() {
+    fn exact_path_takes_only_real_synced_records() {
         let synced = json!({
             "syncedLyrics": "[00:01.00]a\n[00:02.00]b\n[00:03.00]c",
             "plainLyrics": "x"
         });
-        assert_eq!(lyrics_from_record(&synced).unwrap()[0].text, "a");
+        assert_eq!(synced_from_record(&synced).unwrap()[0].text, "a");
 
+        // Plain-only goes to the search path (upgrade or uncached estimate).
         let plain = json!({"syncedLyrics": "  ", "plainLyrics": "one\ntwo\nthree"});
-        assert_eq!(lyrics_from_record(&plain).unwrap().len(), 3);
+        assert!(synced_from_record(&plain).is_none());
 
         // A real junk record that /api/get returned for a popular song.
         let junk = json!({"syncedLyrics": "[00:00.00]probe", "plainLyrics": "probe"});
-        assert!(lyrics_from_record(&junk).is_none());
+        assert!(synced_from_record(&junk).is_none());
 
         let instrumental = json!({"instrumental": true, "syncedLyrics": null, "plainLyrics": null});
-        assert!(lyrics_from_record(&instrumental).is_none());
+        assert!(synced_from_record(&instrumental).is_none());
     }
 
     #[test]
