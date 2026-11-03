@@ -697,6 +697,7 @@ pub fn parse_lrc_format(lrc_content: &str) -> Vec<LyricLine> {
                 time: num(1) * 60.0 + num(2) + num(3) / 100.0,
                 text,
                 duration: None,
+                words: None,
             })
         })
         .collect();
