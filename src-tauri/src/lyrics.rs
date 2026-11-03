@@ -790,28 +790,41 @@ async fn resolve<E: Effects>(
             let pending = upgrade.is_some();
             Ok((TimedLyrics { lines: estimate, source: TimingSource::LrclibEstimate, pending }, upgrade))
         }
-        Lrclib::Missing { error, cached } => {
-            // Without a length there is no telling the right recording apart.
-            if let Some(duration) = req.duration.filter(|_| extra) {
-                let q = sources::Query {
-                    track: clean_track_name_sync(&req.title),
-                    artist: req.artist.clone(),
-                    duration,
-                };
-                if let Some(found) = fx.sources(&q, None).await {
-                    let source = TimingSource::from(found.provider);
-                    info!("LRCLIB had nothing for '{}'; {} did", req.title, source.as_str());
-                    fx.save(&req.artist, &req.title, &found.lines, source);
-                    return Ok((TimedLyrics { lines: found.lines, source, pending: false }, None));
-                }
-            }
-            if !cached {
-                fx.save_none(&req.artist, &req.title);
-            }
-            Err(error)
-        }
-        Lrclib::Unavailable(error) => Err(error),
+        Lrclib::Missing { error, cached } => fallback(fx, req, extra, error, !cached).await,
+        // LRCLIB failed to answer (e.g. 503 on search). That is exactly when the
+        // extra sources are worth asking, but never remember "no lyrics":
+        // LRCLIB didn't say so.
+        Lrclib::Unavailable(error) => fallback(fx, req, extra, error, false).await,
     }
+}
+
+/// LRCLIB has no usable answer: try the extra sources (if enabled), else fail,
+/// remembering the miss only when `remember_none`.
+async fn fallback<E: Effects>(
+    fx: &E,
+    req: &Request,
+    extra: bool,
+    error: String,
+    remember_none: bool,
+) -> Result<(TimedLyrics, Option<Upgrade>), String> {
+    // Without a length there is no telling the right recording apart.
+    if let Some(duration) = req.duration.filter(|_| extra) {
+        let q = sources::Query {
+            track: clean_track_name_sync(&req.title),
+            artist: req.artist.clone(),
+            duration,
+        };
+        if let Some(found) = fx.sources(&q, None).await {
+            let source = TimingSource::from(found.provider);
+            info!("LRCLIB had no answer for '{}'; {} did", req.title, source.as_str());
+            fx.save(&req.artist, &req.title, &found.lines, source);
+            return Ok((TimedLyrics { lines: found.lines, source, pending: false }, None));
+        }
+    }
+    if remember_none {
+        fx.save_none(&req.artist, &req.title);
+    }
+    Err(error)
 }
 
 /// Look up LRCLIB's spelling of the song, for the length being played.
@@ -1598,14 +1611,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sources_stay_off_without_the_setting_a_length_or_a_working_lrclib() {
+    async fn sources_stay_off_without_the_setting_or_a_length() {
         let fx = Fake::answering(Provider::Qq);
         assert!(resolve(&fx, &req(), missing(), false).await.is_err());
         let no_length = Request::new("Koi".into(), "Minori".into(), None);
         assert!(resolve(&fx, &no_length, missing(), true).await.is_err());
-        assert!(resolve(&fx, &req(), Lrclib::Unavailable("down".into()), true).await.is_err());
         assert!(fx.calls().is_empty());
         assert!(fx.saved().is_empty());
+    }
+
+    #[tokio::test]
+    async fn lrclib_down_falls_back_to_sources_but_never_caches_a_miss() {
+        // LRCLIB answering 503 is exactly when the extra sources should help.
+        let fx = Fake::answering(Provider::Qq);
+        let (timed, _) = resolve(&fx, &req(), Lrclib::Unavailable("down".into()), true).await.unwrap();
+        assert_eq!(timed.source, TimingSource::Qq);
+        assert_eq!(fx.saved(), vec![TimingSource::Qq]);
+
+        // Nobody answers: an error, and no "no lyrics" entry (LRCLIB never said so).
+        let fx = Fake::default();
+        assert!(resolve(&fx, &req(), Lrclib::Unavailable("down".into()), true).await.is_err());
+        assert_eq!(fx.calls().len(), 1);
+        assert_eq!(*fx.saved_none.lock().unwrap(), 0);
     }
 
     #[test]
