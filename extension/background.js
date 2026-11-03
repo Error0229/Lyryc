@@ -25,6 +25,11 @@ function connectToDesktopApp() {
       console.log('🟢 [Background] ✅ Connected to desktop app via WebSocket');
       isConnectedToApp = true;
       reconnectAttempts = 0;
+
+      // The app may have started mid-song: tell it what is playing right now.
+      if (currentTrack) {
+        sendTrackToApp(currentTrack, currentTrack.isPlaying === false ? 'TRACK_PAUSED' : 'TRACK_DETECTED');
+      }
       
       // Send ping to keep connection alive (only create one interval)
       if (!pingInterval) {
@@ -236,11 +241,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     
     sendResponse({ success: true });
   } else if (message.type === 'TRACK_PROGRESS') {
-    if (currentTrack) {
-      // Update current track with progress data (preserve explicit isPlaying from content script)
-      currentTrack = { ...currentTrack, ...message.data };
-      sendTrackToApp(currentTrack, 'TRACK_PROGRESS');
-    }
+    // Progress carries the full track. Adopt it even if we have none: Chrome
+    // restarts idle service workers, which wipes currentTrack mid-song.
+    currentTrack = { ...currentTrack, ...message.data };
+    sendTrackToApp(currentTrack, 'TRACK_PROGRESS');
     
     sendResponse({ success: true });
   }
@@ -274,7 +278,21 @@ chrome.runtime.onStartup.addListener(() => {
 chrome.runtime.onInstalled.addListener(() => {
   console.log('🟢 [Background] Extension installed - connecting to desktop app');
   connectToDesktopApp();
+  injectIntoOpenTabs();
 });
+
+// Manifest content scripts only reach pages loaded after install/reload. Inject
+// them into music tabs that were already open, so no page refresh is needed.
+async function injectIntoOpenTabs() {
+  for (const { matches, js } of chrome.runtime.getManifest().content_scripts) {
+    const tabs = await chrome.tabs.query({ url: matches });
+    for (const tab of tabs) {
+      chrome.scripting
+        .executeScript({ target: { tabId: tab.id }, files: js })
+        .catch((e) => console.log('🟡 [Background] Could not inject into tab', tab.id, e.message));
+    }
+  }
+}
 
 // Also try to connect when service worker starts
 console.log('🟢 [Background] Service worker started - connecting to desktop app');

@@ -6,7 +6,9 @@ use crate::types::LyricLine;
 use anyhow::{anyhow, Result};
 use log::{debug, info, warn};
 use reqwest::Client;
-use std::sync::{Arc, OnceLock};
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tokio::{task::JoinSet, time::timeout};
 use tokio_util::sync::CancellationToken;
@@ -28,6 +30,17 @@ const STAGE_TIMEOUT_SECS: u64 = 15;
 
 // Shared HTTP client instance for lyrics fetching
 static LYRICS_HTTP_CLIENT: OnceLock<Arc<Client>> = OnceLock::new();
+
+/// State shared by every search stage of one `fetch_lyrics` call.
+#[derive(Default)]
+struct SearchRun {
+    /// URLs already requested. The LLM path re-derives most of the fast path's
+    /// candidates; asking LRCLIB the same question twice is pointless.
+    tried: Mutex<HashSet<String>>,
+    /// Some request never got an answer (HTTP error, network, timeout), so
+    /// "nothing found" is not trustworthy and must not be negative-cached.
+    incomplete: AtomicBool,
+}
 
 /// Get shared HTTP client with connection pooling for lyrics
 fn get_lyrics_http_client() -> &'static Arc<Client> {
@@ -158,7 +171,7 @@ impl SearchParameters {
                     );
                 } else {
                     // Combined cleaning didn't clean the track, fall back to track-only cleaning
-                    warn!(
+                    debug!(
                         "Combined cleaning didn't clean track '{}', falling back to track-only cleaning",
                         self.track_name
                     );
@@ -478,6 +491,7 @@ pub async fn fetch_lyrics(
     fast_params.populate_regex_only();
 
     // Build fast path candidates (only highest priority - stages 1-2)
+    let run = SearchRun::default();
     let fast_candidates = build_search_candidates(&fast_params)?;
     let fast_candidates: Vec<_> = fast_candidates
         .into_iter()
@@ -491,7 +505,7 @@ pub async fn fetch_lyrics(
             fast_candidates.len()
         );
 
-        if let Ok((winner, lyrics)) = execute_staged_search(fast_candidates).await {
+        if let Ok((winner, lyrics)) = execute_staged_search(fast_candidates, &run).await {
             info!("Fast path success with: {}", winner.description);
             llm_handle.abort(); // Cancel LLM - we don't need it
             cache_lyrics(&artist_name, &track_name, lyrics.clone());
@@ -518,11 +532,18 @@ pub async fn fetch_lyrics(
         return Err("No valid search candidates".to_string());
     }
 
-    match execute_staged_search(full_candidates).await {
+    match execute_staged_search(full_candidates, &run).await {
         Ok((winner, lyrics)) => {
             info!("Search success with: {}", winner.description);
             cache_lyrics(&artist_name, &track_name, lyrics.clone());
             Ok(lyrics)
+        }
+        Err(e) if run.incomplete.load(Ordering::Relaxed) => {
+            warn!(
+                "Lyrics lookup for '{}' by '{}' incomplete (some LRCLIB requests failed); not caching: {}",
+                track_name, artist_name, e
+            );
+            Err(format!("Lyrics service unavailable, try again later: {}", e))
         }
         Err(e) => {
             warn!(
@@ -716,6 +737,7 @@ fn add_wildcard_only_candidate(
 /// Execute search in priority stages - higher priority stages complete before lower ones
 async fn execute_staged_search(
     mut candidates: Vec<LyricsCandidate>,
+    run: &SearchRun,
 ) -> Result<(LyricsCandidate, Vec<LyricLine>)> {
     const MIN_ACCEPTABLE_SCORE: f32 = 0.6;
     // Sort candidates by priority (highest first)
@@ -757,10 +779,11 @@ async fn execute_staged_search(
         // Limit candidates per stage to avoid excessive API calls
         let limited_candidates: Vec<_> = stage_candidates
             .into_iter()
+            .filter(|c| run.tried.lock().unwrap().insert(c.url.clone()))
             .take(MAX_CANDIDATES_PER_STAGE)
             .collect();
 
-        match execute_concurrent_stage(limited_candidates).await {
+        match execute_concurrent_stage(limited_candidates, run).await {
             Ok(result) => {
                 info!(
                     "Stage {} succeeded with: {}",
@@ -789,7 +812,10 @@ async fn execute_staged_search(
 }
 
 /// Execute all candidates in a stage concurrently, return first successful result
-async fn execute_concurrent_stage(candidates: Vec<LyricsCandidate>) -> Result<LyricsFetchResult> {
+async fn execute_concurrent_stage(
+    candidates: Vec<LyricsCandidate>,
+    run: &SearchRun,
+) -> Result<LyricsFetchResult> {
     if candidates.is_empty() {
         return Err(anyhow!("No candidates in stage"));
     }
@@ -838,13 +864,19 @@ async fn execute_concurrent_stage(candidates: Vec<LyricsCandidate>) -> Result<Ly
             }
             Ok(Some(Ok(Err(e)))) => {
                 debug!("Candidate failed: {}", e);
+                run.incomplete.store(true, Ordering::Relaxed);
             }
             Ok(Some(Err(e))) => {
                 debug!("Task join error: {}", e);
+                run.incomplete.store(true, Ordering::Relaxed);
             }
             Ok(None) => break,
             Err(_) => break,
         }
+    }
+    // Requests still running when the stage deadline hit never answered.
+    if !set.is_empty() {
+        run.incomplete.store(true, Ordering::Relaxed);
     }
 
     // Cleanup

@@ -45,9 +45,11 @@ pub fn run() {
     }
 
     // Initialize logger
-    env_logger::Builder::from_default_env()
-        .filter_level(log::LevelFilter::Debug)
-        .init();
+    // RUST_LOG overrides. tao's event-loop warnings are upstream noise.
+    env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("info,lyryc_lib=debug,tao=error"),
+    )
+    .init();
 
     info!("Starting Lyryc application...");
 

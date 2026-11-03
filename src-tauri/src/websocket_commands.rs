@@ -1,17 +1,8 @@
 use crate::types::{TrackInfo, TrackState, WebSocketState};
 use crate::websocket::{create_websocket_server, TrackUpdate};
-use log::{debug, error, info, warn};
-use std::collections::HashSet;
-use std::sync::{Arc, OnceLock};
+use log::{error, info, warn};
+use std::sync::{Arc, Mutex as StdMutex};
 use tauri::{Emitter, State};
-use tokio::sync::RwLock as TokioRwLock;
-
-// Track processing guard to prevent duplicate processing
-static PROCESSING_TRACKS: OnceLock<Arc<TokioRwLock<HashSet<String>>>> = OnceLock::new();
-
-fn get_processing_guard() -> &'static Arc<TokioRwLock<HashSet<String>>> {
-    PROCESSING_TRACKS.get_or_init(|| Arc::new(TokioRwLock::new(HashSet::new())))
-}
 
 #[tauri::command]
 pub async fn init_extension_connection(
@@ -31,75 +22,36 @@ pub async fn init_extension_connection(
         let mut ws_server = create_websocket_server();
         let app_handle_clone = app_handle.clone();
         let track_state_clone = track_state.inner().clone();
+        // (title, artist) we last announced. Checked synchronously so messages are
+        // judged in arrival order. Any message may introduce the track, so opening
+        // the app mid-song, or the extension restarting, picks it up at once.
+        let last_track: Arc<StdMutex<Option<(String, String)>>> = Arc::default();
         ws_server.set_track_callback(move |track_update: TrackUpdate| {
-            let track_info = TrackInfo {
-                title: track_update.title.clone(),
-                artist: track_update.artist.clone(),
-                album: None,
-                duration: track_update.duration,
-                thumbnail: track_update.thumbnail.clone(),
+            let key = (track_update.title.clone(), track_update.artist.clone());
+            let changed = !key.0.trim().is_empty() && {
+                let mut last = last_track.lock().unwrap();
+                let changed = last.as_ref() != Some(&key);
+                *last = Some(key);
+                changed
             };
 
-            // Check for track changes and emit track-updated only when track actually changes
-            let track_state_for_callback = track_state_clone.clone();
-            let app_handle_for_track = app_handle_clone.clone();
-            let track_info_for_check = track_info.clone();
-            tokio::spawn(async move {
-                if track_update.current_time.is_none() || track_update.current_time == Some(0.0) {
-                    // Create unique track identifier for deduplication
-                    let track_key = format!(
-                        "{}:{}",
-                        track_info_for_check.title, track_info_for_check.artist
-                    );
-
-                    // Prevent concurrent processing of the same track
-                    let processing_guard = get_processing_guard();
-                    {
-                        let mut processing_tracks = processing_guard.write().await;
-                        if processing_tracks.contains(&track_key) {
-                            debug!("Track already being processed, skipping: {}", track_key);
-                            return;
-                        }
-                        processing_tracks.insert(track_key.clone());
-                    }
-
-                    let _result = async {
-                        let mut current_track_guard = track_state_for_callback.lock().await;
-                        let should_emit = match &*current_track_guard {
-                            Some(existing_track) => {
-                                // Only emit if track title or artist changed
-                                existing_track.title != track_info_for_check.title
-                                    || existing_track.artist != track_info_for_check.artist
-                            }
-                            None => true, // First track
-                        };
-
-                        if should_emit {
-                            info!(
-                                "Track changed: '{}' by '{}'",
-                                track_info_for_check.title, track_info_for_check.artist
-                            );
-                            *current_track_guard = Some(track_info_for_check.clone());
-                            drop(current_track_guard); // Release lock before emit
-
-                            if let Err(e) =
-                                app_handle_for_track.emit("track-updated", &track_info_for_check)
-                            {
-                                error!("Failed to emit track-updated event: {}", e);
-                            }
-                        } else {
-                            debug!("Track duplicate detected, skipping emit");
-                        }
-                    }
-                    .await;
-
-                    // Cleanup: Remove from processing set
-                    {
-                        let mut processing_tracks = processing_guard.write().await;
-                        processing_tracks.remove(&track_key);
-                    }
+            if changed {
+                let track_info = TrackInfo {
+                    title: track_update.title.clone(),
+                    artist: track_update.artist.clone(),
+                    album: None,
+                    duration: track_update.duration,
+                    thumbnail: track_update.thumbnail.clone(),
+                };
+                info!("Track changed: '{}' by '{}'", track_info.title, track_info.artist);
+                if let Err(e) = app_handle_clone.emit("track-updated", &track_info) {
+                    error!("Failed to emit track-updated event: {}", e);
                 }
-            });
+                let track_state = track_state_clone.clone();
+                tokio::spawn(async move {
+                    *track_state.lock().await = Some(track_info);
+                });
+            }
 
             // Always emit playback state and time updates (they change frequently)
             if let Err(e) = app_handle_clone.emit("playback-state", &track_update.is_playing) {

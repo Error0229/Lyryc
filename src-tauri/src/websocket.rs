@@ -164,7 +164,15 @@ async fn handle_connection(
     clients: ClientConnections,
     track_callback: Option<Arc<dyn Fn(TrackUpdate) + Send + Sync>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let ws_stream = accept_async(raw_stream).await?;
+    let ws_stream = match accept_async(raw_stream).await {
+        Ok(stream) => stream,
+        Err(e) => {
+            // Dev tools and port scanners probe local ports with plain HTTP and TLS.
+            // That is not our client and not our error.
+            debug!("Ignoring non-WebSocket connection from {}: {}", addr, e);
+            return Ok(());
+        }
+    };
     let client_id = Uuid::new_v4().to_string();
 
     info!("New WebSocket connection: {} with ID: {}", addr, client_id);
