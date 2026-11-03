@@ -9,7 +9,7 @@ import { useSession, type Session } from "../state/session";
 import { useSettings } from "../state/settings";
 import { Toaster } from "../ui/Toast";
 import { Controls } from "./Controls";
-import { useBackendEvents, useFitWindow, useFurigana, usePrealignSync, useTranslations } from "./hooks";
+import { useBackendEvents, useFitWindow, useFurigana, useSettingsMirror, useTranslations } from "./hooks";
 import { LineView } from "./Line";
 import { lineModel } from "./model";
 import { Stage, useActiveLine, useRetiming } from "./Stage";
@@ -44,6 +44,7 @@ function statusText(s: Pick<Session, "track" | "status">): { title: string; hint
   if (!s.track) return { title: "Play something in your browser", hint: "Lyrics appear here · Ctrl+Shift+D toggles click-through" };
   if (s.status === "loading") return { title: `Finding lyrics for “${s.track.title}”` };
   if (s.status === "missing") return { title: "No synced lyrics for this track", hint: `${s.track.title} — ${s.track.artist}` };
+  if (s.status === "instrumental") return { title: "Instrumental ♪", hint: `${s.track.title} — ${s.track.artist}` };
   return { title: s.track.title, hint: s.track.artist };
 }
 
@@ -81,7 +82,7 @@ function Status({ title, hint, pulse }: { title: string; hint?: string; pulse: b
 
 export function Overlay() {
   useBackendEvents();
-  usePrealignSync();
+  useSettingsMirror();
   useTranslations();
 
   const s = useSession();

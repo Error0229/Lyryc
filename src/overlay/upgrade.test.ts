@@ -37,6 +37,11 @@ describe("accepts", () => {
     expect(accepts({ track: song, source: "aligned" }, { track: song, source: "aligned" })).toBe(true);
   });
 
+  it("lets no background answer undo an instrumental mark", () => {
+    expect(accepts({ track: song, source: "instrumental" }, { track: song, source: "aligned" })).toBe(false);
+    expect(accepts({ track: song, source: "instrumental" }, { track: song, source: "qq" })).toBe(false);
+  });
+
   it("treats YouTube Music's plain lyrics as an estimate too", () => {
     expect(accepts({ track: song, source: "ytmusic-estimate" }, { track: song, source: "qq" })).toBe(true);
     expect(accepts({ track: song, source: "ytmusic" }, { track: song, source: "ytmusic-estimate" })).toBe(false);

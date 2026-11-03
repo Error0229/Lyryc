@@ -249,7 +249,10 @@ async fn handle_connection(
                                 error!("Failed to parse TrackUpdate from: {}", extension_msg.data);
                             }
                         }
-                        "UPCOMING_TRACKS" => crate::prealign::on_upcoming(&extension_msg.data),
+                        "UPCOMING_TRACKS" => {
+                            crate::lyrics::on_upcoming(&extension_msg.data);
+                            crate::prealign::on_upcoming(&extension_msg.data);
+                        }
                         "ping" => {
                             let pong_msg = ExtensionMessage {
                                 message_type: "pong".to_string(),

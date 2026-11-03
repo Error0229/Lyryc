@@ -1,6 +1,6 @@
 /** Hover-revealed mini controls for the overlay strip. */
 import { motion } from "motion/react";
-import { EyeOff, GripVertical, Languages, Minus, Pause, Play, Plus, SearchCheck, Settings2, SkipBack, SkipForward } from "lucide-react";
+import { EyeOff, GripVertical, Languages, Minus, Music4, Pause, Play, Plus, SearchCheck, Settings2, SkipBack, SkipForward } from "lucide-react";
 import { spring, fade } from "../design/motion";
 import { formatOffset, NUDGE_STEP, trackKey } from "../lib/offset";
 import { backend } from "../services/ipc/backend";
@@ -8,7 +8,7 @@ import { useSession } from "../state/session";
 import { settings, useSettings } from "../state/settings";
 import { openSettings } from "../state/nav";
 import { IconButton } from "../ui/IconButton";
-import { refetchLyrics } from "./actions";
+import { markInstrumental, refetchLyrics } from "./actions";
 import { playhead } from "./playhead";
 
 const Divider = () => <span aria-hidden className="mx-1 h-4 w-px bg-glass-line" />;
@@ -45,6 +45,7 @@ export function Controls() {
   const playing = useSession((s) => s.playing);
   const translating = useSettings((s) => s.translation.enabled);
   const refetching = useSession((s) => s.refetching);
+  const instrumental = useSession((s) => s.status === "instrumental");
 
   return (
     <motion.div
@@ -82,6 +83,15 @@ export function Controls() {
               disabled={refetching}
               className={refetching ? "animate-pulse" : undefined}
               onClick={() => void refetchLyrics()}
+            />
+            <IconButton
+              tone="glass"
+              tooltip={false}
+              label={instrumental ? "Not instrumental? Search for lyrics" : "Mark as instrumental (no lyrics, never looked up again)"}
+              aria-pressed={instrumental}
+              icon={<Music4 />}
+              disabled={refetching}
+              onClick={() => (instrumental ? void refetchLyrics() : markInstrumental())}
             />
           </>
         )}

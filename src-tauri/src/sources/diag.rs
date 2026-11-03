@@ -58,6 +58,7 @@ impl Identity {
             album: None,
             duration_s: None,
             isrc: None,
+            instrumental: false,
             confidence: 1.0,
             evidence_urls: vec![],
         })

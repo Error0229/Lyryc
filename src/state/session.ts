@@ -6,7 +6,7 @@
 import { create } from "zustand";
 import type { LyricLine, LyricsSource, Span, Track } from "../lib/types";
 
-export type LyricsStatus = "idle" | "loading" | "ready" | "missing";
+export type LyricsStatus = "idle" | "loading" | "ready" | "missing" | "instrumental";
 
 export interface Session {
   track: Track | null;

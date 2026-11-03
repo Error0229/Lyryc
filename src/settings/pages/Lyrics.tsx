@@ -59,6 +59,7 @@ export function LyricsPage() {
   const wordHighlight = useSettings((s) => s.wordHighlight);
   const extraSources = useSettings((s) => s.extraSources);
   const identifyWithSearch = useSettings((s) => s.identifyWithSearch);
+  const lookahead = useSettings((s) => s.lookahead);
   const canSearch = useIdentifySearchSupport();
   const { globalOffset, trackOffsets } = useSettings((s) => s.sync);
   const track = useCurrentTrack();
@@ -91,6 +92,12 @@ export function LyricsPage() {
           }
         >
           <Switch label="Identify songs with web search" checked={identifyWithSearch} onChange={settings.setIdentifyWithSearch} />
+        </Row>
+        <Row
+          label="Prepare lyrics for upcoming songs"
+          hint="YouTube Music: looks up the next songs in your queue while this one plays, so their lyrics appear the moment they start. Uses the same lookups a song gets when it plays, never the paid web search."
+        >
+          <Switch label="Prepare lyrics for upcoming songs" checked={lookahead} onChange={settings.setLookahead} />
         </Row>
         <WordTiming />
       </Section>

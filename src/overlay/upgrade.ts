@@ -14,13 +14,15 @@ export function sameTrack(a: Named | null, b: Named | null): boolean {
 /**
  * Lyrics are for the track on screen, never trade real timing for an
  * estimate, and never trade word timing for line timing. The last two cover
- * a background upgrade that lands before the answer it replaces.
+ * a background upgrade that lands before the answer it replaces. Nothing
+ * replaces "instrumental" (the user may have said so); "Search again" can.
  */
 export function accepts(
   current: { track: Named | null; source: LyricsSource | null },
   incoming: { track: Named; source: LyricsSource },
 ): boolean {
   if (!sameTrack(current.track, incoming.track)) return false;
+  if (current.source === "instrumental") return false;
   if (current.source === "aligned") return incoming.source === "aligned";
   return !(isEstimate(incoming.source) && current.source !== null && !isEstimate(current.source));
 }

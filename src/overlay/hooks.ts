@@ -36,15 +36,20 @@ export function useBackendEvents() {
 }
 
 /**
- * Mirror the word-level timing settings to the backend, which keeps no copy:
- * on start and on every change (also from the settings window, via storage).
+ * Mirror the settings the backend acts on by itself (word-level timing, the
+ * lookahead) to it, which keeps no copy: on start and on every change (also
+ * from the settings window, via storage).
  */
-export function usePrealignSync() {
+export function useSettingsMirror() {
   const prealign = useSettings((s) => s.prealign);
+  const lookahead = useSettings((s) => s.lookahead);
   const extraSources = useSettings((s) => s.extraSources);
   useEffect(() => {
     backend.prealignConfigure(prealign, extraSources).catch(log("prealign_configure"));
   }, [prealign, extraSources]);
+  useEffect(() => {
+    backend.lookaheadConfigure(lookahead, extraSources).catch(log("lookahead_configure"));
+  }, [lookahead, extraSources]);
 }
 
 /** Translate when the lyric *text* or the translation prefs change; retiming alone does not. */

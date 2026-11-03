@@ -40,6 +40,8 @@ export interface Backend {
    */
   fetchLyrics(track: Track, extraSources: boolean, webSearch: boolean, refetch?: boolean): Promise<TimedLyrics>;
   /** Empty when the lyrics are already in the target language. */
+  /** The user says the track has no words; "Search again" (`refetch`) undoes it. */
+  markInstrumental(track: Track): Promise<void>;
   translate(lines: LyricLine[], prefs: TranslationPrefs): Promise<Translated[]>;
   furigana(text: string): Promise<Span[]>;
   languages(): Promise<Array<[code: string, name: string]>>;
@@ -57,6 +59,8 @@ export interface Backend {
    */
   prealignConfigure(enabled: boolean, extraSources: boolean): Promise<PrealignStatus>;
   prealignStatus(): Promise<PrealignStatus>;
+  /** "Prepare lyrics for upcoming songs", mirrored like `prealignConfigure`. */
+  lookaheadConfigure(enabled: boolean, extraSources: boolean): Promise<void>;
   /** Deletes the model, runtime and yt-dlp, and turns the feature off. */
   prealignRemoveFiles(): Promise<PrealignStatus>;
   subscribe(on: Partial<BackendEvents>): () => void;
@@ -105,6 +109,8 @@ const tauriBackend: Backend = {
       videoId: t.videoId ?? null,
     }),
 
+  markInstrumental: (t) => invoke<void>("mark_instrumental", { trackName: t.title, artistName: t.artist }),
+
   async translate(lines, prefs) {
     const lyrics = lines.map(({ time, text, duration }) => ({ time, text, duration: duration ?? null }));
     const r = await invoke<TranslationResult>("translate_lyrics_command", { lyrics, config: translationConfig(prefs) });
@@ -138,6 +144,7 @@ const tauriBackend: Backend = {
 
   prealignConfigure: (enabled, extraSources) => invoke<PrealignStatus>("prealign_configure", { enabled, extraSources }),
   prealignStatus: () => invoke<PrealignStatus>("prealign_status"),
+  lookaheadConfigure: (enabled, extraSources) => invoke<void>("lookahead_configure", { enabled, extraSources }),
   prealignRemoveFiles: () => invoke<PrealignStatus>("prealign_remove_files"),
 
   subscribe(on) {

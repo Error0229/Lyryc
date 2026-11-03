@@ -75,6 +75,11 @@ export interface Settings {
    * with yt-dlp and aligns the lyrics locally. Opt-in, experimental.
    */
   prealign: boolean;
+  /**
+   * Look up the YouTube Music queue's next songs while this one plays, so
+   * their lyrics are ready when they start. Never uses paid web search.
+   */
+  lookahead: boolean;
   lyric: LyricStyle;
   translation: TranslationPrefs;
   furigana: FuriganaPrefs;
@@ -107,6 +112,7 @@ export const defaultSettings: Settings = {
   extraSources: false,
   identifyWithSearch: false,
   prealign: false,
+  lookahead: true,
   lyric: defaultLyric,
   translation: {
     enabled: false,

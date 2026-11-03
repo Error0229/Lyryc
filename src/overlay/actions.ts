@@ -45,16 +45,34 @@ export async function refetchLyrics() {
     const r = await backend.fetchLyrics(track, extraSources, identifyWithSearch, true);
     if (id !== request) return;
     if (r.source === source && textSignature(r.lines) === textSignature(lyrics)) {
-      toast({ title: "Found the same lyrics again", description: "No source has a different version of this track." });
+      toast(
+        r.source === "instrumental"
+          ? { title: "Still no lyrics found", description: "The AI also says this track has no words." }
+          : { title: "Found the same lyrics again", description: "No source has a different version of this track." },
+      );
     }
     install(r.lines, r.source);
   } catch (e) {
     if (id !== request) return;
     const title = lyrics.length ? "No other lyrics found" : "Still no lyrics for this track";
     toast({ title, description: friendlyError(e), tone: "danger" });
+    // Unmarking an instrumental that has no lyrics either: it is just missing.
+    if (!lyrics.length) useSession.setState({ status: "missing", source: null });
   } finally {
     if (id === request) useSession.setState({ refetching: false });
   }
+}
+
+/**
+ * The user says this track has no words: show it so, and never look it up
+ * again. Answers still on their way are dropped. "Search again" undoes it.
+ */
+export function markInstrumental() {
+  const { track } = useSession.getState();
+  if (!track) return;
+  ++request;
+  useSession.setState({ lyrics: [], source: "instrumental", status: "instrumental", translations: {}, refetching: false });
+  backend.markInstrumental(track).catch((e) => toast({ title: "Couldn't save that", description: friendlyError(e), tone: "danger" }));
 }
 
 /**
@@ -71,8 +89,8 @@ function install(raw: LyricLine[], source: LyricsSource) {
   const lines = normalizeLines(raw);
   useSession.setState({
     lyrics: lines,
-    source: lines.length ? source : null,
-    status: lines.length ? "ready" : "missing",
+    source: lines.length || source === "instrumental" ? source : null,
+    status: lines.length ? "ready" : source === "instrumental" ? "instrumental" : "missing",
     retimedAt: s.lyrics.length && lines.length ? performance.now() : s.retimedAt,
   });
 }

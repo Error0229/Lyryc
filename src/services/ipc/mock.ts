@@ -186,6 +186,8 @@ export const mockBackend: Backend = {
     return prealign;
   },
   prealignStatus: async () => prealign,
+  lookaheadConfigure: async () => {},
+  markInstrumental: async () => {},
   async prealignRemoveFiles() {
     setPrealign({ enabled: false, state: "off", download: null, diskBytes: 0 });
     return prealign;

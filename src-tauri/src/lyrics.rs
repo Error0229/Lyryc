@@ -22,7 +22,9 @@
 use crate::cleaning::{clean_title, normalize_name, Names};
 use crate::llm;
 use crate::prealign::{self, Served};
-use crate::lyrics_cache::{cache_lyrics, cache_no_lyrics, forget_lyrics, get_cached_lyrics, CacheResult};
+use crate::lyrics_cache::{
+    cache_instrumental, cache_lyrics, cache_no_lyrics, forget_lyrics, get_cached_lyrics, song_key, CacheResult,
+};
 use crate::llm::identify::SongIdentity;
 use crate::sources::{self, align, Found, Provider};
 use crate::timing;
@@ -34,9 +36,10 @@ use regex::Regex;
 use reqwest::{Client, StatusCode};
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
-use std::sync::{LazyLock, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock, Mutex as StdMutex, OnceLock};
 use std::time::Duration;
 use tauri::Emitter;
 
@@ -179,7 +182,7 @@ struct PlainSource {
 enum Lrclib {
     /// Real timing: a synced entry, or a plain hit upgraded to one.
     Synced(Vec<LyricLine>),
-    /// Plain lyrics only, with an estimate (never cached).
+    /// Plain lyrics only, with an estimate (cached as one).
     Plain { estimate: Vec<LyricLine>, src: PlainSource },
 }
 
@@ -277,9 +280,15 @@ struct Lookup<'a, E> {
     /// Some request got no answer, so "nothing found" is not trustworthy and
     /// must not be negative-cached.
     incomplete: bool,
+    /// LRCLIB's exact lookup matched a record marked instrumental.
+    instrumental: bool,
 }
 
-impl<E: Effects> Lookup<'_, E> {
+impl<'a, E: Effects> Lookup<'a, E> {
+    fn new(fx: &'a E, req: &'a Request) -> Self {
+        Lookup { fx, req, asked: HashMap::new(), incomplete: false, instrumental: false }
+    }
+
     async fn ask(&mut self, url: String) -> Option<Value> {
         if let Some(answer) = self.asked.get(&url) {
             return answer.clone();
@@ -308,7 +317,10 @@ impl<E: Effects> Lookup<'_, E> {
             return None;
         }
         let url = lrclib_url("get", &[("track_name", title), ("artist_name", artist), ("duration", &secs)]);
-        self.ask(url).await.filter(has_lyrics)
+        let record = self.ask(url).await?;
+        // Same names, same length: the flag is about this recording.
+        self.instrumental |= record["instrumental"].as_bool() == Some(true);
+        Some(record).filter(has_lyrics)
     }
 
     async fn search(&mut self, params: &[(&str, &str)], want: &Want) -> Option<Value> {
@@ -362,7 +374,7 @@ impl<E: Effects> Lookup<'_, E> {
                 }
             }
         }
-        info!("No synced timing for '{}'; returning estimated timing (not cached)", src.track);
+        info!("No synced timing for '{}'; returning estimated timing", src.track);
         let plain = plain_from_record(&record).unwrap_or("");
         Lrclib::Plain { estimate: timing::estimate_plain(plain, src.duration), src }
     }
@@ -401,6 +413,8 @@ pub enum TimingSource {
     YtmusicEstimate,
     /// Word-level timing from the opt-in pre-aligner (YouTube Music audio).
     Aligned,
+    /// No lyrics: the song has no words (no `lines`). Not a timing.
+    Instrumental,
 }
 
 impl TimingSource {
@@ -415,6 +429,7 @@ impl TimingSource {
             TimingSource::Ytmusic => "ytmusic",
             TimingSource::YtmusicEstimate => "ytmusic-estimate",
             TimingSource::Aligned => "aligned",
+            TimingSource::Instrumental => "instrumental",
         }
     }
 
@@ -430,6 +445,8 @@ impl TimingSource {
             Some("netease") => TimingSource::Netease,
             Some("kugou") => TimingSource::Kugou,
             Some("ytmusic") => TimingSource::Ytmusic,
+            Some("lrclib-estimate") => TimingSource::LrclibEstimate,
+            Some("ytmusic-estimate") => TimingSource::YtmusicEstimate,
             _ => TimingSource::Lrclib,
         }
     }
@@ -452,6 +469,12 @@ pub struct TimedLyrics {
     pub source: TimingSource,
     /// A `lyrics-timing-updated` event may still follow for this track.
     pub pending: bool,
+}
+
+impl TimedLyrics {
+    fn instrumental() -> Self {
+        TimedLyrics { lines: Vec::new(), source: TimingSource::Instrumental, pending: false }
+    }
 }
 
 pub const TIMING_UPDATED_EVENT: &str = "lyrics-timing-updated";
@@ -495,20 +518,30 @@ struct Upgrade {
     plain: Vec<String>,
 }
 
+/// The LLM's answer about a song.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct SongNames {
+    /// Native spelling first.
+    names: Vec<Names>,
+    /// It has no words: there are no lyrics to find.
+    instrumental: bool,
+}
+
 /// Everything the lookup does to the outside world, behind a trait so tests
 /// run it offline and count its requests.
 trait Effects: Send + Sync {
     fn cached(&self, artist: &str, track: &str) -> CacheResult;
     /// Send one LRCLIB request.
     fn lrclib(&self, url: &str) -> impl Future<Output = Reply> + Send;
-    /// The LLM's names for the song, native first; empty when it is not set
-    /// up, failed or is unsure.
-    fn names(&self, req: &Request, web_search: bool) -> impl Future<Output = Vec<Names>> + Send;
+    /// What the LLM says the song is; empty names when it is not set up,
+    /// failed or is unsure.
+    fn names(&self, req: &Request, web_search: bool) -> impl Future<Output = SongNames> + Send;
     fn sources(&self, q: &sources::Query, plain: Option<&[String]>) -> impl Future<Output = Option<Found>> + Send;
     /// YouTube Music's lyrics for the track; None when it has none or failed.
     fn ytmusic(&self, video_id: &str) -> impl Future<Output = Option<YtLyrics>> + Send;
     fn save(&self, artist: &str, track: &str, lines: &[LyricLine], source: TimingSource);
     fn save_none(&self, artist: &str, track: &str);
+    fn save_instrumental(&self, artist: &str, track: &str);
     /// The pre-aligner's word timing for these lines (`prealign::serve`).
     fn aligned(&self, _req: &Request, _lines: &[LyricLine], _source: TimingSource) -> Served {
         Served::Off
@@ -539,19 +572,20 @@ impl Effects for Live {
     /// llm-lyrics-deep: the release's own names, e.g. "Snow Country" / Yorushika
     /// -> 雪国 / ヨルシカ. With `web_search` the provider searches first (10/10
     /// hard cases in the study, ~$0.015-0.05 per song on the user's key).
-    async fn names(&self, req: &Request, web_search: bool) -> Vec<Names> {
+    async fn names(&self, req: &Request, web_search: bool) -> SongNames {
         let Some(id) = llm::identify::identify_song(&req.title, &req.artist, req.duration, web_search).await else {
-            return Vec::new();
+            return SongNames::default();
         };
         info!(
-            "Identified '{}' by '{}' as '{}' by '{}'{}",
+            "Identified '{}' by '{}' as '{}' by '{}'{}{}",
             req.title,
             req.artist,
             id.title_native,
             id.artist_native,
+            if id.instrumental { ", instrumental" } else { "" },
             if web_search { " (web search)" } else { "" }
         );
-        identified_names(&id)
+        SongNames { names: identified_names(&id), instrumental: id.instrumental }
     }
     fn sources(&self, q: &sources::Query, plain: Option<&[String]>) -> impl Future<Output = Option<Found>> + Send {
         sources::find(q, plain)
@@ -567,6 +601,9 @@ impl Effects for Live {
     }
     fn save_none(&self, artist: &str, track: &str) {
         cache_no_lyrics(artist, track);
+    }
+    fn save_instrumental(&self, artist: &str, track: &str) {
+        cache_instrumental(artist, track);
     }
     fn aligned(&self, req: &Request, lines: &[LyricLine], source: TimingSource) -> Served {
         prealign::serve(req.video_id.as_deref(), &req.title, &req.artist, req.duration, lines, !source.is_estimate())
@@ -611,7 +648,10 @@ pub async fn fetch_lyrics_timed(
         llm::identify::forget(&req.title, &req.artist);
         prealign::forget(req.video_id.as_deref());
     }
-    let (mut timed, mut upgrade) = fetch_timed(&Live, &req, extra_sources).await?;
+    let (mut timed, mut upgrade) = {
+        let _song = song_lock(&req).await;
+        fetch_timed(&Live, &req, extra_sources).await?
+    };
     if with_aligned(&Live, &req, &mut timed) {
         upgrade = None; // word timing beats anything a source could add
     }
@@ -626,6 +666,14 @@ pub async fn fetch_lyrics_timed(
         });
     }
     Ok(timed)
+}
+
+/// The user says the song has no words: remembered like a found instrumental,
+/// so no lookup runs for it again. "Search again" forgets it.
+#[tauri::command]
+pub fn mark_instrumental(track_name: String, artist_name: String) {
+    info!("Marked '{}' by '{}' instrumental", track_name, artist_name);
+    cache_instrumental(&artist_name, &track_name);
 }
 
 /// The serving hook: swap in pre-aligned timing when there is some, or mark
@@ -644,11 +692,63 @@ fn with_aligned<E: Effects>(fx: &E, req: &Request, timed: &mut TimedLyrics) -> b
     }
 }
 
+// ---------------------------------------------------------------------------
+// Looking ahead: the queue's next songs, looked up while this one plays, so
+// their lyrics come from the cache the moment they start.
+
+/// Mirrored from the overlay: "Prepare lyrics for upcoming songs".
+static AHEAD_ON: AtomicBool = AtomicBool::new(false);
+static AHEAD_EXTRA: AtomicBool = AtomicBool::new(false);
+
+/// The overlay mirrors the setting (and "Extra lyric sources") here on start
+/// and on every change; the backend keeps no copy.
+#[tauri::command]
+pub fn lookahead_configure(enabled: bool, extra_sources: bool) {
+    AHEAD_ON.store(enabled, Ordering::Relaxed);
+    AHEAD_EXTRA.store(extra_sources, Ordering::Relaxed);
+}
+
+/// `UPCOMING_TRACKS` from the extension: look up each new song once a
+/// session, one at a time, in queue order. Never with paid web search.
+pub fn on_upcoming(data: &Value) {
+    static SEEN: LazyLock<StdMutex<HashSet<String>>> = LazyLock::new(Default::default);
+    static TURN: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    if !AHEAD_ON.load(Ordering::Relaxed) {
+        return;
+    }
+    for song in prealign::upcoming(data) {
+        if !SEEN.lock().unwrap().insert(song.video_id.clone()) {
+            continue;
+        }
+        tauri::async_runtime::spawn(async move {
+            let _turn = TURN.lock().await;
+            if AHEAD_ON.load(Ordering::Relaxed) {
+                let extra = AHEAD_EXTRA.load(Ordering::Relaxed);
+                lookup_ahead(&song.video_id, &song.title, &song.artist, song.duration, extra).await;
+            }
+        });
+    }
+}
+
+/// One lookup per song at a time. A second asker (the song starts while its
+/// lookahead runs, or the pre-aligner wants it too) waits, then reads the cache.
+async fn song_lock(req: &Request) -> tokio::sync::OwnedMutexGuard<()> {
+    type Locks = HashMap<(String, String), Arc<tokio::sync::Mutex<()>>>;
+    static LOCKS: LazyLock<StdMutex<Locks>> = LazyLock::new(Default::default);
+    let lock = {
+        let mut locks = LOCKS.lock().unwrap();
+        locks.retain(|_, l| Arc::strong_count(l) > 1); // drop the idle ones
+        locks.entry(song_key(&req.artist, &req.title)).or_default().clone()
+    };
+    lock.lock_owned().await
+}
+
 /// A song that is about to play, looked up the normal way (cache, YouTube
 /// Music's own lyrics for this videoId and the other sources when enabled,
-/// LRCLIB with its budget and etiquette) for the pre-aligner. An estimate is
-/// upgraded inline when a source has real timing. The bool: real timing.
-pub async fn lookup_for_prealign(
+/// LRCLIB with its budget and etiquette), for the lookahead and the
+/// pre-aligner. An estimate is upgraded inline when a source has real timing.
+/// The bool: real timing.
+pub async fn lookup_ahead(
     video_id: &str,
     title: &str,
     artist: &str,
@@ -657,6 +757,7 @@ pub async fn lookup_for_prealign(
 ) -> Option<(Vec<LyricLine>, bool)> {
     let mut req = Request::new(title.to_string(), artist.to_string(), duration);
     req.video_id = ytmusic::is_video_id(video_id).then(|| video_id.to_string());
+    let _song = song_lock(&req).await;
     let (timed, upgrade) = fetch_timed(&Live, &req, extra_sources).await.ok()?;
     if let Some(job) = upgrade {
         if let Some(update) = run_upgrade(&Live, &req, job).await {
@@ -702,8 +803,12 @@ async fn fetch_timed<E: Effects>(
         CacheResult::Hit(lines, source) => {
             info!("Using cached lyrics for: {} by {}", req.title, req.artist);
             let source = TimingSource::from_cache(source.as_deref());
-            return Ok((TimedLyrics { lines, source, pending: false }, None));
+            // A cached estimate still hopes for real timing from the sources.
+            let upgrade = if extra && source.is_estimate() { cached_upgrade(req, &lines) } else { None };
+            let pending = upgrade.is_some();
+            return Ok((TimedLyrics { lines, source, pending }, upgrade));
         }
+        CacheResult::Instrumental => return Ok((TimedLyrics::instrumental(), None)),
         CacheResult::NegativeHit => true,
         CacheResult::Miss => false,
     };
@@ -712,20 +817,30 @@ async fn fetch_timed<E: Effects>(
     }
 
     let started = std::time::Instant::now();
-    let mut run = Lookup { fx, req, asked: HashMap::new(), incomplete: false };
+    let mut run = Lookup::new(fx, req);
     let mut found = None;
+    // The LLM or LRCLIB says the song has no words. That ends the search, except
+    // for "Search again", which doubts every earlier answer, this one too.
+    let mut instrumental = false;
+    let settled = |instrumental: bool| instrumental && !req.refetch;
     // Names the sources were already asked with (e.g. no LLM set up: always empty).
     let mut tried: Vec<Vec<Names>> = Vec::new();
     for &pass in passes(req, negative) {
-        let names = match pass {
+        let said = match pass {
             Pass::Identified { web_search } => fx.names(req, web_search).await,
-            Pass::Player | Pass::SourcesOnly => Vec::new(),
+            Pass::Player | Pass::SourcesOnly => SongNames::default(),
         };
+        instrumental |= said.instrumental;
+        if settled(instrumental) {
+            break;
+        }
+        let names = said.names;
         found = match pass {
             Pass::Player => run.regex_pass().await,
             _ => run.identified_pass(&names).await,
         };
-        if found.is_some() {
+        instrumental |= run.instrumental;
+        if found.is_some() || settled(instrumental) {
             break;
         }
         // The player's names reach the sources with every other pass.
@@ -744,6 +859,7 @@ async fn fetch_timed<E: Effects>(
         match &found {
             Some(Lrclib::Synced(_)) => "synced",
             Some(Lrclib::Plain { .. }) => "plain only",
+            None if instrumental => "instrumental",
             None if run.incomplete => "no answer",
             None => "nothing",
         },
@@ -757,9 +873,14 @@ async fn fetch_timed<E: Effects>(
             Ok((TimedLyrics { lines, source: TimingSource::Lrclib, pending: false }, None))
         }
         Some(Lrclib::Plain { estimate, src }) => {
+            fx.save(&req.artist, &req.title, &estimate, TimingSource::LrclibEstimate);
             let upgrade = if extra { upgrade_job(req, &estimate, &src) } else { None };
             let pending = upgrade.is_some();
             Ok((TimedLyrics { lines: estimate, source: TimingSource::LrclibEstimate, pending }, upgrade))
+        }
+        None if instrumental => {
+            fx.save_instrumental(&req.artist, &req.title);
+            Ok((TimedLyrics::instrumental(), None))
         }
         None if negative => Err("No lyrics found (cached)".to_string()),
         None if run.incomplete => Err("Lyrics service unavailable, try again later".to_string()),
@@ -819,7 +940,7 @@ async fn from_ytmusic<E: Effects>(
     }
 
     let text: Vec<String> = yt.lines.into_iter().map(|(_, s)| s).collect();
-    let mut run = Lookup { fx, req, asked: HashMap::new(), incomplete: false };
+    let mut run = Lookup::new(fx, req);
     let synced = if negative { None } else { run.regex_pass().await };
     if let Some(Lrclib::Synced(synced)) = synced {
         if let Some(times) = map_onto(&text, &synced, req.duration) {
@@ -828,10 +949,8 @@ async fn from_ytmusic<E: Effects>(
         }
     }
     let estimate = timing::estimate_plain(&text.join("\n"), req.duration.unwrap_or(0.0));
-    let upgrade = req.duration.map(|duration| Upgrade {
-        query: source_query(&req.title, &req.artist, &[], duration),
-        plain: text,
-    });
+    fx.save(&req.artist, &req.title, &estimate, TimingSource::YtmusicEstimate);
+    let upgrade = cached_upgrade(req, &estimate);
     let pending = upgrade.is_some();
     Some((TimedLyrics { lines: estimate, source: TimingSource::YtmusicEstimate, pending }, upgrade))
 }
@@ -852,6 +971,14 @@ fn save_real<E: Effects>(fx: &E, req: &Request, timed: Vec<(f64, String)>, sourc
     let lines = with_durations(timed.into_iter().map(|(time, text)| LyricLine { time, text, duration: None, words: None }).collect());
     fx.save(&req.artist, &req.title, &lines, source);
     TimedLyrics { lines, source, pending: false }
+}
+
+/// Real timing for estimated lines, looked up by the player's names.
+fn cached_upgrade(req: &Request, estimate: &[LyricLine]) -> Option<Upgrade> {
+    Some(Upgrade {
+        query: source_query(&req.title, &req.artist, &[], req.duration?),
+        plain: estimate.iter().map(|l| l.text.clone()).collect(),
+    })
 }
 
 /// Look up LRCLIB's spelling of the song, for the length being played.
@@ -1001,11 +1128,16 @@ mod tests {
     #[derive(Default)]
     struct Fake {
         negative_cached: bool,
+        cached_instrumental: bool,
+        cached_hit: Option<(Vec<LyricLine>, Option<String>)>,
         /// The first rule whose text is in the URL answers; otherwise 404.
         lrclib: Vec<(&'static str, Reply)>,
         names: Vec<Names>,
         /// What identification with web search finds.
         names_searched: Vec<Names>,
+        /// The LLM says the song has no words.
+        llm_instrumental: bool,
+        saved_instrumental: Mutex<u32>,
         answer: Option<Found>,
         urls: Mutex<Vec<String>>,
         llm_calls: Mutex<u32>,
@@ -1055,17 +1187,23 @@ mod tests {
 
     impl Effects for Fake {
         fn cached(&self, _artist: &str, _track: &str) -> CacheResult {
-            if self.negative_cached { CacheResult::NegativeHit } else { CacheResult::Miss }
+            match &self.cached_hit {
+                Some((lines, source)) => CacheResult::Hit(lines.clone(), source.clone()),
+                None if self.cached_instrumental => CacheResult::Instrumental,
+                None if self.negative_cached => CacheResult::NegativeHit,
+                None => CacheResult::Miss,
+            }
         }
         fn lrclib(&self, url: &str) -> impl Future<Output = Reply> + Send {
             self.urls.lock().unwrap().push(url.to_string());
             let reply = self.lrclib.iter().find(|(n, _)| url.contains(n)).map_or(Reply::NotFound, |(_, r)| r.clone());
             async move { reply }
         }
-        fn names(&self, _req: &Request, web_search: bool) -> impl Future<Output = Vec<Names>> + Send {
+        fn names(&self, _req: &Request, web_search: bool) -> impl Future<Output = SongNames> + Send {
             *self.llm_calls.lock().unwrap() += 1;
             let names = if web_search { self.names_searched.clone() } else { self.names.clone() };
-            async move { names }
+            let said = SongNames { names, instrumental: self.llm_instrumental };
+            async move { said }
         }
         fn sources(&self, q: &sources::Query, plain: Option<&[String]>) -> impl Future<Output = Option<Found>> + Send {
             self.calls.lock().unwrap().push(plain.map(<[String]>::len));
@@ -1084,10 +1222,18 @@ mod tests {
         fn save_none(&self, _artist: &str, _track: &str) {
             *self.saved_none.lock().unwrap() += 1;
         }
+        fn save_instrumental(&self, _artist: &str, _track: &str) {
+            *self.saved_instrumental.lock().unwrap() += 1;
+        }
         fn aligned(&self, _req: &Request, lines: &[LyricLine], source: TimingSource) -> Served {
             self.aligned_asked.lock().unwrap().push((source, lines.len()));
             self.prealigned.clone().unwrap_or(Served::Off)
         }
+    }
+
+    /// Four estimated lines, as the cache would hand them back.
+    fn estimate_lines() -> Vec<LyricLine> {
+        timing::estimate_plain("one\ntwo\nthree\nfour", 265.0)
     }
 
     fn req() -> Request {
@@ -1203,6 +1349,7 @@ mod tests {
             album: None,
             duration_s: Some(288.0),
             isrc: None,
+            instrumental: false,
             confidence: 0.9,
             evidence_urls: vec![],
         };
@@ -1355,7 +1502,7 @@ mod tests {
         let (timed, upgrade) = fetch_timed(&fx, &req(), true).await.unwrap();
         assert_eq!((timed.source, timed.pending, timed.lines.len()), (TimingSource::LrclibEstimate, true, 4));
         assert!(fx.calls().is_empty(), "nothing slow before answering");
-        assert!(fx.saved().is_empty(), "estimates are not cached");
+        assert_eq!(fx.saved(), vec![TimingSource::LrclibEstimate], "cached: a replay asks LRCLIB nothing");
         assert_eq!(fx.urls().len(), 3, "get, search, same-recording search");
 
         let job = upgrade.unwrap();
@@ -1365,7 +1512,7 @@ mod tests {
         assert_eq!((update.title.as_str(), update.artist.as_str()), ("Koi", "Minori"), "keyed by what was asked");
         assert_eq!(update.source, TimingSource::Qq);
         assert_eq!(fx.calls(), vec![Some(4)], "sources get LRCLIB's lines");
-        assert_eq!(fx.saved(), vec![TimingSource::Qq]);
+        assert_eq!(fx.saved(), vec![TimingSource::LrclibEstimate, TimingSource::Qq], "real timing replaces it");
     }
 
     #[tokio::test]
@@ -1390,7 +1537,63 @@ mod tests {
         let fx = Fake::default().rule("/get?", plain());
         let (_, upgrade) = fetch_timed(&fx, &req(), true).await.unwrap();
         assert!(run_upgrade(&fx, &req(), upgrade.unwrap()).await.is_none());
-        assert!(fx.saved().is_empty());
+        assert_eq!(fx.saved(), vec![TimingSource::LrclibEstimate], "only the estimate");
+    }
+
+    #[tokio::test]
+    async fn a_cached_estimate_answers_at_once_and_still_looks_for_timing() {
+        let lines = estimate_lines();
+        let fx = Fake { cached_hit: Some((lines, Some("lrclib-estimate".into()))), ..Fake::answering(Provider::Qq) };
+        let (timed, upgrade) = fetch_timed(&fx, &req(), true).await.unwrap();
+        assert_eq!((timed.source, timed.pending), (TimingSource::LrclibEstimate, true));
+        assert!(fx.urls().is_empty(), "no LRCLIB");
+        let update = run_upgrade(&fx, &req(), upgrade.unwrap()).await.unwrap();
+        assert_eq!(update.source, TimingSource::Qq);
+
+        let (_, upgrade) = fetch_timed(&fx, &req(), false).await.unwrap();
+        assert!(upgrade.is_none(), "without the sources there is nothing to upgrade from");
+    }
+
+    #[tokio::test]
+    async fn an_instrumental_by_the_llm_stops_before_the_sources_and_is_remembered() {
+        let fx = Fake { llm_instrumental: true, ..Fake::answering(Provider::Qq) }.rule("search?", json_reply(json!([])));
+        let (timed, upgrade) = fetch_timed(&fx, &req(), true).await.unwrap();
+        assert_eq!((timed.source, timed.lines.len()), (TimingSource::Instrumental, 0));
+        assert!(upgrade.is_none());
+        assert!(fx.calls().is_empty(), "no sources");
+        assert_eq!(fx.llm_calls(), 1);
+        assert_eq!((*fx.saved_instrumental.lock().unwrap(), fx.saved_none()), (1, 0));
+
+        let fx = Fake { cached_instrumental: true, ..Fake::answering(Provider::Qq) };
+        let (timed, _) = fetch_timed(&fx, &req(), true).await.unwrap();
+        assert_eq!(timed.source, TimingSource::Instrumental);
+        assert!(fx.urls().is_empty() && fx.calls().is_empty() && fx.llm_calls() == 0, "a replay does nothing");
+    }
+
+    #[tokio::test]
+    async fn lrclib_marking_the_exact_recording_instrumental_skips_the_llm() {
+        let fx = Fake::answering(Provider::Qq)
+            .rule("/get?", json_reply(json!({"instrumental": true, "syncedLyrics": null, "plainLyrics": null})));
+        let (timed, _) = fetch_timed(&fx, &req(), true).await.unwrap();
+        assert_eq!(timed.source, TimingSource::Instrumental);
+        assert_eq!(fx.llm_calls(), 0);
+        assert!(fx.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn search_again_doubts_an_instrumental_verdict_but_falls_back_to_it() {
+        let (mut req, names) = snow_country();
+        req.refetch = true;
+        let fx = Fake { llm_instrumental: true, names, ..Default::default() }
+            .rule("artist_name=%E3%83%A8", json_reply(json!([record("雪国", "ヨルシカ", 288.0, true)])))
+            .rule("search?", json_reply(json!([])));
+        let (timed, _) = fetch_timed(&fx, &req, true).await.unwrap();
+        assert_eq!(timed.source, TimingSource::Lrclib, "lyrics found despite the verdict");
+
+        let fx = Fake { llm_instrumental: true, ..Default::default() }.rule("search?", json_reply(json!([])));
+        let (timed, _) = fetch_timed(&fx, &req, true).await.unwrap();
+        assert_eq!(timed.source, TimingSource::Instrumental, "nothing found: the verdict stands");
+        assert_eq!(fx.calls().len(), 1, "but every pass ran");
     }
 
     #[tokio::test]
@@ -1465,7 +1668,7 @@ mod tests {
         let (timed, upgrade) = fetch_timed(&fx, &req, true).await.unwrap();
         assert_eq!((timed.source, timed.pending, timed.lines.len()), (TimingSource::YtmusicEstimate, true, 4));
         assert_eq!(timed.lines[0].text, "alpha line");
-        assert!(fx.saved().is_empty(), "estimates are not cached");
+        assert_eq!(fx.saved(), vec![TimingSource::YtmusicEstimate]);
         assert_eq!(fx.saved_none(), 0);
 
         let update = run_upgrade(&fx, &req, upgrade.unwrap()).await.unwrap();
@@ -1548,8 +1751,8 @@ mod tests {
             self.0.lock().unwrap().push(status);
             reply
         }
-        async fn names(&self, _req: &Request, _web_search: bool) -> Vec<Names> {
-            Vec::new()
+        async fn names(&self, _req: &Request, _web_search: bool) -> SongNames {
+            SongNames::default()
         }
         fn sources(&self, q: &sources::Query, plain: Option<&[String]>) -> impl Future<Output = Option<Found>> + Send {
             sources::find(q, plain)
@@ -1559,6 +1762,7 @@ mod tests {
         }
         fn save(&self, _artist: &str, _track: &str, _lines: &[LyricLine], _source: TimingSource) {}
         fn save_none(&self, _artist: &str, _track: &str) {}
+        fn save_instrumental(&self, _artist: &str, _track: &str) {}
     }
 
     #[tokio::test]

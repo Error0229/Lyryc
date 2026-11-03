@@ -44,7 +44,8 @@ type LyricsSource =
   | "lrclib" | "lrclib-estimate"
   | "qq" | "netease" | "kugou"
   | "ytmusic" | "ytmusic-estimate"
-  | "aligned";
+  | "aligned"
+  | "instrumental";  // the song has no words; `lines` is empty
 interface TimedLyrics {
   lines: LyricLine[];
   source: LyricsSource;
@@ -55,7 +56,15 @@ interface TimedLyrics {
 - `source: "lrclib-estimate"`: LRCLIB has only plain text; times are a
   syllable-weighted guess (~8 s median error). Show the lines, but do **not**
   drive word/line highlighting from them. `ytmusic-estimate` is the same for
-  YouTube Music's plain text.
+  YouTube Music's plain text. Estimates are cached like real timing; a cached
+  one answers at once and, with the extra sources on, still comes back
+  `pending: true` while they look for real timing.
+- `source: "instrumental"`: the LLM's identification (or LRCLIB's exact match)
+  says the recording has no words. Cached, so a replay does no lookups at all.
+  "Search again" (`refetch`) doubts it and runs every pass; it only answers
+  `instrumental` again when nothing is found. The user can also mark a track
+  by hand: `invoke("mark_instrumental", { trackName, artistName })` writes the
+  same cache entry.
 - `source: "aligned"`: word-level timing from the opt-in pre-aligner (below).
   Lines carry `words: { time, text, duration? }[]`; a word without `duration`
   runs until the next word. Lines that failed the reject rule have no `words`
@@ -89,7 +98,7 @@ cache and before LRCLIB: it is the exact track, so no title matching.
 |---|---|
 | timed lyrics | `ytmusic`, cached |
 | plain lyrics, LRCLIB synced for the song with ≥ 50% of lines matching | YouTube Music's lines with LRCLIB's times: `lrclib`, cached |
-| plain lyrics, no such timing | `ytmusic-estimate` (not cached); with a length, `pending: true` and the extra sources time YouTube Music's lines in the background |
+| plain lyrics, no such timing | `ytmusic-estimate` (cached); with a length, `pending: true` and the extra sources time YouTube Music's lines in the background |
 | nothing, or no answer | the routing above, unchanged |
 
 Two requests (`next`, then `browse`), 4 s timeout, no retries; skipped for the
@@ -121,6 +130,10 @@ The backend keeps no copy of the setting: the overlay mirrors it.
 
 ```ts
 invoke<PrealignStatus>("prealign_configure", { enabled: boolean, extraSources: boolean });
+// "Prepare lyrics for upcoming songs": UPCOMING_TRACKS songs are looked up in
+// the background (cache, YouTube Music, LRCLIB, LLM without search, sources),
+// one at a time, each once a session. Mirrored the same way.
+invoke<void>("lookahead_configure", { enabled: boolean, extraSources: boolean });
 invoke<PrealignStatus>("prealign_status");
 invoke<PrealignStatus>("prealign_remove_files"); // deletes the downloads, turns it off
 

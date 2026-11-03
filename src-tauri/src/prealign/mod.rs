@@ -162,10 +162,15 @@ pub fn on_upcoming(data: &serde_json::Value) {
     if !enabled() {
         return;
     }
-    let songs: Vec<Song> = data["upNext"].as_array().map(|a| a.iter().filter_map(song_from_json).collect()).unwrap_or_default();
+    let songs = upcoming(data);
     debug!("Pre-align: up next {:?}", songs.iter().map(|s| &s.title).collect::<Vec<_>>());
     shared().queue.set_upcoming(songs);
     P.wake.notify_one();
+}
+
+/// The songs in an `UPCOMING_TRACKS` message, next first.
+pub fn upcoming(data: &serde_json::Value) -> Vec<Song> {
+    data["upNext"].as_array().map(|a| a.iter().filter_map(song_from_json).collect()).unwrap_or_default()
 }
 
 fn song_from_json(v: &serde_json::Value) -> Option<Song> {
@@ -339,7 +344,7 @@ async fn run(job: &Job, model: &mut Option<model::Model>, verified: &mut bool) -
         Some(l) => l.clone(),
         None => {
             let extra = P.extra_sources.load(Ordering::Relaxed);
-            let (lines, real_timing) = crate::lyrics::lookup_for_prealign(&song.video_id, &song.title, &song.artist, song.duration, extra)
+            let (lines, real_timing) = crate::lyrics::lookup_ahead(&song.video_id, &song.title, &song.artist, song.duration, extra)
                 .await
                 .ok_or("no lyrics")?;
             Lyrics { lines, real_timing }

@@ -105,6 +105,11 @@ fn normalize_key(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
 }
 
+/// The cache's identity for a song: (artist, track), normalized.
+pub fn song_key(artist: &str, track: &str) -> (String, String) {
+    (normalize_key(artist), normalize_key(track))
+}
+
 /// Get current Unix timestamp
 fn now_timestamp() -> i64 {
     std::time::SystemTime::now()
@@ -120,6 +125,8 @@ pub enum CacheResult {
     Hit(Vec<LyricLine>, Option<String>),
     /// Cached as "no lyrics available" (negative cache)
     NegativeHit,
+    /// Known to have no words at all: nothing to look for.
+    Instrumental,
     /// Not in cache or cache unavailable
     Miss,
 }
@@ -162,8 +169,12 @@ pub fn get_cached_lyrics(artist: &str, track: &str) -> CacheResult {
                 }
             }
         }
+        Ok((None, Some(source))) if source == INSTRUMENTAL => {
+            debug!("Cache HIT for '{}' by '{}': instrumental", track, artist);
+            CacheResult::Instrumental
+        }
         Ok((None, _)) => {
-            debug!("Cache NEGATIVE HIT for '{}' by '{}' (instrumental)", track, artist);
+            debug!("Cache NEGATIVE HIT for '{}' by '{}'", track, artist);
             CacheResult::NegativeHit
         }
         Err(rusqlite::Error::QueryReturnedNoRows) => {
@@ -210,8 +221,21 @@ pub fn cache_lyrics(artist: &str, track: &str, lyrics: &[LyricLine], source: &st
     }
 }
 
+/// The `source` of a lyric-less row for an instrumental; other lyric-less rows
+/// (source NULL) mean "nothing found".
+const INSTRUMENTAL: &str = "instrumental";
+
 /// Cache a negative result (no lyrics found) to avoid repeated API calls.
 pub fn cache_no_lyrics(artist: &str, track: &str) {
+    cache_without_lyrics(artist, track, None);
+}
+
+/// Cache that the song has no words: every later lookup ends here.
+pub fn cache_instrumental(artist: &str, track: &str) {
+    cache_without_lyrics(artist, track, Some(INSTRUMENTAL));
+}
+
+fn cache_without_lyrics(artist: &str, track: &str, source: Option<&str>) {
     let guard = match DB_CONNECTION.lock() {
         Ok(g) => g,
         Err(_) => return,
@@ -226,12 +250,12 @@ pub fn cache_no_lyrics(artist: &str, track: &str) {
     let track_key = normalize_key(track);
 
     if let Err(e) = conn.execute(
-        "INSERT OR REPLACE INTO lyrics_cache (artist, track, lyrics_json, cached_at) VALUES (?1, ?2, NULL, ?3)",
-        params![artist_key, track_key, now_timestamp()],
+        "INSERT OR REPLACE INTO lyrics_cache (artist, track, lyrics_json, cached_at, source) VALUES (?1, ?2, NULL, ?3, ?4)",
+        params![artist_key, track_key, now_timestamp(), source],
     ) {
         error!("Failed to cache negative result: {}", e);
     } else {
-        debug!("Cached NEGATIVE result for '{}' by '{}'", track, artist);
+        debug!("Cached no lyrics ({}) for '{}' by '{}'", source.unwrap_or("not found"), track, artist);
     }
 }
 

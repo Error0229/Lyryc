@@ -30,7 +30,7 @@ use llm::commands::{
     llm_get_settings, llm_import_legacy_keys, llm_list_models, llm_list_presets, llm_remove_provider,
     llm_set_route, llm_test, llm_upsert_provider,
 };
-use lyrics::{fetch_lrclib_raw, fetch_lyrics, fetch_lyrics_timed};
+use lyrics::{fetch_lrclib_raw, fetch_lyrics, fetch_lyrics_timed, lookahead_configure, mark_instrumental};
 use prealign::{prealign_configure, prealign_remove_files, prealign_status};
 use types::{ClickThroughState, TrackState, WebSocketState};
 use websocket_commands::{
@@ -179,6 +179,8 @@ pub fn run() {
             get_supported_languages,
             fetch_lyrics,
             fetch_lyrics_timed,
+            lookahead_configure,
+            mark_instrumental,
             fetch_lrclib_raw,
             init_extension_connection,
             get_websocket_status,

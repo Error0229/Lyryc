@@ -42,7 +42,9 @@ export type LyricsSource =
   | "kugou"
   | "ytmusic"
   | "ytmusic-estimate"
-  | "aligned";
+  | "aligned"
+  /** The song has no words: `lines` is empty. */
+  | "instrumental";
 
 /** `prealign_status` / `prealign-status`: the word-level timing feature's state. */
 export interface PrealignStatus {

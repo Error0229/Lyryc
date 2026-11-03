@@ -50,7 +50,8 @@
     return {
       videoId: r.videoId,
       title: r.title?.runs?.map((x) => x.text).join("") ?? null,
-      artist: r.shortBylineText?.runs?.[0]?.text ?? null,
+      // All of "A & B", as the player shows it: the app's cache is keyed by it.
+      artist: r.shortBylineText?.runs?.map((x) => x.text).join("").split("•")[0].trim() || null,
       length: r.lengthText?.runs?.[0]?.text ?? null,
       type: typeOf(r),
     };

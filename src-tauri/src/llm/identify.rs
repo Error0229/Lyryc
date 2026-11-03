@@ -25,8 +25,9 @@ title and primary artist exactly as written on the original release, in the orig
 English form when one exists, else null. Use the duration to tell versions apart; duration_s \
 is the length of the release you name. Set found=false if the input is not a single song \
 (a stream, mix or podcast) or the search gives no evidence. confidence is the probability that \
-title_native and artist_native are both right. evidence_urls: pages that confirm it. \
-Never include lyrics.";
+title_native and artist_native are both right. instrumental: true only when the recording \
+has no sung or spoken words at all (a piano piece, a soundtrack cue, a lofi beat); false when \
+it has vocals or you are not sure. evidence_urls: pages that confirm it. Never include lyrics.";
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SongIdentity {
@@ -37,6 +38,8 @@ pub struct SongIdentity {
     pub album: Option<String>,
     pub duration_s: Option<f64>,
     pub isrc: Option<String>,
+    /// No sung or spoken words: there are no lyrics to find.
+    pub instrumental: bool,
     pub confidence: f64,
     /// The provider's grounding sources first, then URLs the model named.
     pub evidence_urls: Vec<String>,
@@ -78,12 +81,13 @@ pub fn schema() -> &'static Value {
                 "album": opt_text,
                 "duration_s": {"type": ["number", "null"]},
                 "isrc": opt_text,
+                "instrumental": {"type": "boolean"},
                 "confidence": {"type": "number"},
                 "evidence_urls": {"type": "array", "items": text},
             },
             "required": [
                 "found", "title_native", "title_romanized", "artist_native",
-                "artist_romanized", "album", "duration_s", "isrc", "confidence",
+                "artist_romanized", "album", "duration_s", "isrc", "instrumental", "confidence",
                 "evidence_urls",
             ],
         })
@@ -127,6 +131,7 @@ struct Reply {
     album: Option<String>,
     duration_s: Option<f64>,
     isrc: Option<String>,
+    instrumental: bool,
     confidence: f64,
     evidence_urls: Vec<String>,
 }
@@ -169,6 +174,7 @@ pub fn parse(reply: &Completion) -> Result<Option<SongIdentity>, String> {
         album: non_empty(r.album),
         duration_s: r.duration_s.filter(|d| (1.0..=3600.0).contains(d)),
         isrc: non_empty(r.isrc),
+        instrumental: r.instrumental,
         confidence: r.confidence.clamp(0.0, 1.0),
         evidence_urls,
     }))
@@ -266,6 +272,7 @@ mod tests {
         assert_eq!(id.artist_romanized.as_deref(), Some("Yorushika"));
         assert_eq!(id.duration_s, Some(288.0));
         assert_eq!(id.isrc, None);
+        assert!(!id.instrumental, "absent means vocals");
         assert_eq!(id.evidence_urls, ["https://g/1", "https://example.org/a"]);
     }
 

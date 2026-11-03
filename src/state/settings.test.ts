@@ -28,6 +28,12 @@ describe("mergeSettings (loading lyryc-settings)", () => {
     expect(mergeSettings({ ...defaultSettings, prealign: true }).prealign).toBe(true);
   });
 
+  it("gives settings saved before the lookahead existed the default: on", () => {
+    const { lookahead: _, ...saved } = { ...defaultSettings, prealign: true };
+    expect(mergeSettings(saved).lookahead).toBe(true);
+    expect(mergeSettings({ ...defaultSettings, lookahead: false }).lookahead).toBe(false);
+  });
+
   it("gives translation prefs saved before the language filter existed: translate all", () => {
     const { filter: _, ...translation } = { ...defaultSettings.translation, targetLanguage: "zh-tw" };
     const s = mergeSettings({ ...defaultSettings, translation });

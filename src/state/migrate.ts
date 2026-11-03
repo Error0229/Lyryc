@@ -90,6 +90,7 @@ export function fromLegacy(v2: Obj | null, oldOffsets: Obj | null): Settings {
     extraSources: false,
     identifyWithSearch: false,
     prealign: false,
+    lookahead: true,
     lyric: {
       fontFamily: str(style.fontFamily, d.lyric.fontFamily),
       fontSize: num(style.fontSize, d.lyric.fontSize, 0.5, 6),
