@@ -121,6 +121,8 @@ Emitted once, when a background upgrade of an estimate succeeds. `title` and
 `artist` are exactly the `trackName`/`artistName` of the request, so a listener
 ignores updates whose track is no longer playing. The lines are the estimate's
 lines (LRCLIB's or YouTube Music's) with new times, so they can be swapped in place.
+Not emitted (nor cached) when the user corrected the song (`refetch`,
+`mark_instrumental`) while the upgrade was running.
 
 Also emitted (once) with `source: "aligned"` when the pre-aligner finishes the
 track that is playing. The lines are the request's lines, re-timed, with `words`.

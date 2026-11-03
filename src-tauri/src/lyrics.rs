@@ -580,6 +580,21 @@ impl Request {
 struct Upgrade {
     query: sources::Query,
     plain: Vec<String>,
+    /// The song's `corrections()` when the job was made.
+    corrections: u64,
+}
+
+/// How many times the user has corrected each song this session ("Search
+/// again", "Mark as instrumental"). An upgrade begun before a correction must
+/// neither overwrite it in the cache nor put the wrong lines back on screen.
+static CORRECTIONS: LazyLock<StdMutex<HashMap<(String, String), u64>>> = LazyLock::new(Default::default);
+
+fn corrections(req: &Request) -> u64 {
+    CORRECTIONS.lock().unwrap().get(&song_key(&req.artist, &req.title)).copied().unwrap_or(0)
+}
+
+fn correct(artist: &str, title: &str) {
+    *CORRECTIONS.lock().unwrap().entry(song_key(artist, title)).or_default() += 1;
 }
 
 /// The LLM's answer about a song.
@@ -725,6 +740,7 @@ pub async fn fetch_lyrics_timed(
     if req.refetch {
         // Everything the app remembers about the song led to the wrong lyrics.
         info!("Searching again for '{}' by '{}'", req.title, req.artist);
+        correct(&req.artist, &req.title);
         forget_lyrics(&req.artist, &req.title);
         llm::identify::forget(&req.title, &req.artist);
         prealign::forget(req.video_id.as_deref());
@@ -759,6 +775,7 @@ pub async fn fetch_lyrics_timed(
 #[tauri::command]
 pub fn mark_instrumental(track_name: String, artist_name: String) {
     info!("Marked '{}' by '{}' instrumental", track_name, artist_name);
+    correct(&artist_name, &track_name);
     cache_instrumental(&artist_name, &track_name);
 }
 
@@ -1182,6 +1199,7 @@ fn cached_upgrade(req: &Request, estimate: &[LyricLine]) -> Option<Upgrade> {
     Some(Upgrade {
         query: source_query(&req.title, &req.artist, &[], req.duration?),
         plain: estimate.iter().map(|l| l.text.clone()).collect(),
+        corrections: corrections(req),
     })
 }
 
@@ -1191,12 +1209,17 @@ fn upgrade_job(req: &Request, estimate: &[LyricLine], src: &PlainSource) -> Opti
     Some(Upgrade {
         query: sources::Query::new([sources::Name { title: src.track.clone(), artist: src.artist.clone() }], duration),
         plain: estimate.iter().map(|l| l.text.clone()).collect(),
+        corrections: corrections(req),
     })
 }
 
 /// Real timing for an estimate, cached, as the event to send.
 async fn run_upgrade<E: Effects>(fx: &E, req: &Request, job: Upgrade) -> Option<TimingUpdate> {
     let found = fx.sources(&job.query, Some(&job.plain)).await?;
+    if corrections(req) != job.corrections {
+        info!("Dropped an upgrade for '{}': the user corrected the song meanwhile", req.title);
+        return None;
+    }
     let source = TimingSource::from(found.provider);
     info!("Upgraded estimated timing for '{}' from {}", req.title, source.as_str());
     fx.save(&req.artist, &req.title, &found.lines, source);
@@ -1740,6 +1763,20 @@ mod tests {
         assert_eq!(update.source, TimingSource::Qq);
         assert_eq!(fx.calls(), vec![Some(4)], "sources get LRCLIB's lines");
         assert_eq!(fx.saved(), vec![TimingSource::LrclibEstimate, TimingSource::Qq], "real timing replaces it");
+    }
+
+    #[tokio::test]
+    async fn a_correction_while_upgrading_drops_the_upgrade() {
+        // Its own song: CORRECTIONS is shared by every test.
+        let req = Request::new("Lantern Rain".into(), "Corrected Twice".into(), Some(200.0));
+        let fx = Fake { cached_hit: Some((estimate_lines(), Some("lrclib-estimate".into()))), ..Fake::answering(Provider::Qq) };
+        let (_, upgrade) = fetch_timed(&fx, &req, true).await.unwrap();
+        correct(&req.artist, &req.title); // "Search again" or "Mark as instrumental" meanwhile
+        assert!(run_upgrade(&fx, &req, upgrade.unwrap()).await.is_none(), "no stale event");
+        assert!(fx.saved().is_empty(), "the correction stays in the cache");
+
+        let (_, upgrade) = fetch_timed(&fx, &req, true).await.unwrap();
+        assert!(run_upgrade(&fx, &req, upgrade.unwrap()).await.is_some(), "a job made after it runs");
     }
 
     #[tokio::test]

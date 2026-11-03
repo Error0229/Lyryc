@@ -22,7 +22,10 @@ export interface RouteRowProps {
 }
 
 export function RouteRow({ task, label, hint, route, providers, presets, onChange }: RouteRowProps) {
-  const provider = providers.find((p) => p.id === route?.providerId);
+  // A provider picked without a model to go with it (OpenRouter, LM Studio, Custom suggest
+  // none) is held here until the user types or fetches one: a route needs both.
+  const [draft, setDraft] = useState<string | null>(null);
+  const provider = providers.find((p) => p.id === (draft ?? route?.providerId));
   const suggested = provider ? presetOf(presets, provider.presetId)?.suggestedModels ?? [] : [];
   const [models, setModels] = useState<string[]>([]);
   const [model, setModel] = useState(route?.model ?? "");
@@ -34,6 +37,7 @@ export function RouteRow({ task, label, hint, route, providers, presets, onChang
   async function save(next: LlmRoute | null) {
     try {
       await llm.setRoute(task, next);
+      setDraft(null);
       onChange();
     } catch (e) {
       toast({ title: "Couldn't save routing", description: friendlyError(e), tone: "danger" });
@@ -43,12 +47,17 @@ export function RouteRow({ task, label, hint, route, providers, presets, onChang
   function pickProvider(id: string) {
     if (id === OFF) return void save(null);
     const p = providers.find((x) => x.id === id)!;
-    void save({ providerId: id, model: presetOf(presets, p.presetId)?.suggestedModels[0] ?? "" });
+    const first = presetOf(presets, p.presetId)?.suggestedModels[0];
+    if (first) return void save({ providerId: id, model: first });
+    setDraft(id);
+    setModel("");
   }
 
   function commitModel() {
     const m = model.trim();
-    if (route && m && m !== route.model) void save({ ...route, model: m });
+    if (provider && m && (provider.id !== route?.providerId || m !== route.model)) {
+      void save({ providerId: provider.id, model: m });
+    }
   }
 
   async function fetchModels() {
@@ -71,8 +80,8 @@ export function RouteRow({ task, label, hint, route, providers, presets, onChang
   return (
     <Row label={label} hint={hint}>
       <div className="grid gap-2">
-        <Select label={`${label} provider`} value={route?.providerId ?? OFF} options={options} onChange={pickProvider} />
-        {route && (
+        <Select label={`${label} provider`} value={provider?.id ?? OFF} options={options} onChange={pickProvider} />
+        {provider && (
           <div className="flex w-56 items-center gap-1">
             <TextInput
               aria-label={`${label} model`}
