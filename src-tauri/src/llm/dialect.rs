@@ -10,6 +10,8 @@ use super::{ChatRequest, Completion, Target, Tools};
 pub const ANTHROPIC_VERSION: &str = "2023-06-01";
 /// Cap on searches per Anthropic request; each one is billed.
 const ANTHROPIC_MAX_SEARCHES: u32 = 3;
+/// Cap on OpenRouter server-tool steps (searches) per request; its default is 30.
+const OPENROUTER_MAX_TOOL_CALLS: u32 = 6;
 
 /// A fully described HTTP request. `body: None` means GET.
 pub struct HttpCall {
@@ -92,13 +94,18 @@ fn uses_responses_api(t: &Target, tools: Tools) -> bool {
     search(t, tools) == Some(WebSearch::Responses)
 }
 
-/// Can the schema go in the request itself? Not after a relax, and not on
-/// Anthropic with search: web search always cites, and citations reject
-/// `output_config.format`.
+/// Can the schema go in the request itself? Not after a relax, and not with
+/// search on:
+/// - Anthropic: web search always cites, and citations reject `output_config.format`;
+/// - OpenRouter: next to `openrouter:web_search` a strict `response_format` is
+///   accepted but not enforced, and some models then reply in prose with no JSON
+///   at all (docs/research/llm-lyrics-deep/REPORT.md). Spelled out in the prompt,
+///   the same models reply with the object.
 fn native_schema(t: &Target, tools: Tools, opts: OpenAiOpts) -> bool {
     tools.schema.is_some()
         && !opts.drop_json
         && !(tools.web_search && t.preset.dialect == Dialect::Anthropic)
+        && search(t, tools) != Some(WebSearch::OpenRouter)
 }
 
 /// The system prompt, plus the schema spelled out when the request can't carry it.
@@ -175,6 +182,7 @@ fn openai_body(t: &Target, req: &ChatRequest, tools: Tools, opts: OpenAiOpts) ->
     }
     if search(t, tools) == Some(WebSearch::OpenRouter) {
         body["tools"] = json!([{"type": "openrouter:web_search"}]);
+        body["max_tool_calls"] = json!(OPENROUTER_MAX_TOOL_CALLS);
     }
     body
 }
@@ -804,8 +812,43 @@ mod tests {
         assert_eq!(call.url, "https://openrouter.ai/api/v1/chat/completions");
         let body = call.body.unwrap();
         assert_eq!(body["tools"], json!([{"type": "openrouter:web_search"}]));
+        assert_eq!(body["max_tool_calls"], OPENROUTER_MAX_TOOL_CALLS);
         assert!(body.get("plugins").is_none());
+    }
+
+    #[test]
+    fn openrouter_search_puts_the_schema_in_the_prompt() {
+        let s = schema_value();
+        let body = call(
+            &target("openrouter", Some("k")),
+            &req(true),
+            tools(true, &s),
+            OpenAiOpts::default(),
+        )
+        .body
+        .unwrap();
+        // Neither the schema nor json_object mode: both come back as prose next to the tool.
+        assert!(body.get("response_format").is_none());
+        let system = system_of(&body);
+        assert!(system.starts_with("sys\n\n"));
+        assert!(system.contains(r#""required":["a"]"#), "{system}");
+    }
+
+    #[test]
+    fn openrouter_schema_without_search_is_native() {
+        let s = schema_value();
+        let body = call(
+            &target("openrouter", Some("k")),
+            &req(true),
+            tools(false, &s),
+            OpenAiOpts::default(),
+        )
+        .body
+        .unwrap();
+        assert!(body.get("tools").is_none());
+        assert!(body.get("max_tool_calls").is_none());
         assert_eq!(body["response_format"]["json_schema"]["name"], "thing");
+        assert_eq!(body["messages"][0]["content"], "sys");
     }
 
     #[test]
