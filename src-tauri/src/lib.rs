@@ -10,6 +10,7 @@ mod furigana;
 mod llm;
 mod lyrics;
 mod lyrics_cache;
+mod prealign;
 mod sources;
 mod timing;
 mod translation;
