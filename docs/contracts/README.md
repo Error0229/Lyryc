@@ -45,6 +45,7 @@ type LyricsSource =
   | "qq" | "netease" | "kugou"
   | "ytmusic" | "ytmusic-estimate"
   | "aligned"
+  | "cover-estimate" // a cover: the original's words spread over this recording
   | "instrumental";  // the song has no words; `lines` is empty
 interface TimedLyrics {
   lines: LyricLine[];
@@ -59,6 +60,12 @@ interface TimedLyrics {
   YouTube Music's plain text. Estimates are cached like real timing; a cached
   one answers at once and, with the extra sources on, still comes back
   `pending: true` while they look for real timing.
+- `source: "cover-estimate"`: the identification says the recording covers
+  another artist's song, and only the original has lyrics anywhere. Its words
+  (LRCLIB, else the extra sources at any length) are spread over this
+  recording: treat as an estimate. Word-level timing retimes them to the
+  cover's audio. Trusted only when the player's title says "cover" (or
+  歌ってみた, 翻唱, カバー) or web search found it.
 - `source: "instrumental"`: the LLM's identification (or LRCLIB's exact match)
   says the recording has no words. Cached, so a replay does no lookups at all.
   "Search again" (`refetch`) doubts it and runs every pass; it only answers

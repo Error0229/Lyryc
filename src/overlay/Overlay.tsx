@@ -162,7 +162,13 @@ export function Overlay() {
           (s.refetching ? (
             <Badge text="searching again…" title="Looking for the right lyrics, skipping the cache" />
           ) : (
-            estimated && model && <Badge text="≈ estimated timing" title="No synced timing for this track; lines advance on a guess" />
+            estimated &&
+            model &&
+            (s.source === "cover-estimate" ? (
+              <Badge text="≈ cover · estimated timing" title="A cover: the original song's words, with timing guessed for this recording" />
+            ) : (
+              <Badge text="≈ estimated timing" title="No synced timing for this track; lines advance on a guess" />
+            ))
           ))}
       </AnimatePresence>
       <AnimatePresence>{interactive && <Controls />}</AnimatePresence>

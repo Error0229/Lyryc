@@ -177,8 +177,8 @@ fn song_from_json(v: &serde_json::Value) -> Option<Song> {
     let video_id = v["videoId"].as_str().filter(|id| ytmusic::is_video_id(id))?.to_string();
     Some(Song {
         video_id,
-        title: v["title"].as_str()?.to_string(),
-        artist: v["artist"].as_str().unwrap_or("").to_string(),
+        title: crate::cleaning::canonical(v["title"].as_str()?),
+        artist: crate::cleaning::canonical(v["artist"].as_str().unwrap_or("")),
         duration: v["length"].as_str().and_then(parse_length),
     })
 }

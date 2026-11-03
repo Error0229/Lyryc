@@ -37,6 +37,11 @@ describe("accepts", () => {
     expect(accepts({ track: song, source: "aligned" }, { track: song, source: "aligned" })).toBe(true);
   });
 
+  it("treats a cover's borrowed words as an estimate: real or word timing may replace them", () => {
+    expect(accepts({ track: song, source: "cover-estimate" }, { track: song, source: "aligned" })).toBe(true);
+    expect(accepts({ track: song, source: "lrclib" }, { track: song, source: "cover-estimate" })).toBe(false);
+  });
+
   it("lets no background answer undo an instrumental mark", () => {
     expect(accepts({ track: song, source: "instrumental" }, { track: song, source: "aligned" })).toBe(false);
     expect(accepts({ track: song, source: "instrumental" }, { track: song, source: "qq" })).toBe(false);

@@ -11,6 +11,14 @@ pub use regex::{clean_title, clean_track_name_sync, normalize_name};
 
 use crate::llm::{self, store::AdhocKey, ChatRequest, Task, NOT_CONFIGURED};
 
+/// One spelling per character. Players send some titles decomposed (バ as ハ
+/// plus a combining mark) and others composed; they look the same but would
+/// be two songs to the cache, LRCLIB and every lookup. Applied where names enter.
+pub fn canonical(s: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    s.nfc().collect()
+}
+
 /// The names a lyrics database files a song under, as the LLM sees them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Names {
@@ -85,6 +93,16 @@ pub async fn clean_track_name_with_keys(track_name: &str, call_keys: &[AdhocKey]
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decomposed_and_composed_kana_are_one_spelling() {
+        // The player sent バ as ハ + U+3099 while the queue sent U+30D0.
+        let decomposed = "\u{30CF}\u{3099}\u{30A4}";
+        let composed = "\u{30D0}\u{30A4}";
+        assert_ne!(decomposed, composed);
+        assert_eq!(canonical(decomposed), composed);
+        assert_eq!(canonical("Snow Country"), "Snow Country");
+    }
 
     #[test]
     fn cases_reported_by_the_llm_search_study() {

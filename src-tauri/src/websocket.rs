@@ -236,9 +236,11 @@ async fn handle_connection(
 
                     match extension_msg.message_type.as_str() {
                         "TRACK_DETECTED" | "TRACK_PAUSED" | "TRACK_STOPPED" | "TRACK_PROGRESS" => {
-                            if let Ok(track_update) =
+                            if let Ok(mut track_update) =
                                 serde_json::from_value::<TrackUpdate>(extension_msg.data.clone())
                             {
+                                track_update.title = crate::cleaning::canonical(&track_update.title);
+                                track_update.artist = crate::cleaning::canonical(&track_update.artist);
                                 // println!("✅ Successfully parsed TrackUpdate: {:?}", track_update);
                                 crate::prealign::on_track(&track_update.url);
                                 // Call the track callback if available

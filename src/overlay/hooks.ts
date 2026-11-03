@@ -1,5 +1,5 @@
 /** Overlay data hooks: backend events, translation, furigana, window height. */
-import { useEffect, useMemo, type RefObject } from "react";
+import { useEffect, useMemo, useRef, type RefObject } from "react";
 import { backend } from "../services/ipc/backend";
 import { textSignature, translationKey } from "../lib/lyrics";
 import { detectLanguage, shouldTranslate } from "../lib/language";
@@ -52,11 +52,29 @@ export function useSettingsMirror() {
   }, [lookahead, extraSources]);
 }
 
-/** Translate when the lyric *text* or the translation prefs change; retiming alone does not. */
+/** A settings change waits this long for the next one before translating. */
+const SETTLE_MS = 1000;
+/** Recent translations by lyric text and prefs: flipping a setting back is free. */
+const recent = new Map<string, Record<string, string>>();
+const RECENT_MAX = 20;
+
+function remember(key: string, map: Record<string, string>) {
+  recent.delete(key);
+  recent.set(key, map);
+  if (recent.size > RECENT_MAX) recent.delete(recent.keys().next().value!);
+}
+
+/**
+ * Translate when the lyric *text* or the translation prefs change; retiming
+ * alone does not. New lyrics translate at once. A prefs change waits until the
+ * user stops changing them: each request costs quota, and a burst of them is
+ * what providers answer with 429/503.
+ */
 export function useTranslations() {
   const lyrics = useSession((s) => s.lyrics);
   const p = useSettings((s) => s.translation);
   const signature = useMemo(() => textSignature(lyrics), [lyrics]);
+  const translatedSignature = useRef("");
 
   useEffect(() => {
     const lines = useSession.getState().lyrics;
@@ -67,18 +85,29 @@ export function useTranslations() {
       useSession.setState({ translations: {} });
       return;
     }
+    const key = JSON.stringify([signature, p.sourceLanguage, p.targetLanguage, p.style, p.customPrompt, p.preserveRhyme, p.preserveMeaning, p.maintainStructure]);
+    const known = recent.get(key);
+    if (known) {
+      useSession.setState({ translations: known });
+      return;
+    }
+    const delay = translatedSignature.current === signature ? SETTLE_MS : 0;
+    translatedSignature.current = signature;
     let live = true;
-    backend
-      .translate(lines, p)
-      .then((list) => {
-        if (!live) return;
-        const map: Record<string, string> = {};
-        for (const l of list) map[translationKey(l.original)] = l.translated;
-        useSession.setState({ translations: map });
-      })
-      .catch((e) => live && reportLlmError(e, "Translation"));
+    const timer = window.setTimeout(() => {
+      backend
+        .translate(lines, p)
+        .then((list) => {
+          const map: Record<string, string> = {};
+          for (const l of list) map[translationKey(l.original)] = l.translated;
+          remember(key, map);
+          if (live) useSession.setState({ translations: map });
+        })
+        .catch((e) => live && reportLlmError(e, "Translation"));
+    }, delay);
     return () => {
       live = false;
+      clearTimeout(timer);
     };
     // Prefs fields are listed individually (and the filter by value: cross-window
     // sync rebuilds objects) so display-only changes don't retranslate.

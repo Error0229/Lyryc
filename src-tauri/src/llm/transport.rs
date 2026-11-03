@@ -4,12 +4,26 @@
 use log::{debug, warn};
 use reqwest::Client;
 use serde_json::Value;
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::Duration;
+use tokio::sync::Semaphore;
 
 use super::dialect::{self, HttpCall, OpenAiOpts};
 use super::presets::Dialect;
 use super::{ChatRequest, Completion, LlmError, Target, Tools};
+
+/// Requests in flight per provider. Translation, song identification and the
+/// lookahead can otherwise all fire at once, and providers (free tiers above
+/// all) answer bursts with 429/503. The rest wait their turn.
+const MAX_IN_FLIGHT: usize = 2;
+
+/// The turn-taking for one provider (its name and base URL).
+fn slots(target: &Target) -> Arc<Semaphore> {
+    static SLOTS: LazyLock<Mutex<HashMap<String, Arc<Semaphore>>>> = LazyLock::new(Default::default);
+    let key = format!("{}|{}", target.label, target.base_url);
+    SLOTS.lock().unwrap().entry(key).or_insert_with(|| Arc::new(Semaphore::new(MAX_IN_FLIGHT))).clone()
+}
 
 /// Longest server-requested wait we sit through before giving up.
 const MAX_RETRY_WAIT: Duration = Duration::from_secs(20);
@@ -174,6 +188,8 @@ pub async fn complete_with(
             ),
         ));
     }
+    let slots = slots(target);
+    let _turn = slots.acquire().await.expect("never closed");
     let mut opts = OpenAiOpts::default();
     loop {
         debug!("LLM request to {} ({})", target.label, target.model);

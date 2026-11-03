@@ -71,6 +71,9 @@ pub struct Query {
     /// `MAX_SEARCHES` are searched for; all of them count for the guards.
     pub names: Vec<Name>,
     pub duration: f64,
+    /// Only the words are wanted (a cover's original): any recording's length
+    /// will do, and its timing is not checked against `duration`.
+    pub any_length: bool,
 }
 
 impl Query {
@@ -88,7 +91,13 @@ impl Query {
         Self {
             names: out,
             duration,
+            any_length: false,
         }
+    }
+
+    /// The song's words, from whichever recording has them.
+    pub fn words_of(names: impl IntoIterator<Item = Name>, duration: f64) -> Self {
+        Self { any_length: true, ..Self::new(names, duration) }
     }
 
     fn searches(&self) -> &[Name] {
@@ -276,7 +285,7 @@ fn check(src: &[(f64, String)], q: &Query, plain: Option<&[String]>) -> Attempt 
     if src.len() < MIN_LINES {
         return Err(Miss::FewLines);
     }
-    if last > q.duration + SAME_RECORDING_SECS {
+    if last > q.duration + SAME_RECORDING_SECS && !q.any_length {
         return Err(Miss::TooLong);
     }
     let Some(plain) = plain else {
@@ -368,14 +377,15 @@ fn best(cands: Vec<Candidate>, q: &Query, strict: bool) -> Result<Candidate, Mis
     }
     let same: Vec<Candidate> = cands
         .into_iter()
-        .filter(|c| c.duration > 0.0 && (c.duration - q.duration).abs() <= SAME_RECORDING_SECS)
+        .filter(|c| q.any_length || (c.duration > 0.0 && (c.duration - q.duration).abs() <= SAME_RECORDING_SECS))
         .collect();
     if same.is_empty() {
         return Err(Miss::NoSameLength);
     }
+    let length_gap = |c: &Candidate| if q.any_length { 0.0 } else { (c.duration - q.duration).abs() / 30.0 };
     let score = |c: &Candidate| {
         q.sim(&c.title, |n| &n.title) + q.sim(&c.artist, |n| &n.artist)
-            - (c.duration - q.duration).abs() / 30.0
+            - length_gap(c)
             - if version_re().is_match(&c.title) {
                 0.5
             } else {
@@ -476,6 +486,16 @@ pub(crate) mod tests {
             ]
         );
         assert_eq!(q.searches().len(), MAX_SEARCHES);
+    }
+
+    #[test]
+    fn words_of_a_song_take_any_recording_that_names_it() {
+        let q = Query::words_of([name("恋", "茅原実里")], 299.0);
+        let pick = best(vec![cand("恋", "茅原実里", 240.0)], &q, true).unwrap();
+        assert_eq!(pick.duration, 240.0, "a cover's length says nothing about the original's");
+        assert!(best(vec![cand("別の歌", "誰か", 299.0)], &q, true).is_err(), "but it must name the song");
+        let long: Vec<(f64, String)> = (0..5).map(|i| (i as f64 * 80.0, format!("line {i}"))).collect();
+        assert!(check(&long, &q, None).is_ok(), "timing past this recording's end is fine");
     }
 
     #[test]

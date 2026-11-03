@@ -43,6 +43,8 @@ export type LyricsSource =
   | "ytmusic"
   | "ytmusic-estimate"
   | "aligned"
+  /** A cover: the original's words, spread over this recording (an estimate). */
+  | "cover-estimate"
   /** The song has no words: `lines` is empty. */
   | "instrumental";
 

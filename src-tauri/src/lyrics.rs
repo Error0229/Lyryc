@@ -433,6 +433,18 @@ impl<'a, E: Effects> Lookup<'a, E> {
         self.find(&titles, &artist, true).await
     }
 
+    /// A song's words from LRCLIB, whatever recording they were filed under:
+    /// one search, synced text preferred, timing dropped.
+    async fn words_of(&mut self, song: &Names) -> Option<Vec<String>> {
+        let want = Want { titles: vec![song.title.clone()], artists: vec![song.artist.clone()], duration: None };
+        let record = self.search(&[("track_name", &song.title), ("artist_name", &song.artist)], &want).await?;
+        if let Some(lines) = synced_from_record(&record) {
+            return Some(lines.into_iter().map(|l| l.text).collect());
+        }
+        let plain = plain_from_record(&record)?;
+        Some(plain.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect())
+    }
+
     /// Step 4: an exact lookup and a search with the identified names.
     async fn identified_pass(&mut self, names: &[Names]) -> Option<Lrclib> {
         let best = names.first()?;
@@ -461,6 +473,8 @@ pub enum TimingSource {
     Aligned,
     /// No lyrics: the song has no words (no `lines`). Not a timing.
     Instrumental,
+    /// A cover: the original's words spread over this recording by syllables.
+    CoverEstimate,
 }
 
 impl TimingSource {
@@ -476,12 +490,13 @@ impl TimingSource {
             TimingSource::YtmusicEstimate => "ytmusic-estimate",
             TimingSource::Aligned => "aligned",
             TimingSource::Instrumental => "instrumental",
+            TimingSource::CoverEstimate => "cover-estimate",
         }
     }
 
     /// Plain text spread over the track, not real timing.
     fn is_estimate(self) -> bool {
-        matches!(self, TimingSource::LrclibEstimate | TimingSource::YtmusicEstimate)
+        matches!(self, TimingSource::LrclibEstimate | TimingSource::YtmusicEstimate | TimingSource::CoverEstimate)
     }
 
     /// Cache rows from before sources were recorded are LRCLIB.
@@ -493,6 +508,7 @@ impl TimingSource {
             Some("ytmusic") => TimingSource::Ytmusic,
             Some("lrclib-estimate") => TimingSource::LrclibEstimate,
             Some("ytmusic-estimate") => TimingSource::YtmusicEstimate,
+            Some("cover-estimate") => TimingSource::CoverEstimate,
             _ => TimingSource::Lrclib,
         }
     }
@@ -573,6 +589,8 @@ struct SongNames {
     names: Vec<Names>,
     /// It has no words: there are no lyrics to find.
     instrumental: bool,
+    /// A cover: the original song's names, whose words it sings.
+    cover_of: Option<Names>,
 }
 
 /// Everything the lookup does to the outside world, behind a trait so tests
@@ -640,10 +658,15 @@ impl Effects for Live {
             req.artist,
             id.title_native,
             id.artist_native,
-            if id.instrumental { ", instrumental" } else { "" },
+            match (&id.cover_of, id.instrumental) {
+                (_, true) => ", instrumental".to_string(),
+                (Some(original), _) => format!(", a cover of {original}"),
+                _ => String::new(),
+            },
             if web_search { " (web search)" } else { "" }
         );
-        SongNames { names: identified_names(&id), instrumental: id.instrumental }
+        let cover_of = id.cover_of.clone().map(|artist| Names { artist, title: id.title_native.clone() });
+        SongNames { names: identified_names(&id), instrumental: id.instrumental, cover_of }
     }
     fn sources(&self, q: &sources::Query, plain: Option<&[String]>) -> impl Future<Output = Option<Found>> + Send {
         sources::find(q, plain)
@@ -960,6 +983,8 @@ async fn fetch_timed<E: Effects>(
     let settled = |instrumental: bool| instrumental && !req.refetch;
     // Names the sources were already asked with (e.g. no LLM set up: always empty).
     let mut tried: Vec<Vec<Names>> = Vec::new();
+    // Originals whose words were already looked for.
+    let mut covers: Vec<Names> = Vec::new();
     for &pass in passes(req, negative) {
         let said = match pass {
             Pass::Identified { web_search } => fx.names(req, web_search).await,
@@ -979,13 +1004,18 @@ async fn fetch_timed<E: Effects>(
             break;
         }
         // The player's names reach the sources with every other pass.
-        if pass == Pass::Player || tried.contains(&names) {
-            continue;
+        if pass != Pass::Player && !tried.contains(&names) {
+            if let Some(timed) = from_sources(fx, req, &names, extra).await {
+                return Ok((timed, None));
+            }
+            tried.push(names);
         }
-        if let Some(timed) = from_sources(fx, req, &names, extra).await {
-            return Ok((timed, None));
+        if let Some(original) = said.cover_of.filter(|o| trusted_cover(req, pass) && !covers.contains(o)) {
+            if let Some(timed) = from_original(fx, &mut run, req, &original, extra).await {
+                return Ok((timed, None));
+            }
+            covers.push(original);
         }
-        tried.push(names);
     }
     info!(
         "Lyrics lookup for '{}' by '{}': {} after {} LRCLIB request(s) in {:.1}s",
@@ -1036,6 +1066,45 @@ async fn from_sources<E: Effects>(fx: &E, req: &Request, names: &[Names], extra:
     info!("LRCLIB had nothing for '{}'; {} did", req.title, source.as_str());
     fx.save(&req.artist, &req.title, &found.lines, source);
     Some(TimedLyrics { lines: found.lines, source, pending: false })
+}
+
+/// "Cover", "歌ってみた", "翻唱" in what the player shows.
+static COVER_MARK: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\bcover(ed)?\b|カバー|歌ってみた|翻唱").unwrap());
+
+/// Taking another artist's words is only safe when the cover is plain: the
+/// player says so, or a web search found it. A guessed "cover of" would put
+/// some other song's lyrics on screen.
+fn trusted_cover(req: &Request, pass: Pass) -> bool {
+    pass == (Pass::Identified { web_search: true }) || COVER_MARK.is_match(&req.title) || COVER_MARK.is_match(&req.artist)
+}
+
+/// A cover sings the original's words to its own arrangement: the words are
+/// taken from the original (LRCLIB, then the sources at any length) and
+/// spread over this recording. Word-level timing retimes them to the audio.
+async fn from_original<E: Effects>(
+    fx: &E,
+    run: &mut Lookup<'_, E>,
+    req: &Request,
+    original: &Names,
+    extra: bool,
+) -> Option<TimedLyrics> {
+    let duration = req.duration?;
+    let words = match run.words_of(original).await {
+        Some(words) => words,
+        None if extra => {
+            let q = sources::Query::words_of([sources::Name { title: original.title.clone(), artist: original.artist.clone() }], duration);
+            fx.sources(&q, None).await?.lines.into_iter().map(|l| l.text).collect()
+        }
+        None => return None,
+    };
+    if words.len() < MIN_RECORD_LINES {
+        return None;
+    }
+    info!("'{}' is a cover of '{}' by '{}': using its words", req.title, original.title, original.artist);
+    let lines = timing::estimate_plain(&words.join("\n"), duration);
+    fx.save(&req.artist, &req.title, &lines, TimingSource::CoverEstimate);
+    Some(TimedLyrics { lines, source: TimingSource::CoverEstimate, pending: false })
 }
 
 /// The names the sources search for, best first: the identified native ones,
@@ -1272,6 +1341,8 @@ mod tests {
         names_searched: Vec<Names>,
         /// The LLM says the song has no words.
         llm_instrumental: bool,
+        /// The LLM says it is a cover of this song.
+        llm_cover_of: Option<Names>,
         saved_instrumental: Mutex<u32>,
         answer: Option<Found>,
         urls: Mutex<Vec<String>>,
@@ -1337,7 +1408,7 @@ mod tests {
         fn names(&self, _req: &Request, web_search: bool) -> impl Future<Output = SongNames> + Send {
             *self.llm_calls.lock().unwrap() += 1;
             let names = if web_search { self.names_searched.clone() } else { self.names.clone() };
-            let said = SongNames { names, instrumental: self.llm_instrumental };
+            let said = SongNames { names, instrumental: self.llm_instrumental, cover_of: self.llm_cover_of.clone() };
             async move { said }
         }
         fn sources(&self, q: &sources::Query, plain: Option<&[String]>) -> impl Future<Output = Option<Found>> + Send {
@@ -1505,6 +1576,7 @@ mod tests {
             duration_s: Some(288.0),
             isrc: None,
             instrumental: false,
+            cover_of: None,
             confidence: 0.9,
             evidence_urls: vec![],
         };
@@ -1749,6 +1821,50 @@ mod tests {
         let (timed, _) = fetch_timed(&fx, &req, true).await.unwrap();
         assert_eq!(timed.source, TimingSource::Instrumental, "nothing found: the verdict stands");
         assert_eq!(fx.calls().len(), 1, "but every pass ran");
+    }
+
+    /// A "covered by" upload whose own recording no source has.
+    fn a_cover() -> (Request, Names) {
+        let req = Request::new("Bye My Sigh - Covered by Someone".into(), "Someone".into(), Some(299.0));
+        (req, Names { title: "Bye My Sigh".into(), artist: "Original Band".into() })
+    }
+
+    #[tokio::test]
+    async fn a_cover_sings_the_originals_words_on_its_own_timing() {
+        let (req, original) = a_cover();
+        // LRCLIB has the original at another length; nothing for the cover.
+        let fx = Fake { llm_cover_of: Some(original), prealigned: Some(Served::Pending), ..Default::default() }
+            .rule("artist_name=Original", json_reply(json!([record("Bye My Sigh", "Original Band", 240.0, true)])))
+            .rule("search?", json_reply(json!([])));
+        let (mut timed, upgrade) = fetch_timed(&fx, &req, false).await.unwrap();
+        assert_eq!((timed.source, timed.lines.len()), (TimingSource::CoverEstimate, 3), "the synced text, timing dropped");
+        assert!(timed.lines.last().unwrap().time < 299.0, "spread over the cover, not the original");
+        assert!(upgrade.is_none(), "no source can time a cover");
+        assert_eq!(fx.saved(), vec![TimingSource::CoverEstimate]);
+        assert!(with_aligned(&fx, &req, &mut timed) || timed.pending);
+        assert_eq!(fx.aligned_asked.lock().unwrap()[0].0, TimingSource::CoverEstimate, "word timing retimes it");
+    }
+
+    #[tokio::test]
+    async fn the_originals_words_come_from_the_sources_at_any_length() {
+        let (req, original) = a_cover();
+        let fx = Fake { llm_cover_of: Some(original), ..Fake::answering(Provider::Netease) }
+            .rule("search?", json_reply(json!([])));
+        // The sources' normal same-length query misses; the words query is the second call.
+        let fx = Fake { answer: None, ..fx };
+        assert!(fetch_timed(&fx, &req, true).await.is_err());
+        assert_eq!(fx.calls().len(), 2, "the song's own names, then the original's words");
+    }
+
+    #[tokio::test]
+    async fn an_unmarked_cover_guess_is_not_trusted_without_web_search() {
+        let (_, original) = a_cover();
+        let req = Request::new("Bye My Sigh".into(), "Someone".into(), Some(299.0));
+        let fx = Fake { llm_cover_of: Some(original), ..Default::default() }
+            .rule("artist_name=Original", json_reply(json!([record("Bye My Sigh", "Original Band", 240.0, true)])))
+            .rule("search?", json_reply(json!([])));
+        assert!(fetch_timed(&fx, &req, false).await.is_err());
+        assert_eq!(fx.asked("artist_name=Original"), 0, "another artist's words only when the cover is plain");
     }
 
     #[tokio::test]

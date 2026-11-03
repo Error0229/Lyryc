@@ -27,7 +27,10 @@ is the length of the release you name. Set found=false if the input is not a sin
 (a stream, mix or podcast) or the search gives no evidence. confidence is the probability that \
 title_native and artist_native are both right. instrumental: true only when the recording \
 has no sung or spoken words at all (a piano piece, a soundtrack cue, a lofi beat); false when \
-it has vocals or you are not sure. evidence_urls: pages that confirm it. Never include lyrics.";
+it has vocals or you are not sure. cover_of: when this recording is a cover of another \
+artist's song (a 'covered by' or 歌ってみた upload, a tribute), that original artist in the \
+original script, and title_native is the original song's title; null for an original. \
+evidence_urls: pages that confirm it. Never include lyrics.";
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SongIdentity {
@@ -40,6 +43,9 @@ pub struct SongIdentity {
     pub isrc: Option<String>,
     /// No sung or spoken words: there are no lyrics to find.
     pub instrumental: bool,
+    /// When this recording is a cover: the original artist, native script.
+    /// The words are theirs; the timing is not (another arrangement).
+    pub cover_of: Option<String>,
     pub confidence: f64,
     /// The provider's grounding sources first, then URLs the model named.
     pub evidence_urls: Vec<String>,
@@ -82,12 +88,13 @@ pub fn schema() -> &'static Value {
                 "duration_s": {"type": ["number", "null"]},
                 "isrc": opt_text,
                 "instrumental": {"type": "boolean"},
+                "cover_of": opt_text,
                 "confidence": {"type": "number"},
                 "evidence_urls": {"type": "array", "items": text},
             },
             "required": [
                 "found", "title_native", "title_romanized", "artist_native",
-                "artist_romanized", "album", "duration_s", "isrc", "instrumental", "confidence",
+                "artist_romanized", "album", "duration_s", "isrc", "instrumental", "cover_of", "confidence",
                 "evidence_urls",
             ],
         })
@@ -132,6 +139,7 @@ struct Reply {
     duration_s: Option<f64>,
     isrc: Option<String>,
     instrumental: bool,
+    cover_of: Option<String>,
     confidence: f64,
     evidence_urls: Vec<String>,
 }
@@ -175,6 +183,7 @@ pub fn parse(reply: &Completion) -> Result<Option<SongIdentity>, String> {
         duration_s: r.duration_s.filter(|d| (1.0..=3600.0).contains(d)),
         isrc: non_empty(r.isrc),
         instrumental: r.instrumental,
+        cover_of: non_empty(r.cover_of),
         confidence: r.confidence.clamp(0.0, 1.0),
         evidence_urls,
     }))
@@ -208,6 +217,11 @@ pub async fn identify_with(
     })
 }
 
+/// How long identification may take (including its turn at the provider);
+/// searching the web takes longer.
+const LIMIT: std::time::Duration = std::time::Duration::from_secs(20);
+const WEB_SEARCH_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// Answers per raw (title, artist), including "unsure", for this session: a
 /// song that missed once will miss again, and each call costs the user.
 /// By (raw title, raw artist, web search): a search-off "unsure" must not
@@ -236,11 +250,18 @@ pub async fn identify_song(
         return answer.clone();
     }
     let target = resolve(Task::Cleaning, &[])?;
-    let answer = match identify_with(&target, raw_title, raw_artist, duration, web_search).await {
-        Ok(found) => found,
-        Err(e) => {
+    // A song is waiting on this: a provider that takes longer is better skipped.
+    let limit = if web_search { WEB_SEARCH_LIMIT } else { LIMIT };
+    let call = identify_with(&target, raw_title, raw_artist, duration, web_search);
+    let answer = match tokio::time::timeout(limit, call).await {
+        Ok(Ok(found)) => found,
+        Ok(Err(e)) => {
             // Not remembered: a network or quota failure may pass.
             warn!("Song identification failed: {e}");
+            return None;
+        }
+        Err(_) => {
+            warn!("Song identification took over {}s; going on without it", limit.as_secs());
             return None;
         }
     };
@@ -273,6 +294,7 @@ mod tests {
         assert_eq!(id.duration_s, Some(288.0));
         assert_eq!(id.isrc, None);
         assert!(!id.instrumental, "absent means vocals");
+        assert_eq!(id.cover_of, None, "absent means the original");
         assert_eq!(id.evidence_urls, ["https://g/1", "https://example.org/a"]);
     }
 
@@ -291,6 +313,15 @@ mod tests {
         assert!(parse(&reply(&not_found, &[])).unwrap().is_none());
         let blank = r#"{"found":true,"title_native":" ","artist_native":"x","confidence":1}"#;
         assert!(parse(&reply(blank, &[])).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_cover_names_the_original_artist() {
+        let cover = SNOW.replace("\"isrc\":null", "\"isrc\":null,\"cover_of\":\"RADWIMPS\"");
+        let id = parse(&reply(&cover, &[])).unwrap().unwrap();
+        assert_eq!(id.cover_of.as_deref(), Some("RADWIMPS"));
+        let blank = SNOW.replace("\"isrc\":null", "\"isrc\":null,\"cover_of\":\" \"");
+        assert_eq!(parse(&reply(&blank, &[])).unwrap().unwrap().cover_of, None);
     }
 
     #[test]

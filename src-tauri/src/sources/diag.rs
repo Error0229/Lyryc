@@ -59,6 +59,7 @@ impl Identity {
             duration_s: None,
             isrc: None,
             instrumental: false,
+            cover_of: None,
             confidence: 1.0,
             evidence_urls: vec![],
         })
