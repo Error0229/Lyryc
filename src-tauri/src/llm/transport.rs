@@ -32,6 +32,9 @@ fn client() -> &'static Client {
     static CLIENT: OnceLock<Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         Client::builder()
+            // reqwest drops `Authorization` on a cross-host redirect but not
+            // `x-api-key` / `x-goog-api-key`. LLM APIs don't redirect: a 3xx is an error.
+            .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(90))
             .build()
@@ -259,6 +262,23 @@ pub async fn list_models(target: &Target) -> Result<Vec<String>, LlmError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn target(label: &str, base_url: &str) -> Target {
+        let preset = crate::llm::presets::find("custom").unwrap();
+        Target { label: label.into(), preset, base_url: base_url.into(), api_key: None, model: "m".into() }
+    }
+
+    #[test]
+    fn a_provider_takes_two_requests_at_a_time() {
+        let a = slots(&target("Burst", "https://burst.example/v1"));
+        let _one = a.clone().try_acquire_owned().unwrap();
+        let _two = a.clone().try_acquire_owned().unwrap();
+        assert!(a.clone().try_acquire_owned().is_err(), "the third waits");
+        let same = slots(&target("Burst", "https://burst.example/v1"));
+        assert!(same.try_acquire().is_err(), "one queue per provider");
+        let other = slots(&target("Burst", "https://other.example/v1"));
+        assert!(other.try_acquire().is_ok(), "another provider is not held up");
+    }
 
     #[test]
     fn retry_policy() {

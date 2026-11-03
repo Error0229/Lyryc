@@ -177,12 +177,16 @@ pub fn upcoming(data: &serde_json::Value) -> Vec<Song> {
     entries.iter().take(UP_NEXT_MAX).filter_map(song_from_json).collect()
 }
 
+/// Longer than any title or byline YouTube shows: not the queue talking.
+const NAME_MAX: usize = 300;
+
 fn song_from_json(v: &serde_json::Value) -> Option<Song> {
     let video_id = v["videoId"].as_str().filter(|id| ytmusic::is_video_id(id))?.to_string();
+    let name = |key: &str| v[key].as_str().filter(|s| s.len() <= NAME_MAX);
     Some(Song {
         video_id,
-        title: crate::cleaning::canonical(v["title"].as_str()?),
-        artist: crate::cleaning::canonical(v["artist"].as_str().unwrap_or("")),
+        title: crate::cleaning::canonical(name("title")?),
+        artist: crate::cleaning::canonical(name("artist").unwrap_or("")),
         duration: v["length"].as_str().and_then(parse_length),
     })
 }
@@ -498,9 +502,14 @@ pub fn prealign_configure(enabled: bool, extra_sources: bool) -> Status {
     let was = P.enabled.swap(enabled, Ordering::Relaxed);
     if enabled && !was {
         info!("Pre-align enabled");
-        shared().error = None;
-        start_download();
-        P.wake.notify_one();
+        if cfg!(windows) {
+            shared().error = None;
+            start_download();
+            P.wake.notify_one();
+        } else {
+            // The runtime and yt-dlp it downloads are Windows builds.
+            shared().error = Some("Word-level timing runs on Windows only for now.".into());
+        }
     } else if !enabled && was {
         info!("Pre-align disabled");
         P.cancel.store(true, Ordering::Relaxed);
@@ -545,6 +554,18 @@ mod tests {
         let entry = |n: usize| serde_json::json!({ "videoId": format!("abcdefghij{n}"), "title": "Song", "artist": "Band" });
         let data = serde_json::json!({ "upNext": (0..9).map(entry).collect::<Vec<_>>() });
         assert_eq!(super::upcoming(&data).len(), 3);
+    }
+
+    #[test]
+    fn an_overlong_queue_title_is_not_a_song() {
+        let long = "x".repeat(301);
+        let data = serde_json::json!({ "upNext": [
+            { "videoId": "abcdefghij0", "title": long, "artist": "Band" },
+            { "videoId": "abcdefghij1", "title": "Song", "artist": long },
+        ] });
+        let songs = super::upcoming(&data);
+        assert_eq!(songs.len(), 1);
+        assert_eq!((songs[0].title.as_str(), songs[0].artist.as_str()), ("Song", ""));
     }
 
     use super::*;
