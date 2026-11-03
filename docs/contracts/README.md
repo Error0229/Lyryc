@@ -91,7 +91,7 @@ retries. A provider is skipped for the rest of the session after 3 consecutive
 failures. A result is used only if it has ≥ 3 timed lines, the same length
 (±3 s), and either ≥ 50% of LRCLIB's lines text-matched or, with no LRCLIB text,
 a matching title. With LRCLIB text, the lines stay LRCLIB's; only times come
-from the source. Real timing from any source is cached. Estimates are not.
+from the source. Real timing from any source is cached, and so are estimates.
 
 ### YouTube Music lyrics (additive)
 
