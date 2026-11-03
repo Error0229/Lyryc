@@ -6,9 +6,7 @@
   "minimum_chrome_version": "111",
   
   "permissions": [
-    "activeTab",
     "storage",
-    "nativeMessaging",
     "scripting"
   ],
   

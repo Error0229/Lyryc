@@ -177,6 +177,23 @@ const animationConfig = {
 };
 ```
 
+## 🔒 Privacy and keys
+
+- **API keys** are stored in `llm-settings.json` in the app's data folder (on Windows,
+  `%APPDATA%\com.lyryc.app`). The file is plain JSON, written atomically and readable
+  only by your user. Keys are not in the OS keychain, so anything running as you
+  can read them. Settings shows only a masked hint and never sends a key back to
+  the window.
+- **What goes to your AI provider**: song titles and artists (to clean titles and identify
+  songs), the lyric lines you have translated, and, with "Identify songs with web
+  search", a web search the provider runs. Nothing goes to a provider you haven't
+  added, and keys go only to that provider's base URL. A plain `http://` base URL
+  (a local Ollama or LM Studio) sends the key unencrypted.
+- **Lyrics lookups** send the title, artist and length to LRCLIB and, with "Extra lyric
+  sources", to QQ Music, NetEase and Kugou.
+- **The extension** talks only to the app on `localhost:8765`. The app refuses web pages
+  that try to connect.
+
 ## 🐛 Troubleshooting
 
 ### Common Issues
