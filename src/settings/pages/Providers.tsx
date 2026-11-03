@@ -63,6 +63,12 @@ export function ProvidersPage() {
     }
   }
 
+  /** The backend runs cleanup (and song identification) on translation's route when it has none. */
+  const unsetLabel = (task: LlmTask) => {
+    const inherited = task === "cleaning" && providers.find((p) => p.id === routes.translation?.providerId);
+    return inherited ? `Same as translation (${inherited.label})` : "Off";
+  };
+
   const testModel = (p: LlmProvider) =>
     Object.values(routes).find((r) => r?.providerId === p.id)?.model || presetOf(presets, p.presetId)?.suggestedModels[0] || "";
 
@@ -106,7 +112,7 @@ export function ProvidersPage() {
 
       <Section title="Tasks" description="Pick which provider and model handles each job.">
         {tasks.map((t) => (
-          <RouteRow key={t.task} {...t} route={routes[t.task]} providers={providers} presets={presets} onChange={refresh} />
+          <RouteRow key={t.task} {...t} route={routes[t.task]} unset={unsetLabel(t.task)} providers={providers} presets={presets} onChange={refresh} />
         ))}
       </Section>
 

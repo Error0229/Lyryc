@@ -16,12 +16,14 @@ export interface RouteRowProps {
   label: string;
   hint: string;
   route?: LlmRoute;
+  /** What no route of its own means for this task: "Off", or another task's route. */
+  unset: string;
   providers: LlmProvider[];
   presets: LlmPreset[];
   onChange: () => void;
 }
 
-export function RouteRow({ task, label, hint, route, providers, presets, onChange }: RouteRowProps) {
+export function RouteRow({ task, label, hint, route, unset, providers, presets, onChange }: RouteRowProps) {
   // A provider picked without a model to go with it (OpenRouter, LM Studio, Custom suggest
   // none) is held here until the user types or fetches one: a route needs both.
   const [draft, setDraft] = useState<string | null>(null);
@@ -75,7 +77,7 @@ export function RouteRow({ task, label, hint, route, providers, presets, onChang
   }
 
   const listId = `models-${task}`;
-  const options = [{ value: OFF, label: "Off" }, ...providers.map((p) => ({ value: p.id, label: p.label }))];
+  const options = [{ value: OFF, label: unset }, ...providers.map((p) => ({ value: p.id, label: p.label }))];
 
   return (
     <Row label={label} hint={hint}>
