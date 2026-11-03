@@ -2,8 +2,10 @@
 
     python -X utf8 analyze.py before [after]
 
-A row is one (case, mode, provider). The pipeline answer for a case is the
-first provider, in QQ -> NetEase -> Kugou order, whose result was accepted.
+A row is one search: (case, mode, provider, name). A provider's verdict is
+its accepted search, else its first miss. The answer for a case is the
+real find_with's (after.jsonl's "-pipeline" rows), or for before.jsonl,
+with one search per provider, the first accepted in QQ -> NetEase -> Kugou.
 "Right" means the accepted candidate names the case's song (the harness's
 `pick_is_song`) and is not in WRONG_RECORDING below.
 """
@@ -30,53 +32,62 @@ def load(label):
 
 
 def verdict(row):
-    """accepted-right / accepted-wrong / the miss reason."""
+    """right / wrong / the miss reason."""
+    if row["outcome"] == "rejected":  # before.jsonl's name for a failed guard
+        return "rejected-" + row["reject"] + ("-song" if row.get("pick_is_song") else "-other")
     if row["outcome"] != "accepted":
-        if row["outcome"] == "rejected":
-            return "rejected-" + row["reject"] + ("-song" if row.get("pick_is_song") else "-other")
         return row["outcome"]
     pick = tuple(row["pick"])
     ok = row.get("pick_is_song") and pick not in WRONG_RECORDING
     return "right" if ok else "wrong"
 
 
-def table(rows, modes):
-    by = defaultdict(list)
-    for r in rows:
-        by[(r["mode"], r["provider"])].append(verdict(r))
-    print("| mode | provider | right | wrong | of |")
-    print("|---|---|---|---|---|")
-    for mode in modes:
-        for p in PROVIDERS:
-            v = by[(mode, p)]
-            if v:
-                print(f"| {mode} | {p} | {v.count('right')} | {v.count('wrong')} | {len(v)} |")
-        answers = pipeline(rows, mode)
-        c = Counter(answers.values())
-        print(f"| {mode} | **first accepted** | **{c['right']}** | **{c['wrong']}** | {len(answers)} |")
-
-
-def pipeline(rows, mode):
+def per_provider(rows, mode):
+    """{(id, provider): verdict}: the accepted search if any, else the first miss."""
     out = {}
     for r in rows:
         if r["mode"] != mode:
             continue
-        if r["id"] not in out:
-            out[r["id"]] = "miss"
-        if out[r["id"]] == "miss" and r["outcome"] == "accepted":
-            out[r["id"]] = verdict(r)
+        key = (r["id"], r["provider"])
+        v = verdict(r)
+        if key not in out or v in ("right", "wrong"):
+            out[key] = v
     return out
 
 
+def pipeline(rows, mode):
+    """{id: verdict} of the answer the app would give."""
+    piped = [r for r in rows if r["mode"] == mode + "-pipeline"]
+    per = per_provider(rows, mode)
+    if piped:  # the harness ran the real find_with
+        return {r["id"]: per[(r["id"], r["provider"])] if r["provider"] else "miss" for r in piped}
+    out = {}
+    for (i, p), v in per.items():  # one search per provider: first accepted in order
+        if out.get(i, "miss") == "miss":
+            out[i] = v if v in ("right", "wrong") else "miss"
+    return out
+
+
+def table(rows, modes):
+    print("| mode | provider | right | wrong | of |")
+    print("|---|---|---|---|---|")
+    for mode in modes:
+        per = per_provider(rows, mode)
+        for p in PROVIDERS:
+            v = [x for (i, q), x in per.items() if q == p]
+            print(f"| {mode} | {p} | {v.count('right')} | {v.count('wrong')} | {len(v)} |")
+        c = Counter(pipeline(rows, mode).values())
+        print(f"| {mode} | **first accepted** | **{c['right']}** | **{c['wrong']}** | {sum(c.values())} |")
+
+
 def causes(rows, mode):
-    """Why each provider missed (no accepted result), by reason."""
+    """Why each search missed, by reason."""
     c = Counter()
     for r in rows:
         if r["mode"] == mode and r["outcome"] != "accepted":
             v = verdict(r)
             if v == "no_same_length":
-                deltas = r.get("song_deltas") or []
-                v += " (song at other length)" if deltas else " (song not listed)"
+                v += " (song at other length)" if r.get("song_deltas") else " (song not listed)"
             c[v] += 1
     return c
 
@@ -85,14 +96,14 @@ def length_detail(rows):
     print("\nSong listed only outside +-3 s (case, mode, provider: deltas in s):")
     for r in rows:
         d = r.get("song_deltas") or []
-        if r["outcome"] == "no_same_length" and d:
-            print(f"  #{r['id']} {r['mode']} {r['provider']}: {sorted(round(x, 1) for x in d)}")
+        if r.get("outcome") == "no_same_length" and d:
+            print(f"  #{r['id']} {r['mode']} {r['provider']}: {sorted(set(round(x, 1) for x in d))}")
 
 
 def main():
     for label in sys.argv[1:]:
         rows = load(label)
-        modes = sorted({r["mode"] for r in rows})
+        modes = sorted({r["mode"] for r in rows if not r["mode"].endswith("-pipeline")})
         print(f"\n## {label}\n")
         table(rows, modes)
         for mode in modes:
