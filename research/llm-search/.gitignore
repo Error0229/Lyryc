@@ -1,0 +1,4 @@
+data/.http/
+__pycache__/
+*.log
+results/raw/
