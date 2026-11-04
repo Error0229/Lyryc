@@ -15,6 +15,7 @@ mod sources;
 mod timing;
 mod translation;
 mod types;
+mod updater;
 mod websocket;
 mod websocket_commands;
 mod window_management;
@@ -32,6 +33,7 @@ use llm::commands::{
 };
 use lyrics::{fetch_lrclib_raw, fetch_lyrics, fetch_lyrics_timed, lookahead_configure, mark_instrumental};
 use prealign::{prealign_configure, prealign_remove_files, prealign_status};
+use updater::{update_check, update_install, update_status, UpdaterState};
 use types::{ClickThroughState, TrackState, WebSocketState};
 use websocket_commands::{
     control_playback, debug_websocket_server, get_websocket_clients_count, get_websocket_status,
@@ -60,9 +62,11 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             app.manage(llm::store::init(app.path().app_config_dir().ok()));
             prealign::init(app.handle());
+            updater::start(app.handle());
 
             #[cfg(desktop)]
             {
@@ -169,6 +173,7 @@ pub fn run() {
         })
         .manage(TrackState::new(Mutex::new(None)))
         .manage(WebSocketState::new(Mutex::new(None)))
+        .manage(UpdaterState::default())
         .manage(ClickThroughState::new(Mutex::new(true))) // Start with click-through enabled
         .invoke_handler(tauri::generate_handler![
             get_current_track,
@@ -208,7 +213,10 @@ pub fn run() {
             llm_import_legacy_keys,
             prealign_configure,
             prealign_status,
-            prealign_remove_files
+            prealign_remove_files,
+            update_status,
+            update_check,
+            update_install
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

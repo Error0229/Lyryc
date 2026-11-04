@@ -62,6 +62,13 @@ export interface PrealignStatus {
   aligned: number;
 }
 
+/** `update_status` / `update-status`: the self-updater's state. */
+export type UpdateStatus =
+  | { state: "idle" | "checking" | "upToDate" }
+  | { state: "available"; version: string; notes: string | null }
+  | { state: "downloading"; version: string; done: number; total: number | null }
+  | { state: "error"; message: string };
+
 /** `fetch_lyrics_timed` payload. `pending`: a better timing may still arrive. */
 export interface TimedLyrics {
   lines: LyricLine[];

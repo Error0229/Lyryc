@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { ExternalLink } from "lucide-react";
+import type { UpdateStatus } from "../../lib/types";
 import { backend } from "../../services/ipc/backend";
 import { settings } from "../../state/settings";
+import { installUpdate, useUpdateStatus } from "../../state/update";
 import { Button } from "../../ui/Button";
 import { ConfirmDialog } from "../../ui/Dialog";
 import { Row } from "../../ui/Field";
@@ -15,6 +17,48 @@ const shortcuts = [
   { keys: ["Ctrl", "Shift", "D"], label: "Toggle click-through", hint: "Let clicks pass through the overlay, or grab it again." },
   { keys: ["Ctrl", "Shift", "M"], label: "Show or hide the overlay" },
 ];
+
+const mb = (bytes: number) => `${(bytes / 1048576).toFixed(1)} MB`;
+
+function updateHint(s: UpdateStatus): string {
+  switch (s.state) {
+    case "idle":
+      return "Lyryc checks by itself a little after it starts, then every few hours.";
+    case "checking":
+      return "Checking…";
+    case "upToDate":
+      return "You have the latest version.";
+    case "available":
+      return `Lyryc ${s.version} is out. Installing restarts the app.`;
+    case "downloading":
+      return `Downloading ${s.version}: ${mb(s.done)}${s.total ? ` of ${mb(s.total)}` : ""}`;
+    case "error":
+      return s.message;
+  }
+}
+
+function UpdateRow() {
+  const update = useUpdateStatus();
+  const busy = update.state === "checking" || update.state === "downloading";
+  return (
+    <>
+      <Row label="Updates" hint={updateHint(update)}>
+        {update.state === "available" ? (
+          <Button size="sm" variant="primary" onClick={installUpdate}>
+            Install and restart
+          </Button>
+        ) : (
+          <Button size="sm" disabled={busy} onClick={() => void backend.updateCheck()}>
+            {update.state === "checking" ? "Checking…" : "Check for updates"}
+          </Button>
+        )}
+      </Row>
+      {update.state === "available" && update.notes && (
+        <p className="px-4 pb-3 text-xs whitespace-pre-line text-fg-muted">{update.notes}</p>
+      )}
+    </>
+  );
+}
 
 function Keys({ keys }: { keys: string[] }) {
   return (
@@ -43,6 +87,7 @@ export function AboutPage() {
         <Row label="Version">
           <span className="font-mono text-xs text-fg-muted">{version || "—"}</span>
         </Row>
+        <UpdateRow />
         <Row label="Source code" hint="Issues and ideas welcome.">
           <Button size="sm" onClick={() => void backend.openUrl(REPO)}>
             GitHub <ExternalLink />

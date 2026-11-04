@@ -1,12 +1,13 @@
 /** Hover-revealed mini controls for the overlay strip. */
 import { motion } from "motion/react";
-import { EyeOff, GripVertical, Languages, Minus, Music4, Pause, Play, Plus, SearchCheck, Settings2, SkipBack, SkipForward } from "lucide-react";
+import { CircleArrowUp, EyeOff, GripVertical, Languages, Minus, Music4, Pause, Play, Plus, SearchCheck, Settings2, SkipBack, SkipForward } from "lucide-react";
 import { spring, fade } from "../design/motion";
 import { formatOffset, NUDGE_STEP, trackKey } from "../lib/offset";
 import { backend } from "../services/ipc/backend";
 import { useSession } from "../state/session";
 import { settings, useSettings } from "../state/settings";
 import { openSettings } from "../state/nav";
+import { installUpdate, useUpdateStatus } from "../state/update";
 import { IconButton } from "../ui/IconButton";
 import { markInstrumental, refetchLyrics } from "./actions";
 import { playhead } from "./playhead";
@@ -30,6 +31,24 @@ function OffsetNudge({ track }: { track: { artist: string; title: string } }) {
       </button>
       <IconButton tone="glass" tooltip={false} label="Lyrics earlier (+0.1 s)" icon={<Plus />} onClick={() => nudge(NUDGE_STEP)} />
     </div>
+  );
+}
+
+/** Only there when a new version is out: one click installs it and restarts. */
+function UpdateButton() {
+  const update = useUpdateStatus();
+  if (update.state !== "available" && update.state !== "downloading") return null;
+  const downloading = update.state === "downloading";
+  return (
+    <IconButton
+      tone="glass"
+      tooltip={false}
+      label={downloading ? `Downloading Lyryc ${update.version}…` : `Update to Lyryc ${update.version} (restarts the app)`}
+      icon={<CircleArrowUp className="text-accent" />}
+      disabled={downloading}
+      className={downloading ? "animate-pulse" : undefined}
+      onClick={installUpdate}
+    />
   );
 }
 
@@ -103,6 +122,7 @@ export function Controls() {
           icon={<Languages />}
           onClick={() => settings.translation({ enabled: !translating })}
         />
+        <UpdateButton />
         <IconButton tone="glass" tooltip={false} label="Settings" icon={<Settings2 />} onClick={() => void openSettings()} />
         <IconButton tone="glass" tooltip={false} label="Hide (Ctrl+Shift+M to show)" icon={<EyeOff />} onClick={() => void backend.hideOverlay()} />
       </div>

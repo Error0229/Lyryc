@@ -11,7 +11,25 @@ A cross-platform desktop application that displays real-time synchronized lyrics
 - **Cross-platform**: Runs on Windows, macOS, and Linux
 - **Lightweight**: Built with Tauri for minimal resource usage
 
-## 🚀 Quick Start
+## 📦 Install (Windows)
+
+1. Download `Lyryc_<version>_x64-setup.exe` and `lyryc-extension.zip` from the [latest release](https://github.com/Error0229/Lyryc/releases/latest) and run the installer (no admin rights needed).
+2. Unzip the extension, open `chrome://extensions` (or `edge://extensions`), turn on Developer mode, click **Load unpacked** and pick the unzipped folder.
+
+Lyryc updates itself. It checks GitHub Releases shortly after it starts and then every 6 hours. When a new version is out, an arrow shows up in the overlay's controls and under Settings → About → Updates. Clicking it installs the update and restarts the app.
+
+## 🚢 Releasing
+
+```bash
+npm version minor        # or patch / major: bumps package.json (the only version source), commits, tags vX.Y.Z
+git push --follow-tags
+```
+
+The tag runs `.github/workflows/release.yml`, which builds the NSIS installer, signs it for the updater, and opens a **draft** release with `latest.json` and `lyryc-extension.zip`. Installed apps only see published releases, so **publishing the draft is what ships the update**. Edit the notes before you publish: they appear in the app's update prompt.
+
+Updates are signed with the key in the `TAURI_SIGNING_PRIVATE_KEY` repo secret, and its public half is in `src-tauri/tauri.conf.json`. Keep a backup of the private key. If it's lost, existing installs can't verify new updates and every user has to reinstall by hand.
+
+## 🚀 Quick Start (development)
 
 ### Prerequisites
 

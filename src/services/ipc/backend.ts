@@ -6,7 +6,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { LyricLine, LyricsSource, PlaybackCommand, PrealignStatus, Span, TimedLyrics, TimeSample, Track } from "../../lib/types";
+import type { LyricLine, LyricsSource, PlaybackCommand, PrealignStatus, Span, TimedLyrics, TimeSample, Track, UpdateStatus } from "../../lib/types";
 import type { TranslationPrefs } from "../../state/schema";
 import { mockBackend } from "./mock";
 
@@ -30,6 +30,8 @@ export interface BackendEvents {
   prealign: (s: PrealignStatus) => void;
   /** AI providers or routes changed, in any window (`llm-settings-changed`). */
   llmSettings: () => void;
+  /** Self-update checks, downloads and failures (`update-status`). */
+  update: (s: UpdateStatus) => void;
 }
 
 export interface Backend {
@@ -65,6 +67,11 @@ export interface Backend {
   lookaheadConfigure(enabled: boolean, extraSources: boolean): Promise<void>;
   /** Deletes the model, runtime and yt-dlp, and turns the feature off. */
   prealignRemoveFiles(): Promise<PrealignStatus>;
+  /** The backend checks for updates by itself; `updateCheck` is "Check now". */
+  updateStatus(): Promise<UpdateStatus>;
+  updateCheck(): Promise<UpdateStatus>;
+  /** Downloads, installs and restarts the app. Resolves only if that fails. */
+  updateInstall(): Promise<void>;
   subscribe(on: Partial<BackendEvents>): () => void;
 }
 
@@ -148,6 +155,9 @@ const tauriBackend: Backend = {
   prealignStatus: () => invoke<PrealignStatus>("prealign_status"),
   lookaheadConfigure: (enabled, extraSources) => invoke<void>("lookahead_configure", { enabled, extraSources }),
   prealignRemoveFiles: () => invoke<PrealignStatus>("prealign_remove_files"),
+  updateStatus: () => invoke<UpdateStatus>("update_status"),
+  updateCheck: () => invoke<UpdateStatus>("update_check"),
+  updateInstall: () => invoke<void>("update_install"),
 
   subscribe(on) {
     const pending = [
@@ -162,6 +172,7 @@ const tauriBackend: Backend = {
         ),
       on.prealign && listen<PrealignStatus>("prealign-status", (e) => on.prealign!(e.payload)),
       on.llmSettings && listen("llm-settings-changed", () => on.llmSettings!()),
+      on.update && listen<UpdateStatus>("update-status", (e) => on.update!(e.payload)),
     ].filter((p): p is Promise<() => void> => !!p);
     return () => pending.forEach((p) => void p.then((off) => off()));
   },
