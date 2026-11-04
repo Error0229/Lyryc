@@ -14,7 +14,7 @@
  * `ytmusic` serves the lyrics as YouTube Music's own timed lyrics.
  */
 import type { Backend, BackendEvents } from "./backend";
-import type { LyricLine, PrealignStatus, Span } from "../../lib/types";
+import type { LyricLine, PrealignStatus, Span, UpdateStatus } from "../../lib/types";
 import { translationKey } from "../../lib/lyrics";
 import { englishSong, japaneseSong, readings, type MockSong } from "./mockData";
 
@@ -64,6 +64,24 @@ function setPrealign(p: Partial<PrealignStatus>) {
   prealign = { ...prealign, ...p };
   emit("prealign", prealign);
 }
+
+/** Self-update: `?update` pretends a new version is out. */
+let update: UpdateStatus = { state: "idle" };
+
+function setUpdate(s: UpdateStatus) {
+  update = s;
+  emit("update", update);
+}
+
+async function fakeCheck(): Promise<UpdateStatus> {
+  setUpdate({ state: "checking" });
+  await wait(600);
+  const notes = ["Faster lyrics lookup.", "Fixes the overlay on a second monitor."].join("\n");
+  setUpdate(params.has("update") ? { state: "available", version: "0.2.0", notes } : { state: "upToDate" });
+  return update;
+}
+
+if (typeof window !== "undefined" && params.has("update")) setTimeout(() => void fakeCheck(), 1500);
 
 function fakeDownload() {
   let done = 0;
@@ -191,6 +209,20 @@ export const mockBackend: Backend = {
   async prealignRemoveFiles() {
     setPrealign({ enabled: false, state: "off", download: null, diskBytes: 0 });
     return prealign;
+  },
+
+  updateStatus: async () => update,
+  updateCheck: fakeCheck,
+  async updateInstall() {
+    if (update.state !== "available") throw new Error("No update to install. Check for updates first.");
+    const { version } = update;
+    const total = 9_400_000;
+    for (let done = 0; done < total; done += 940_000) {
+      setUpdate({ state: "downloading", version, done, total });
+      await wait(150);
+    }
+    setUpdate({ state: "error", message: `Couldn't install ${version}: the browser preview can't restart itself.` });
+    throw new Error("browser preview");
   },
 
   subscribe(on) {

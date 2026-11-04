@@ -1,0 +1,77 @@
+name: Release
+
+# Ship a version:  npm version patch|minor|major  &&  git push --follow-tags
+#
+# The tag builds the Windows installer, signs it for the updater and opens a
+# *draft* release with latest.json and the browser extension attached.
+# Publishing the draft is what ships it: installed apps only see the latest
+# published release, so a bad build never reaches anyone until you say so.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag matches package.json
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $version"
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - run: npm ci
+
+      - run: npm test
+
+      - name: Build, sign and draft the release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          # The key has no password; unset, the signer would prompt for one.
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: Lyryc ${{ github.ref_name }}
+          releaseDraft: true
+          includeUpdaterJson: true
+          releaseBody: |
+            ## Install
+
+            1. Run **Lyryc_*_x64-setup.exe**. No admin rights needed.
+            2. Unzip **lyryc-extension.zip**, open `chrome://extensions` (or `edge://extensions`), turn on Developer mode, click **Load unpacked** and pick the unzipped folder.
+            3. Play something on Spotify, YouTube Music, Apple Music or SoundCloud in the browser.
+
+            Already installed? Lyryc updates itself: look for the arrow in the overlay's controls, or Settings → About → Updates.
+
+      - name: Attach the browser extension
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem extension -Exclude 'prototype-*'
+          Compress-Archive -Path $files.FullName -DestinationPath lyryc-extension.zip
+          gh release upload $env:GITHUB_REF_NAME lyryc-extension.zip --clobber
