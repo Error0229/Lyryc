@@ -655,6 +655,15 @@ fn placement_now(app: &AppHandle) -> Option<(Rect, (Display, Placement))> {
 /// with the room free to hang off-screen. What you see while dragging is where
 /// it lands.
 pub fn drag(app: &AppHandle) {
+    // Elsewhere there's no button state to follow (`mouse_down` is Windows
+    // only): the system drags the window, and `on_window_event` settles it.
+    #[cfg(not(windows))]
+    if !locked(app) {
+        if let Some(w) = main_window(app) {
+            let _ = w.start_dragging();
+        }
+        return;
+    }
     if locked(app) || DRAGGING.swap(true, Ordering::SeqCst) {
         return;
     }
