@@ -187,7 +187,6 @@ struct Announced {
     artist: String,
     video: Option<String>,
     has_length: bool,
-    has_video: bool,
 }
 
 impl Announced {
@@ -206,7 +205,6 @@ impl Announced {
             title: t.title.clone(),
             artist: t.artist.clone(),
             has_length: t.duration.is_some() || same.is_some_and(|l| l.has_length),
-            has_video: t.video_id.is_some() || same.is_some_and(|l| l.has_video),
         }
     }
 }
@@ -264,5 +262,16 @@ mod announce_tests {
             track("The Shape of Rain (Live)", Some(200.0), Some("other_video")), // gains words: news
         ]);
         assert_eq!(got, vec![true, false, false, true, true]);
+    }
+
+    #[test]
+    fn a_shorter_title_without_the_video_id_is_a_new_song() {
+        // The rule rests on the video id: without one, a title that is part of
+        // the last one is just another song.
+        let got = announced(&[
+            track("雨景色 - The Shape of Rain", Some(200.0), Some("TfZUcD7mwck")),
+            track("The Shape of Rain", Some(200.0), None),
+        ]);
+        assert_eq!(got, vec![true, true]);
     }
 }
