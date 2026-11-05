@@ -5,7 +5,7 @@ import type { LyricsSource, Track } from "../lib/types";
 type Named = Pick<Track, "title" | "artist">;
 
 export const isEstimate = (source: LyricsSource | null) =>
-  source === "lrclib-estimate" || source === "ytmusic-estimate" || source === "cover-estimate";
+  source === "lrclib-estimate" || source === "ytmusic-estimate" || source === "cover-estimate" || source === "sources-estimate";
 
 export function sameTrack(a: Named | null, b: Named | null): boolean {
   return !!a && !!b && trackKey(a.artist, a.title) === trackKey(b.artist, b.title);

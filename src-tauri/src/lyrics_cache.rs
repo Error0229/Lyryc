@@ -74,6 +74,7 @@ fn init_db() -> Option<Connection> {
     let _ = conn.execute("ALTER TABLE lyrics_cache ADD COLUMN source TEXT", []);
 
     create_aligned_table(&conn);
+    create_translation_table(&conn);
 
     // Create composite index for optimal lookups with TTL filtering
     if let Err(e) = conn.execute(
@@ -348,6 +349,51 @@ pub fn cache_aligned(video_id: &str, text_hash: &str, lines_json: Option<&str>) 
     }
 }
 
+fn create_translation_table(conn: &Connection) {
+    if let Err(e) = conn.execute(
+        "CREATE TABLE IF NOT EXISTS translation_cache (
+            key TEXT PRIMARY KEY,
+            result_json TEXT NOT NULL,
+            cached_at INTEGER NOT NULL
+        )",
+        [],
+    ) {
+        warn!("Failed to create translation_cache table: {}", e);
+    }
+}
+
+fn get_translation_in(conn: &Connection, key: &str) -> Option<String> {
+    conn.query_row("SELECT result_json FROM translation_cache WHERE key = ?1", params![key], |row| row.get(0))
+        .map_err(|e| {
+            if !matches!(e, rusqlite::Error::QueryReturnedNoRows) {
+                warn!("translation_cache query error: {}", e);
+            }
+        })
+        .ok()
+}
+
+fn cache_translation_in(conn: &Connection, key: &str, result_json: &str) {
+    if let Err(e) = conn.execute(
+        "INSERT OR REPLACE INTO translation_cache (key, result_json, cached_at) VALUES (?1, ?2, ?3)",
+        params![key, result_json, now_timestamp()],
+    ) {
+        error!("Failed to cache translation: {}", e);
+    }
+}
+
+/// A stored translation (JSON) by `translation::cache::key`.
+pub fn get_translation(key: &str) -> Option<String> {
+    DB_CONNECTION.lock().ok()?.as_ref().and_then(|c| get_translation_in(c, key))
+}
+
+pub fn cache_translation(key: &str, result_json: &str) {
+    if let Ok(guard) = DB_CONNECTION.lock() {
+        if let Some(conn) = guard.as_ref() {
+            cache_translation_in(conn, key, result_json);
+        }
+    }
+}
+
 /// Clear the entire cache
 #[allow(dead_code)]
 pub fn clear_cache() {
@@ -390,6 +436,16 @@ pub fn is_cache_available() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn translations_are_kept_by_key() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_translation_table(&conn);
+        assert_eq!(get_translation_in(&conn, "k"), None);
+        cache_translation_in(&conn, "k", "first");
+        cache_translation_in(&conn, "k", "second");
+        assert_eq!(get_translation_in(&conn, "k").as_deref(), Some("second"), "the newest answer wins");
+    }
 
     #[test]
     fn alignments_are_keyed_by_video_and_text() {

@@ -16,7 +16,7 @@ use std::time::Instant;
 
 use super::identify::{parse, prompt, request, tools};
 use super::store::Store;
-use super::{complete_with, Task};
+use super::{complete_with, Lane, Task};
 
 fn research_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../research/llm-search")
@@ -101,7 +101,7 @@ async fn identify_cases() {
                 case["duration"].as_f64(),
             );
             let started = Instant::now();
-            let reply = complete_with(&target, &request(&user), tools(search)).await;
+            let reply = complete_with(&target, &request(&user), tools(search), Lane::Quick).await;
             let latency_ms = started.elapsed().as_millis() as u64;
             let row = match reply {
                 Ok(c) => json!({

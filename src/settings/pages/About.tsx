@@ -14,7 +14,7 @@ import { PageHeader } from "../Page";
 const REPO = "https://github.com/Error0229/Lyryc";
 
 const shortcuts = [
-  { keys: ["Ctrl", "Shift", "D"], label: "Toggle click-through", hint: "Let clicks pass through the overlay, or grab it again." },
+  { keys: ["Ctrl", "Shift", "D"], label: "Move or lock the lyrics", hint: "Unlocked, the strip can be dragged and shows its controls; locked, clicks pass through it. Esc locks it too." },
   { keys: ["Ctrl", "Shift", "M"], label: "Show or hide the overlay" },
 ];
 

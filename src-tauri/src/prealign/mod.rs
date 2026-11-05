@@ -21,7 +21,7 @@ mod ctc;
 mod model;
 mod queue;
 mod reject;
-mod romanize;
+pub(crate) mod romanize;
 mod ytdlp;
 
 use crate::lyrics::{TimingSource, TimingUpdate, TIMING_UPDATED_EVENT};
@@ -112,6 +112,12 @@ struct Prealign {
     cancel: AtomicBool,
     app: OnceLock<AppHandle>,
     paths: OnceLock<Paths>,
+}
+
+/// The app, once `init` ran (always, at startup): for events from code that
+/// has no handle of its own.
+pub(crate) fn app() -> Option<&'static AppHandle> {
+    P.app.get()
 }
 
 static P: LazyLock<Prealign> = LazyLock::new(|| Prealign {

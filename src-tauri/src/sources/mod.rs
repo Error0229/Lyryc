@@ -106,10 +106,15 @@ impl Query {
 
     /// Does a result carry one of the song's titles and one of its artists,
     /// and no version marker that the song's titles lack?
+    ///
+    /// An English UI romanizes the artist ("Sana Ayaka") where the sources
+    /// write it natively (茶和アヤカ). With the exact title at this length, a
+    /// credit that sounds like the player's (`sounds_alike`) counts as its.
     fn names_song(&self, title: &str, artist: &str) -> bool {
         let marked = |t: &str| version_re().is_match(t);
+        let romanized = |n: &Name| align::norm(title) == align::norm(&n.title) && sounds_alike(artist, &n.artist);
         self.names.iter().any(|n| title_matches(title, &n.title))
-            && self.names.iter().any(|n| artist_matches(artist, &n.artist))
+            && self.names.iter().any(|n| artist_matches(artist, &n.artist) || romanized(n))
             && (!marked(title) || self.names.iter().any(|n| marked(&n.title)))
     }
 
@@ -127,6 +132,9 @@ impl Query {
 pub struct Found {
     pub provider: Provider,
     pub lines: Vec<LyricLine>,
+    /// The provider's own timing; false: its words were untimed, and the
+    /// times are estimated over the recording.
+    pub timed: bool,
 }
 
 /// One search result of a provider.
@@ -208,8 +216,9 @@ enum Miss {
     Text,
 }
 
-/// Lines from one provider for one name, or why not.
-type Attempt = Result<Vec<LyricLine>, Miss>;
+/// Lines from one provider for one name (and whether the provider timed
+/// them), or why not.
+type Attempt = Result<(Vec<LyricLine>, bool), Miss>;
 
 /// One provider, one name: one search and at most one lyric request, both
 /// through `get(url, referer)`. No retries. Err is a failed request or a
@@ -235,11 +244,19 @@ where
     let Some(lrc) = (api.lyric)(&body)? else {
         return Ok(Err(Miss::NoLyric));
     };
-    Ok(check(
-        &align::parse_lrc(&lrc, &c.title, &c.artist),
-        q,
-        plain,
-    ))
+    let timed = align::parse_lrc(&lrc, &c.title, &c.artist);
+    if timed.len() < MIN_LINES && plain.is_none() {
+        // Some providers keep a song's words untimed (QQ: 57 untimed lines for
+        // ネバーランドより). This is the recording (names, and length unless
+        // only words are asked for), so its words are right: estimated over
+        // it here, and word alignment times them to the audio.
+        let words = align::untimed_lines(&lrc, &c.title, &c.artist);
+        if words.len() < MIN_LINES {
+            return Ok(Err(Miss::FewLines));
+        }
+        return Ok(Ok((crate::timing::estimate_plain(&words.join("\n"), q.duration), false)));
+    }
+    Ok(check(&timed, q, plain))
 }
 
 /// Timing for `q` from the first provider that has some. With `plain`, the
@@ -271,7 +288,7 @@ where
                     "{:?}: {:?} for '{}' by '{}'",
                     p, miss, name.title, name.artist
                 ),
-                Ok(Ok(lines)) => return Some(Found { provider: p, lines }),
+                Ok(Ok((lines, timed))) => return Some(Found { provider: p, lines, timed }),
             }
         }
     }
@@ -289,7 +306,7 @@ fn check(src: &[(f64, String)], q: &Query, plain: Option<&[String]>) -> Attempt 
         return Err(Miss::TooLong);
     }
     let Some(plain) = plain else {
-        return Ok(to_lines(src.to_vec()));
+        return Ok((to_lines(src.to_vec()), true));
     };
     let mapped = align::map_lines(plain, src);
     let matched = mapped.iter().flatten().count();
@@ -297,8 +314,9 @@ fn check(src: &[(f64, String)], q: &Query, plain: Option<&[String]>) -> Attempt 
         return Err(Miss::Text);
     }
     let times = align::interpolate(&mapped, q.duration.max(last));
-    Ok(to_lines(
-        times.into_iter().zip(plain.iter().cloned()).collect(),
+    Ok((
+        to_lines(times.into_iter().zip(plain.iter().cloned()).collect()),
+        true,
     ))
 }
 
@@ -329,11 +347,30 @@ fn title_matches(candidate: &str, track: &str) -> bool {
         && (c.starts_with(&t) || t.starts_with(&c) || align::dice(&c, &t) >= MIN_TITLE_SIM)
 }
 
+/// A Latin-letter credit and a kana/kanji one name the same artist when a word
+/// of the Latin one (4+ letters) is heard in the other's romanization: "Sana
+/// Ayaka" and 茶和アヤカ share "ayaka". An all-kanji name gives no such
+/// evidence, so it never matches this way.
+fn sounds_alike(a: &str, b: &str) -> bool {
+    let cjk = |s: &str| s.chars().any(crate::prealign::romanize::is_cjk);
+    let (latin, native) = match (cjk(a), cjk(b)) {
+        (false, true) => (a, b),
+        (true, false) => (b, a),
+        _ => return false,
+    };
+    let heard = crate::prealign::romanize::name_roman(native);
+    latin
+        .split(|c: char| !c.is_ascii_alphabetic())
+        .map(str::to_ascii_lowercase)
+        .any(|w| w.len() >= 4 && heard.contains(&w))
+}
+
 /// Some part of one artist credit is some part of the other: "Ayase / YOASOBI"
 /// is YOASOBI, "米津玄師 (よねづ けんし)" is 米津玄師.
 fn artist_matches(candidate: &str, known: &str) -> bool {
     let parts = |s: &str| -> Vec<String> {
-        s.split(['/', ',', '&', '、', '(', ')', '（', '）', '×'])
+        // 和: YouTube Music's "and" in a Chinese UI ("SUMI 和 DJ YEN").
+        s.split(['/', ',', '&', '、', '(', ')', '（', '）', '×', '和'])
             .chain([s])
             .map(align::norm)
             .filter(|p| !p.is_empty())
@@ -392,12 +429,19 @@ fn best(cands: Vec<Candidate>, q: &Query, strict: bool) -> Result<Candidate, Mis
                 0.0
             }
     };
-    same.into_iter()
+    let picked = same
+        .iter()
         .filter(|c| !strict || q.names_song(&c.title, &c.artist))
-        .map(|c| (score(&c), c))
-        .reduce(|a, b| if b.0 > a.0 { b } else { a })
-        .map(|(_, c)| c)
-        .ok_or(Miss::OtherSong)
+        .map(|c| (score(c), c))
+        .reduce(|a, b| if b.0 > a.0 { b } else { a });
+    match picked {
+        Some((_, c)) => Ok(c.clone()),
+        None => {
+            let seen: Vec<String> = same.iter().take(3).map(|c| format!("'{}' by '{}'", c.title, c.artist)).collect();
+            debug!("No result names the song; rejected {}", seen.join(", "));
+            Err(Miss::OtherSong)
+        }
+    }
 }
 
 fn str_of(v: &Value) -> String {
@@ -599,6 +643,19 @@ pub(crate) mod tests {
             Err(Miss::OtherSong)
         );
 
+        // An English UI romanizes the artist; the sources write it natively.
+        // Same title and length: this recording. Not for a words query, which has no length.
+        let nokoriga = Query::new([name("残り香", "Sana Ayaka")], 173.0);
+        assert_eq!(pick(&nokoriga, vec![cand("残り香", "茶和アヤカ", 173.4)]), Ok("残り香".into()));
+        assert_eq!(pick(&nokoriga, vec![cand("残り香 (Live)", "茶和アヤカ", 173.4)]), Err(Miss::OtherSong), "a version marker still counts");
+        // A words query (any length) takes it too: the exact title and an artist that sounds the same.
+        let words = Query::words_of([name("糸しいひと", "Reira Ushio")], 280.0);
+        assert_eq!(pick(&words, vec![cand("糸しいひと", "汐れいら", 301.0)]), Ok("糸しいひと".into()));
+        assert_eq!(pick(&words, vec![cand("糸しいひと", "大崎謙介", 301.0)]), Err(Miss::OtherSong), "another artist doesn't sound like it");
+        assert_eq!(pick(&words, vec![cand("糸", "汐れいら", 301.0)]), Err(Miss::OtherSong), "nor does another title");
+        let same_script = Query::new([name("残り香", "某歌手")], 173.0);
+        assert_eq!(pick(&same_script, vec![cand("残り香", "茶和アヤカ", 173.4)]), Err(Miss::OtherSong));
+
         // A marker the song's own title has is no other version.
         let live = Query::new([name("Live Forever", "Oasis")], 276.0);
         assert_eq!(
@@ -627,6 +684,9 @@ pub(crate) mod tests {
         ));
         assert!(artist_matches("Queen", "Queen Official"));
         assert!(artist_matches("AKMU (악동뮤지션)", "AKMU"));
+        assert!(artist_matches("sumi DJ YEN", "SUMI 和 DJ YEN"));
+        assert!(artist_matches("Lorien", "Samuel Kim和Lorien"));
+        assert!(artist_matches("和楽器バンド", "和楽器バンド"), "a name with 和 in it still matches itself");
         assert!(!artist_matches("Steve", "Eve"));
         assert!(!artist_matches("Will Stetson", "Eve"));
         assert!(!artist_matches("米津玄師", "Kenshi Yonezu"));
@@ -636,7 +696,7 @@ pub(crate) mod tests {
     #[test]
     fn guards_keep_lrclib_lines_and_take_source_times() {
         let plain = koi_plain();
-        let lines = check(&koi_src(), &koi(), Some(&plain)).unwrap();
+        let (lines, _) = check(&koi_src(), &koi(), Some(&plain)).unwrap();
         assert_eq!(
             lines.iter().map(|l| l.text.clone()).collect::<Vec<_>>(),
             plain
@@ -671,7 +731,7 @@ pub(crate) mod tests {
             (30.0, "seven eight nine"),
         ]);
         assert!(check(&good, &q, Some(&plain)).is_ok());
-        assert_eq!(check(&good, &q, None).unwrap().len(), 3);
+        assert_eq!(check(&good, &q, None).unwrap().0.len(), 3);
 
         let short = timed(&[(10.0, "one two three"), (20.0, "four five six")]);
         assert_eq!(check(&short, &q, None).err(), Some(Miss::FewLines));
@@ -699,7 +759,7 @@ pub(crate) mod tests {
     fn source_lines_lose_credits_and_the_title_banner() {
         let text = (qq::API.lyric)(&fixture("qq_lyric.json")).unwrap().unwrap();
         let src = align::parse_lrc(&text, "恋 (Love)", "茅原实里 (ちはらみのり)");
-        let lines = check(&src, &koi(), None).unwrap();
+        let (lines, _) = check(&src, &koi(), None).unwrap();
         assert_eq!(lines[0].text, "眠れない夜 脳裏をよぎる");
         assert!(lines.len() > 30);
     }
@@ -844,10 +904,11 @@ pub(crate) mod tests {
             async move { Ok(body) }
         };
         let q = koi();
-        let lines = fetch(&get, Provider::Netease, &q.names[0], &q, None)
+        let (lines, timed) = fetch(&get, Provider::Netease, &q.names[0], &q, None)
             .await
             .unwrap()
             .unwrap();
+        assert!(timed, "NetEase timed this one");
         assert_eq!(lines[0].time, 24.45);
         let urls = urls.lock().unwrap().clone();
         assert_eq!(urls.len(), 2, "one search, one lyric: {urls:?}");
@@ -887,7 +948,7 @@ pub(crate) mod tests {
                 match attempt {
                     Err(e) => println!("  {:?}: ERROR after {} ms: {}", p, ms, e),
                     Ok(Err(miss)) => println!("  {:?}: {:?} ({} ms)", p, miss, ms),
-                    Ok(Ok(lines)) => println!(
+                    Ok(Ok((lines, _))) => println!(
                         "  {:?}: {} lines, first at {:.2}s ({} ms)",
                         p,
                         lines.len(),

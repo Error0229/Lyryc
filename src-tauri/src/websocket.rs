@@ -75,8 +75,10 @@ impl WebSocketServer {
                     let callback = track_callback.clone();
 
                     tokio::spawn(async move {
-                        if let Err(e) = handle_connection(stream, addr, clients, callback).await {
-                            error!("Error handling connection from {}: {}", addr, e);
+                        match handle_connection(stream, addr, clients, callback).await {
+                            Err(e) if client_went_away(e.as_ref()) => debug!("{} went away: {}", addr, e),
+                            Err(e) => error!("Error handling connection from {}: {}", addr, e),
+                            Ok(()) => {}
                         }
                     });
                 }
@@ -180,6 +182,17 @@ fn extension_only(req: &Handshake, resp: Response) -> Result<Response, ErrorResp
     let mut refused = ErrorResponse::new(Some("Only the Lyryc extension may connect".into()));
     *refused.status_mut() = StatusCode::FORBIDDEN;
     Err(refused)
+}
+
+/// The extension dropping its socket without a goodbye: a tab or the browser
+/// closed, an MV3 service worker suspended. Routine; it reconnects on its own.
+fn client_went_away(e: &(dyn std::error::Error + 'static)) -> bool {
+    use tokio_tungstenite::tungstenite::error::{Error, ProtocolError};
+    match e.downcast_ref::<Error>() {
+        Some(Error::ConnectionClosed | Error::AlreadyClosed | Error::Protocol(ProtocolError::ResetWithoutClosingHandshake)) => true,
+        Some(Error::Io(io)) => io.kind() == std::io::ErrorKind::ConnectionReset,
+        _ => false,
+    }
 }
 
 async fn handle_connection(

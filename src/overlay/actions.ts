@@ -13,10 +13,27 @@ import { accepts, sameTrack } from "./upgrade";
 let request = 0;
 
 export function setTrack(track: Track) {
-  if (sameTrack(useSession.getState().track, track)) return;
-  useSession.setState({ track, lyrics: [], source: null, status: "loading", translations: {}, retimedAt: 0, refetching: false });
+  const shown = useSession.getState();
+  if (sameTrack(shown.track, track)) {
+    // The player often sends the length and video id a moment after the title.
+    // Keep them, and search again unless lyrics are already showing: a search
+    // without them, finished or still running, skipped most of the sources.
+    // (loadLyrics' request counter drops the stale one's answer.)
+    if (!gainsDetail(shown.track!, track)) return;
+    useSession.setState({ track });
+    if (shown.status === "missing" || shown.status === "loading") {
+      useSession.setState({ status: "loading" });
+      void loadLyrics(track);
+    }
+    return;
+  }
+  useSession.setState({ track, lyrics: [], source: null, status: "loading", translations: {}, retimedAt: 0, refetching: false, stage: null, pending: false, aligning: false, outcome: null });
   playhead.reset();
   void loadLyrics(track);
+}
+
+export function gainsDetail(was: Track, now: Track): boolean {
+  return (!was.duration && !!now.duration) || (!was.videoId && !!now.videoId);
 }
 
 async function loadLyrics(track: Track) {
@@ -24,7 +41,7 @@ async function loadLyrics(track: Track) {
   try {
     const { extraSources, identifyWithSearch } = useSettings.getState();
     const r = await backend.fetchLyrics(track, extraSources, identifyWithSearch);
-    if (id === request) applyLyrics(track, r.lines, r.source);
+    if (id === request) applyLyrics(track, r.lines, r.source, r.pending);
   } catch {
     if (id === request) useSession.setState({ status: "missing" });
   }
@@ -44,20 +61,14 @@ export async function refetchLyrics() {
     const { extraSources, identifyWithSearch } = useSettings.getState();
     const r = await backend.fetchLyrics(track, extraSources, identifyWithSearch, true);
     if (id !== request) return;
-    if (r.source === source && textSignature(r.lines) === textSignature(lyrics)) {
-      toast(
-        r.source === "instrumental"
-          ? { title: "Still no lyrics found", description: "The AI also says this track has no words." }
-          : { title: "Found the same lyrics again", description: "No source has a different version of this track." },
-      );
-    }
-    install(r.lines, r.source);
-  } catch (e) {
+    if (r.source === source && textSignature(r.lines) === textSignature(lyrics)) sayOutcome("same");
+    install(r.lines, r.source, r.pending);
+  } catch {
     if (id !== request) return;
-    const title = lyrics.length ? "No other lyrics found" : "Still no lyrics for this track";
-    toast({ title, description: friendlyError(e), tone: "danger" });
+    // The strip says so itself: its icon, or the "No synced lyrics" message.
+    if (lyrics.length) sayOutcome("nothing-else");
     // Unmarking an instrumental that has no lyrics either: it is just missing.
-    if (!lyrics.length) useSession.setState({ status: "missing", source: null });
+    else useSession.setState({ status: "missing", source: null });
   } finally {
     if (id === request) useSession.setState({ refetching: false });
   }
@@ -80,11 +91,21 @@ export function markInstrumental() {
  * timing swap: lines keep their identity and the fill eases to the new times.
  * Late arrivals for another track are dropped.
  */
-export function applyLyrics(track: Pick<Track, "title" | "artist">, raw: LyricLine[], source: LyricsSource) {
-  if (accepts(useSession.getState(), { track, source })) install(raw, source);
+export function applyLyrics(track: Pick<Track, "title" | "artist">, raw: LyricLine[], source: LyricsSource, pending = false) {
+  if (accepts(useSession.getState(), { track, source })) install(raw, source, pending);
 }
 
-function install(raw: LyricLine[], source: LyricsSource) {
+let outcomeTimer = 0;
+
+/** "Search again" changed nothing: the status icon says so for a moment. */
+function sayOutcome(outcome: "same" | "nothing-else") {
+  clearTimeout(outcomeTimer);
+  useSession.setState({ outcome });
+  outcomeTimer = window.setTimeout(() => useSession.setState({ outcome: null }), OUTCOME_MS);
+}
+const OUTCOME_MS = 3000;
+
+function install(raw: LyricLine[], source: LyricsSource, pending: boolean) {
   const s = useSession.getState();
   const lines = normalizeLines(raw);
   useSession.setState({
@@ -92,6 +113,8 @@ function install(raw: LyricLine[], source: LyricsSource) {
     source: lines.length || source === "instrumental" ? source : null,
     status: lines.length ? "ready" : source === "instrumental" ? "instrumental" : "missing",
     retimedAt: s.lyrics.length && lines.length ? performance.now() : s.retimedAt,
+    stage: null,
+    pending,
   });
 }
 

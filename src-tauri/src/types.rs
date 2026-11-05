@@ -40,4 +40,3 @@ pub struct LyricWord {
 // Global state types
 pub type TrackState = Arc<Mutex<Option<TrackInfo>>>;
 pub type WebSocketState = Arc<Mutex<Option<Arc<WebSocketServer>>>>;
-pub type ClickThroughState = Arc<Mutex<bool>>; // true = click-through enabled, false = disabled

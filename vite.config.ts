@@ -19,6 +19,7 @@ export default defineConfig(async () => ({
       input: {
         main: resolve(__dirname, "index.html"),
         settings: resolve(__dirname, "settings.html"),
+        tray: resolve(__dirname, "tray.html"),
       },
     },
   },
@@ -30,7 +31,10 @@ export default defineConfig(async () => ({
     strictPort: true,
     host: host || false,
     hmr: host ? { protocol: "ws", host, port: port + 1 } : undefined,
-    watch: { ignored: ["**/src-tauri/**"] },
+    // Only the app's own sources reload the overlay: research runs, docs and
+    // the extension write files the webview never imports, and each write
+    // used to reload it (and re-run the song's lyric lookup).
+    watch: { ignored: ["**/src-tauri/**", "**/research/**", "**/docs/**", "**/extension/**", "**/model_tester/**", "**/tests/**"] },
   },
 
   test: {

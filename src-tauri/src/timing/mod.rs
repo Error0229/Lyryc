@@ -20,7 +20,7 @@ const FALLBACK_LINE_SECS: f64 = 5.0;
 
 /// Rough count of sung syllables: one per CJK / kana / hangul character, one
 /// per Latin vowel group.
-fn syllables(text: &str) -> usize {
+pub(crate) fn syllables(text: &str) -> usize {
     let mut count = 0;
     let mut in_vowels = false;
     for c in text.chars() {
@@ -39,7 +39,7 @@ fn syllables(text: &str) -> usize {
 
 /// Spread plain lyric lines over the track, weighted by syllables.
 pub fn estimate_plain(plain: &str, track_secs: f64) -> Vec<LyricLine> {
-    let lines: Vec<&str> = plain.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let lines: Vec<&str> = plain.lines().map(crate::sources::align::sung_text).filter(|l| !l.is_empty()).collect();
     let weights: Vec<f64> = if track_secs > 0.0 {
         lines.iter().map(|l| syllables(l) as f64 + LINE_GAP_WEIGHT).collect()
     } else {

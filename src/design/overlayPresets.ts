@@ -6,7 +6,7 @@ import type { LyricStyle } from "../state/schema";
 
 type PresetFields = Pick<
   LyricStyle,
-  "textColor" | "activeColor" | "sungColor" | "upcomingColor" | "shadow" | "shadowColor" | "shadowBlur" | "glow" | "glowColor" | "background" | "backgroundOpacity"
+  "textColor" | "activeColor" | "sungColor" | "upcomingColor" | "shadow" | "shadowColor" | "shadowBlur" | "glow" | "glowColor" | "background" | "backgroundOpacity" | "scrim"
 >;
 
 export interface OverlayPreset {
@@ -27,9 +27,12 @@ const base: PresetFields = {
   glowColor: "#ffffff",
   background: "#000000",
   backgroundOpacity: 0,
+  scrim: 0,
 };
 
 export const overlayPresets: OverlayPreset[] = [
+  // The default for new installs: a soft backdrop keeps white words readable on any desktop.
+  { id: "soft", name: "Soft backdrop", style: { ...base, scrim: 0.6 } },
   { id: "classic", name: "Classic", style: base },
   { id: "karaoke", name: "Karaoke", style: { ...base, activeColor: "#ffd166", sungColor: "#ffe7a8", upcomingColor: "#ffffffb3", shadowBlur: 18 } },
   { id: "glow", name: "Glow", style: { ...base, sungColor: "#dbe6ff", upcomingColor: "#ffffff59", glow: true, glowColor: "#8fb0ff", shadowBlur: 20 } },

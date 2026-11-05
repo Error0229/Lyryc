@@ -2,7 +2,10 @@
  * Browser-mode backend: a fake player driven by URL params so the UI can be
  * built and screenshotted without Tauri.
  *
- *   ?scenario=idle|playing|translation|furigana|estimate|ytmusic   (default: playing)
+ *   ?scenario=idle|playing|translation|furigana|estimate|ytmusic|missing   (default: playing)
+ *   &stage=identify|web-search|sources|other-recording   the lookup stays in that pass
+ *   &hover=status|unlock   the cursor rests on that part of the (locked) strip
+ *   &move (&firstrun)   start unlocked, in Move mode (as on a first run)
  *   &t=12.5     start at 12.5 s
  *   &paused     freeze the clock (deterministic screenshots)
  *   &retime     5 s in, push re-timed lyrics for the same track
@@ -14,7 +17,7 @@
  * `ytmusic` serves the lyrics as YouTube Music's own timed lyrics.
  */
 import type { Backend, BackendEvents } from "./backend";
-import type { LyricLine, PrealignStatus, Span, UpdateStatus } from "../../lib/types";
+import type { LookupStage, LyricLine, PrealignStatus, Span, UpdateStatus } from "../../lib/types";
 import { translationKey } from "../../lib/lyrics";
 import { englishSong, japaneseSong, readings, type MockSong } from "./mockData";
 
@@ -145,8 +148,13 @@ export const mockBackend: Backend = {
 
   async fetchLyrics(track, extraSources) {
     await wait(350);
+    const stage = params.get("stage") as LookupStage | null;
+    if (stage) {
+      emit("progress", { track, stage });
+      await new Promise(() => {}); // stays in that pass
+    }
     const found = songs.find((s) => s.track.title === track.title);
-    if (!found) throw new Error("No lyrics found");
+    if (!found || mockScenario === "missing") throw new Error("No lyrics found");
     if (mockScenario === "ytmusic") return { lines: found.lines, source: "ytmusic", pending: false };
     if (mockScenario !== "estimate") return { lines: found.lines, source: "lrclib", pending: false };
 
@@ -190,10 +198,16 @@ export const mockBackend: Backend = {
     emitTime();
   },
 
-  fitHeight: async () => {},
-  openSettings: async () => void window.open("/settings.html", "lyryc-settings", "width=880,height=640"),
+  setFrame: async () => {},
+  setWidth: async () => {},
+  openSettings: async () => void window.open("/settings.html", "lyryc-settings", "width=960,height=700"),
   hideOverlay: async () => {},
-  startDrag: async () => {},
+  dragStrip: async () => {},
+  // The browser preview has no click-through: hover works through the DOM.
+  stripState: async () => ({ locked: !params.has("move"), anchor: params.get("anchor") === "top" ? "top" : "bottom", firstRun: params.has("firstrun") }),
+  setLocked: async (locked) => emit("locked", locked),
+  stripHits: async () => {},
+  resetPosition: async () => {},
   openUrl: async (url) => void window.open(url, "_blank", "noopener"),
   appVersion: async () => "0.1.0-dev",
 
@@ -231,7 +245,20 @@ export const mockBackend: Backend = {
       if (mockScenario !== "idle") on.track?.(song().track);
       on.playing?.(playing);
       if (mockScenario !== "idle") emitTime();
+      const target = params.get("hover");
+      if (target) on.hover?.({ inside: true, target });
     }, 30);
-    return () => void subscribers.delete(on);
+    // Stand in for the backend's cursor poll (it decides hover while locked):
+    // over the strip or the pill beside it.
+    let inside = false;
+    const follow = (e: PointerEvent) => {
+      const now = !!(e.target as Element | null)?.closest?.("[data-strip], [data-pill]");
+      if (now !== inside && !params.get("hover")) on.hover?.({ inside: (inside = now), target: null });
+    };
+    document.addEventListener("pointermove", follow);
+    return () => {
+      subscribers.delete(on);
+      document.removeEventListener("pointermove", follow);
+    };
   },
 };

@@ -16,7 +16,7 @@ import { normalizeOffset } from "../lib/offset";
 import { defaultSettings, type FontWeight, type FuriganaMode, type Settings, type TranslationStyle } from "./schema";
 
 export const SETTINGS_KEY = "lyryc-settings";
-export const SETTINGS_VERSION = 1;
+export const SETTINGS_VERSION = 2;
 export const LEGACY_CONFIG_KEY = "lyryc-config";
 export const LEGACY_OFFSETS_KEY = "lyrics-offset-storage";
 export const LEGACY_TRANSLATION_KEY = "lyryc-translation-settings";
@@ -63,6 +63,18 @@ function offsets(v: unknown): Record<string, number> {
   return out;
 }
 
+/**
+ * Bring a saved `lyryc-settings` up to SETTINGS_VERSION (zustand persist's
+ * `migrate`). Fields added later get their defaults when loaded anyway; this
+ * only covers the ones whose default would change how an existing setup looks.
+ *   v2: `lyric.scrim` (the soft backdrop) is on for new installs, off for existing ones.
+ */
+export function upgradeSettings(saved: unknown, version: number): unknown {
+  const s = obj(saved);
+  if (version < 2) return { ...s, lyric: { ...obj(s.lyric), scrim: 0 } };
+  return s;
+}
+
 /** Map the v2 store (plus pre-v2 offsets) onto the new shape. Pure. */
 export function fromLegacy(v2: Obj | null, oldOffsets: Obj | null): Settings {
   const d = defaultSettings;
@@ -91,6 +103,7 @@ export function fromLegacy(v2: Obj | null, oldOffsets: Obj | null): Settings {
     identifyWithSearch: false,
     prealign: false,
     lookahead: true,
+    nextLine: false,
     lyric: {
       fontFamily: str(style.fontFamily, d.lyric.fontFamily),
       fontSize: num(style.fontSize, d.lyric.fontSize, 0.5, 6),
@@ -109,6 +122,8 @@ export function fromLegacy(v2: Obj | null, oldOffsets: Obj | null): Settings {
       glowColor: color(style.textGlowColor, d.lyric.glowColor),
       background: color(style.backgroundColor, d.lyric.background),
       backgroundOpacity: num(style.backgroundOpacity, d.lyric.backgroundOpacity, 0, 100),
+      // The old app had none: its look stays as it was.
+      scrim: 0,
     },
     translation: {
       // The old pipeline only translated when both flags were on.

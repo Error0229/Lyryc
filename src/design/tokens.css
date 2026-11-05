@@ -7,6 +7,19 @@
  */
 
 :root {
+  /*
+   * ---- Brand: 錆浅葱 (rust-tinged light indigo), the カシ seal's colour ----
+   * The app's main colour. Everything accented derives from it: fills carry
+   * paper text (#F5EDE0 on #3F6F75 passes AA); `bright` is the same hue lifted
+   * for lines and marks on dark glass. Red is for errors only (--c-danger).
+   */
+  --c-brand: #3f6f75;
+  --c-brand-hover: color-mix(in oklab, #3f6f75 86%, white);
+  --c-brand-pressed: color-mix(in oklab, #3f6f75 82%, black);
+  --c-brand-fg: #f5ede0;
+  --c-brand-bright: color-mix(in oklab, #3f6f75 55%, white);
+  --c-brand-tint: color-mix(in oklab, #3f6f75 12%, white);
+
   /* ---- Colour: light (settings window) -------------------------------- */
   --c-bg: oklch(0.985 0.002 260);
   --c-surface: oklch(1 0 0);
@@ -17,20 +30,22 @@
   --c-fg: oklch(0.22 0.01 260);
   --c-fg-muted: oklch(0.46 0.012 260);
   --c-fg-subtle: oklch(0.6 0.01 260);
-  --c-accent: oklch(0.55 0.16 262);
-  --c-accent-hover: oklch(0.5 0.16 262);
-  --c-accent-fg: oklch(0.99 0 0);
-  --c-accent-soft: oklch(0.95 0.03 262);
+  --c-accent: var(--c-brand);
+  --c-accent-hover: var(--c-brand-pressed);
+  --c-accent-fg: var(--c-brand-fg);
+  --c-accent-soft: var(--c-brand-tint);
   --c-success: oklch(0.58 0.13 155);
   --c-success-soft: oklch(0.95 0.04 155);
   --c-danger: oklch(0.56 0.19 25);
   --c-danger-soft: oklch(0.95 0.03 25);
   --c-warning: oklch(0.7 0.14 70);
-  --c-focus: oklch(0.55 0.16 262 / 0.45);
+  --c-focus: color-mix(in oklab, var(--c-brand) 55%, transparent);
   --c-scrim: oklch(0.2 0.01 260 / 0.32);
 
   /* ---- Colour: overlay chrome (always dark glass, independent of theme) */
   --c-glass: oklch(0.18 0.01 260 / 0.72);
+  /* Pills on the transparent strip window: nothing behind them to blur, so nearly opaque. */
+  --c-glass-strong: oklch(0.18 0.01 260 / 0.94);
   --c-glass-line: oklch(1 0 0 / 0.1);
   --c-glass-fg: oklch(0.97 0 0);
   --c-glass-fg-muted: oklch(0.97 0 0 / 0.62);
@@ -74,16 +89,17 @@
   --c-fg: oklch(0.95 0.003 260);
   --c-fg-muted: oklch(0.72 0.008 260);
   --c-fg-subtle: oklch(0.58 0.01 260);
-  --c-accent: oklch(0.68 0.14 262);
-  --c-accent-hover: oklch(0.74 0.13 262);
-  --c-accent-fg: oklch(0.16 0.02 262);
-  --c-accent-soft: oklch(0.3 0.06 262);
+  /* #3F6F75 itself is too dark for text on a dark surface: lifted, with dark text on fills. */
+  --c-accent: color-mix(in oklab, var(--c-brand) 62%, white);
+  --c-accent-hover: color-mix(in oklab, var(--c-brand) 50%, white);
+  --c-accent-fg: oklch(0.2 0.03 205);
+  --c-accent-soft: color-mix(in oklab, var(--c-brand) 40%, var(--c-surface));
   --c-success: oklch(0.72 0.14 155);
   --c-success-soft: oklch(0.3 0.05 155);
   --c-danger: oklch(0.7 0.16 25);
   --c-danger-soft: oklch(0.3 0.06 25);
   --c-warning: oklch(0.8 0.13 75);
-  --c-focus: oklch(0.68 0.14 262 / 0.5);
+  --c-focus: color-mix(in oklab, var(--c-brand-bright) 60%, transparent);
   --c-scrim: oklch(0 0 0 / 0.5);
 
   --elev-1: 0 1px 2px oklch(0 0 0 / 0.3), 0 0 0 1px oklch(1 0 0 / 0.04);

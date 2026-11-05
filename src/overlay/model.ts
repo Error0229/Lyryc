@@ -9,6 +9,8 @@ export interface LineModel {
   tokens: Token[];
   /** Secondary text (translation) shown with the line. */
   sub: string | null;
+  /** The next line's text, for the preview row. */
+  next: string | null;
 }
 
 export interface ModelInput {
@@ -30,12 +32,14 @@ export function lineModel(m: ModelInput): LineModel | null {
   const end = lineEnd(m.lines, m.index);
   const translated = m.translations?.[translationKey(line.text)] ?? null;
 
+  const next = m.lines[m.index + 1]?.text || null;
+
   if (translated && m.display === "translated") {
-    return { key: m.keys[m.index], tokens: tokenize(translated, start, end), sub: null };
+    return { key: m.keys[m.index], tokens: tokenize(translated, start, end), sub: null, next };
   }
 
   const text = line.text || INSTRUMENTAL;
   const words = m.wordHighlight ? line.words : undefined;
   const spans = m.furigana?.[line.text];
-  return { key: m.keys[m.index], tokens: tokenize(text, start, end, words, spans), sub: translated };
+  return { key: m.keys[m.index], tokens: tokenize(text, start, end, words, spans), sub: translated, next };
 }

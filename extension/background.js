@@ -217,15 +217,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     
     chrome.action.setBadgeBackgroundColor({
-      color: '#4CAF50'
+      color: '#3F6F75' // brand teal: playing
     });
     
     sendResponse({ success: true });
   } else if (message.type === 'TRACK_PAUSED') {
-    if (currentTrack) {
-      currentTrack = { ...currentTrack, isPlaying: false };
-      sendTrackToApp(currentTrack, 'TRACK_PAUSED');
-    }
+    // The message names the track: a new song still loading arrives paused,
+    // and is announced now rather than once it plays.
+    currentTrack = { ...currentTrack, ...message.data, isPlaying: false };
+    if (currentTrack.title) sendTrackToApp(currentTrack, 'TRACK_PAUSED');
     
     chrome.action.setBadgeText({
       text: '⏸',
@@ -233,7 +233,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     
     chrome.action.setBadgeBackgroundColor({
-      color: '#FF9800'
+      color: '#6B7280' // neutral: paused
     });
     
     sendResponse({ success: true });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatOffset, normalizeOffset, totalOffset, trackKey, withTrackOffset } from "./offset";
+import { formatOffset, normalizeOffset, OFFSET_LIMIT, parseOffset, totalOffset, trackKey, withTrackOffset } from "./offset";
 
 describe("offset", () => {
   it("keeps the v2 track key format", () => {
@@ -27,5 +27,28 @@ describe("offset", () => {
     expect(formatOffset(0.3)).toBe("+0.30 s");
     expect(formatOffset(-1)).toBe("−1.00 s");
     expect(formatOffset(0)).toBe("±0.00 s");
+  });
+});
+
+describe("parseOffset", () => {
+  it("reads what people type, signs and units included", () => {
+    expect(parseOffset("0.35")).toBe(0.35);
+    expect(parseOffset("-1.2")).toBe(-1.2);
+    expect(parseOffset("+0.5 s")).toBe(0.5);
+    expect(parseOffset("−1,25")).toBe(-1.25);
+    expect(parseOffset(".5")).toBe(0.5);
+    expect(parseOffset("±0.00 s")).toBe(0);
+  });
+
+  it("clamps to the offset range and rounds to 10 ms", () => {
+    expect(parseOffset("99")).toBe(OFFSET_LIMIT);
+    expect(parseOffset("0.123")).toBe(0.12);
+  });
+
+  it("refuses anything that isn't a number, so the field keeps its value", () => {
+    expect(parseOffset("")).toBeNull();
+    expect(parseOffset("abc")).toBeNull();
+    expect(parseOffset("1.2.3")).toBeNull();
+    expect(parseOffset("-")).toBeNull();
   });
 });

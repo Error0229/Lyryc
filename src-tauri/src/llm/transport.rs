@@ -6,7 +6,7 @@ use reqwest::Client;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 
 use super::dialect::{self, HttpCall, OpenAiOpts};
@@ -18,11 +18,51 @@ use super::{ChatRequest, Completion, LlmError, Target, Tools};
 /// all) answer bursts with 429/503. The rest wait their turn.
 const MAX_IN_FLIGHT: usize = 2;
 
-/// The turn-taking for one provider (its name and base URL).
-fn slots(target: &Target) -> Arc<Semaphore> {
+/// Who waits for a request. Song identification is short and someone is
+/// watching the overlay for its answer; translations are long (3-15 s) and
+/// come in batches (the lookahead pre-translates the next songs). Each lane
+/// queues on its own, so identifying the song that just started never waits
+/// behind a pile of translations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Lane {
+    Quick,
+    Bulk,
+}
+
+/// The turn-taking for one provider (its name and base URL) in one lane.
+fn slots(target: &Target, lane: Lane) -> Arc<Semaphore> {
     static SLOTS: LazyLock<Mutex<HashMap<String, Arc<Semaphore>>>> = LazyLock::new(Default::default);
-    let key = format!("{}|{}", target.label, target.base_url);
+    let key = format!("{}|{}|{:?}", target.label, target.base_url, lane);
     SLOTS.lock().unwrap().entry(key).or_insert_with(|| Arc::new(Semaphore::new(MAX_IN_FLIGHT))).clone()
+}
+
+/// Bulk requests to one provider start at least this far apart. Free tiers
+/// count requests per minute (Gemini Flash Lite: 15), and the lookahead
+/// translating the next songs at once, plus retries, peaked at 23.
+const BULK_SPACING: Duration = Duration::from_secs(4);
+
+/// When a request may start, given when the next free start is (`next`), and
+/// the free start after it: requests take turns `BULK_SPACING` apart.
+fn reserve(next: Option<Instant>, now: Instant) -> (Instant, Instant) {
+    let at = next.filter(|t| *t > now).unwrap_or(now);
+    (at, at + BULK_SPACING)
+}
+
+/// Wait for this request's turn: Bulk requests to one provider are paced,
+/// Quick ones (a person waiting on identification) are not.
+async fn pace(target: &Target, lane: Lane) {
+    if lane != Lane::Bulk {
+        return;
+    }
+    static NEXT: LazyLock<Mutex<HashMap<String, Instant>>> = LazyLock::new(Default::default);
+    let at = {
+        let mut next = NEXT.lock().unwrap();
+        let key = format!("{}|{}", target.label, target.base_url);
+        let (at, after) = reserve(next.get(&key).copied(), Instant::now());
+        next.insert(key, after);
+        at
+    };
+    tokio::time::sleep_until(at.into()).await;
 }
 
 /// Longest server-requested wait we sit through before giving up.
@@ -95,11 +135,23 @@ fn is_retryable(status: u16) -> bool {
     status == 429 || (500..600).contains(&status)
 }
 
-/// How long to wait before the single retry, or `None` if the server asked
-/// for longer than we are willing to block a UI request.
-fn backoff(status: u16, retry_after: Option<Duration>) -> Option<Duration> {
-    let default = if status == 429 { 2 } else { 1 };
-    let wait = retry_after.unwrap_or(Duration::from_secs(default));
+/// Retries on 429/5xx. Identification waits for a person looking at the
+/// strip: one quick retry. A translation can wait out a "high demand" 503
+/// spike, which Gemini answered three times in a row on 2026-11-05 and so
+/// left both the pre-translation and the song's own one untranslated.
+fn retries(lane: Lane) -> u32 {
+    match lane {
+        Lane::Quick => 1,
+        Lane::Bulk => 3,
+    }
+}
+
+/// How long to wait before retry `attempt` (0-based): 1, 3, 9 s (429: 2, 6,
+/// 18 s), or what the server asked for; `None` if that is longer than we are
+/// willing to wait.
+fn backoff(status: u16, retry_after: Option<Duration>, attempt: u32) -> Option<Duration> {
+    let base = if status == 429 { 2 } else { 1 };
+    let wait = retry_after.unwrap_or(Duration::from_secs(base * 3u64.pow(attempt)));
     (wait <= MAX_RETRY_WAIT).then_some(wait)
 }
 
@@ -141,15 +193,17 @@ impl Ctx<'_> {
     }
 }
 
-/// Send `call` (rebuilt by `build` on each attempt), retrying once on 429/5xx.
-async fn send_with_retry(ctx: &Ctx<'_>, build: impl Fn() -> HttpCall) -> Result<Reply, LlmError> {
-    let mut retried = false;
+/// Send `call` (rebuilt by `build` on each attempt), retrying on 429/5xx as
+/// often as the lane allows.
+async fn send_with_retry(ctx: &Ctx<'_>, lane: Lane, build: impl Fn() -> HttpCall) -> Result<Reply, LlmError> {
+    let mut attempt = 0;
     loop {
+        pace(ctx.0, lane).await;
         let reply = send(&build()).await.map_err(|e| ctx.err(None, e))?;
-        if !is_retryable(reply.status) || retried {
+        if !is_retryable(reply.status) || attempt == retries(lane) {
             return Ok(reply);
         }
-        let Some(wait) = backoff(reply.status, reply.retry_after) else {
+        let Some(wait) = backoff(reply.status, reply.retry_after, attempt) else {
             return Err(ctx.err(
                 Some(reply.status),
                 format!(
@@ -163,13 +217,13 @@ async fn send_with_retry(ctx: &Ctx<'_>, build: impl Fn() -> HttpCall) -> Result<
             ctx.0.label, ctx.0.model, reply.status, wait
         );
         tokio::time::sleep(wait).await;
-        retried = true;
+        attempt += 1;
     }
 }
 
 /// Run one chat completion against `target`.
 pub async fn complete(target: &Target, req: &ChatRequest<'_>) -> Result<String, LlmError> {
-    complete_with(target, req, Tools::default())
+    complete_with(target, req, Tools::default(), Lane::Bulk)
         .await
         .map(|c| c.text)
 }
@@ -179,6 +233,7 @@ pub async fn complete_with(
     target: &Target,
     req: &ChatRequest<'_>,
     tools: Tools<'_>,
+    lane: Lane,
 ) -> Result<Completion, LlmError> {
     let ctx = Ctx(target);
     ctx.check_key()?;
@@ -191,12 +246,12 @@ pub async fn complete_with(
             ),
         ));
     }
-    let slots = slots(target);
+    let slots = slots(target, lane);
     let _turn = slots.acquire().await.expect("never closed");
     let mut opts = OpenAiOpts::default();
     loop {
         debug!("LLM request to {} ({})", target.label, target.model);
-        let reply = send_with_retry(&ctx, || dialect::call(target, req, tools, opts)).await?;
+        let reply = send_with_retry(&ctx, lane, || dialect::call(target, req, tools, opts)).await?;
         if (200..300).contains(&reply.status) {
             let body: Value = serde_json::from_str(&reply.body)
                 .map_err(|e| ctx.err(Some(reply.status), format!("invalid JSON reply: {e}")))?;
@@ -232,7 +287,7 @@ pub async fn list_models(target: &Target) -> Result<Vec<String>, LlmError> {
     let ctx = Ctx(target);
     ctx.check_key()?;
     let fetched = async {
-        let reply = send_with_retry(&ctx, || dialect::models_call(target)).await?;
+        let reply = send_with_retry(&ctx, Lane::Quick, || dialect::models_call(target)).await?;
         if !(200..300).contains(&reply.status) {
             return Err(ctx.http_err(&reply));
         }
@@ -269,14 +324,16 @@ mod tests {
     }
 
     #[test]
-    fn a_provider_takes_two_requests_at_a_time() {
-        let a = slots(&target("Burst", "https://burst.example/v1"));
+    fn a_provider_takes_two_requests_at_a_time_per_lane() {
+        let a = slots(&target("Burst", "https://burst.example/v1"), Lane::Bulk);
         let _one = a.clone().try_acquire_owned().unwrap();
         let _two = a.clone().try_acquire_owned().unwrap();
         assert!(a.clone().try_acquire_owned().is_err(), "the third waits");
-        let same = slots(&target("Burst", "https://burst.example/v1"));
-        assert!(same.try_acquire().is_err(), "one queue per provider");
-        let other = slots(&target("Burst", "https://other.example/v1"));
+        let same = slots(&target("Burst", "https://burst.example/v1"), Lane::Bulk);
+        assert!(same.try_acquire().is_err(), "one queue per provider and lane");
+        let quick = slots(&target("Burst", "https://burst.example/v1"), Lane::Quick);
+        assert!(quick.try_acquire().is_ok(), "identification doesn't wait behind translations");
+        let other = slots(&target("Burst", "https://other.example/v1"), Lane::Bulk);
         assert!(other.try_acquire().is_ok(), "another provider is not held up");
     }
 
@@ -286,13 +343,28 @@ mod tests {
         assert!(is_retryable(503));
         assert!(!is_retryable(400));
         assert!(!is_retryable(401));
-        assert_eq!(backoff(429, None), Some(Duration::from_secs(2)));
-        assert_eq!(backoff(500, None), Some(Duration::from_secs(1)));
+        assert_eq!(backoff(429, None, 0), Some(Duration::from_secs(2)));
+        assert_eq!(backoff(500, None, 0), Some(Duration::from_secs(1)));
+        assert_eq!(backoff(503, None, 1), Some(Duration::from_secs(3)));
+        assert_eq!(backoff(503, None, 2), Some(Duration::from_secs(9)));
         assert_eq!(
-            backoff(429, Some(Duration::from_secs(7))),
+            backoff(429, Some(Duration::from_secs(7)), 0),
             Some(Duration::from_secs(7))
         );
-        assert_eq!(backoff(429, Some(Duration::from_secs(3600))), None);
+        assert_eq!(backoff(429, Some(Duration::from_secs(3600)), 0), None);
+        assert_eq!(retries(Lane::Quick), 1, "a person is waiting on identification");
+        assert_eq!(retries(Lane::Bulk), 3, "a translation waits out a 503 spike");
+    }
+
+    #[test]
+    fn bulk_requests_take_turns() {
+        let now = Instant::now();
+        let (a, next) = reserve(None, now);
+        assert_eq!(a, now, "the first goes at once");
+        let (b, next) = reserve(Some(next), now);
+        assert_eq!(b, now + BULK_SPACING, "the second waits its turn");
+        let (c, _) = reserve(Some(next), now + Duration::from_secs(60));
+        assert_eq!(c, now + Duration::from_secs(60), "after a quiet minute, no wait");
     }
 
     #[test]
@@ -373,7 +445,7 @@ mod tests {
             web_search: true,
             schema: None,
         };
-        let e = complete_with(&t, &req, tools).await.unwrap_err();
+        let e = complete_with(&t, &req, tools, Lane::Quick).await.unwrap_err();
         assert!(e.to_string().contains("no built-in web search"), "{e}");
         assert!(e.status.is_none());
     }

@@ -35,3 +35,17 @@ export function formatOffset(v: number): string {
   const n = normalizeOffset(v);
   return `${n > 0 ? "+" : n < 0 ? "−" : "±"}${Math.abs(n).toFixed(2)} s`;
 }
+
+/**
+ * What someone typed into an offset field, in seconds: "0.35", "-1.2",
+ * "+0.5 s", "−1,2" (a typographic minus or a decimal comma). Null when it
+ * isn't a number, so the field keeps its old value.
+ */
+export function parseOffset(text: string): number | null {
+  const t = text.trim().replace(/−/g, "-").replace(",", ".").replace(/\s*s(ec)?$/i, "").replace(/^±/, "");
+  if (!/^[+-]?(\d+\.?\d*|\.\d+)$/.test(t)) return null;
+  return normalizeOffset(Number(t));
+}
+
+/** Step for keys in an offset field or slider: 0.05 s, 0.5 s with Shift. */
+export const OFFSET_KEY_STEP = 0.05;

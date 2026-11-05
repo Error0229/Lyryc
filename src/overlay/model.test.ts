@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { lineKeys } from "../lib/lyrics";
 import { defaultSettings } from "../state/schema";
 import { lineModel, type ModelInput } from "./model";
+import { NO_ROWS } from "./rows";
 import { stageVars, textShadow } from "./style";
 
 const lines = [
@@ -51,16 +52,15 @@ describe("lineModel", () => {
 });
 
 describe("stageVars", () => {
-  const base = { lyric: defaultSettings.lyric, translation: defaultSettings.translation, furigana: defaultSettings.furigana, showTranslation: false };
+  const base = { lyric: defaultSettings.lyric, translation: defaultSettings.translation, furigana: defaultSettings.furigana, rows: NO_ROWS };
 
-  it("reserves height for ruby and a stacked translation so lines don't resize the window", () => {
-    const plain = parseFloat(String(stageVars(base)["--stage-min" as never]));
-    const ruby = parseFloat(String(stageVars({ ...base, furigana: { ...base.furigana, enabled: true } })["--stage-min" as never]));
-    const stacked = parseFloat(String(stageVars({ ...base, showTranslation: true })["--stage-min" as never]));
-    const side = parseFloat(String(stageVars({ ...base, showTranslation: true, translation: { ...base.translation, display: "side-by-side" } })["--stage-min" as never]));
-    expect(ruby).toBeGreaterThan(plain);
-    expect(stacked).toBeGreaterThan(plain);
-    expect(side).toBe(plain);
+  it("makes the stage as tall as the song's rows, whatever is showing", () => {
+    const min = (rows: typeof NO_ROWS) => parseFloat(String(stageVars({ ...base, rows })["--stage-min" as never]));
+    const plain = min(NO_ROWS);
+    expect(plain).toBeCloseTo(defaultSettings.lyric.lineHeight);
+    expect(min({ ...NO_ROWS, furigana: true })).toBeGreaterThan(plain);
+    expect(min({ ...NO_ROWS, translation: true })).toBeGreaterThan(plain);
+    expect(min({ ...NO_ROWS, next: true })).toBeGreaterThan(plain);
   });
 
   it("maps background opacity to an alpha colour", () => {

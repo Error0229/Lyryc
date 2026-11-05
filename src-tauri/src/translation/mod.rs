@@ -7,6 +7,7 @@
 //! - Progressive retry strategies
 
 mod alignment;
+pub mod cache;
 mod language;
 mod parser;
 mod prompt;

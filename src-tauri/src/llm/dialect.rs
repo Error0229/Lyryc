@@ -221,9 +221,9 @@ fn anthropic_body(t: &Target, req: &ChatRequest, tools: Tools, opts: OpenAiOpts)
     if let Some(system) = system_text(t, req, tools, opts) {
         body["system"] = json!(system);
     }
-    if let Some(temp) = req.temperature {
-        body["temperature"] = json!(temp);
-    }
+    // No `temperature`: Claude's current models reject it ("`temperature` is
+    // deprecated for this model", Haiku 5.5 / Sonnet 5.5 / Opus 5.x / Fable),
+    // and older ones only lose the 0.3 we'd ask for. One request for all.
     if search(t, tools).is_some() {
         body["tools"] = json!([{
             "type": "web_search_20250305",
@@ -588,6 +588,7 @@ mod tests {
         assert_eq!(body["max_tokens"], 100);
         assert_eq!(body["messages"][0]["role"], "user");
         assert_eq!(body["messages"].as_array().unwrap().len(), 1);
+        assert!(body.get("temperature").is_none(), "current Claude models reject it");
     }
 
     #[test]

@@ -187,7 +187,7 @@ async fn probe(http: &Http, p: Provider, name: &Name, q: &Query, case: &Case) ->
             row["error"] = json!(e.to_string());
         }
         Ok(Err(miss)) => row["outcome"] = json!(miss),
-        Ok(Ok(lines)) => {
+        Ok(Ok((lines, _))) => {
             row["outcome"] = json!("accepted");
             row["lines"] = json!(lines.len());
         }

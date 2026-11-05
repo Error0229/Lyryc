@@ -5,7 +5,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { normalizeOffset, withTrackOffset } from "../lib/offset";
-import { SETTINGS_KEY, SETTINGS_VERSION, seedFromLegacy } from "./migrate";
+import { SETTINGS_KEY, SETTINGS_VERSION, seedFromLegacy, upgradeSettings } from "./migrate";
 import { defaultLyric, defaultSettings, type FuriganaPrefs, type LyricStyle, type Settings, type TranslationPrefs, type UiTheme } from "./schema";
 
 function storage(): Storage | null {
@@ -36,6 +36,7 @@ export const useSettings = create<Settings>()(
   persist(() => defaultSettings, {
     name: SETTINGS_KEY,
     version: SETTINGS_VERSION,
+    migrate: (saved, version) => upgradeSettings(saved, version) as Settings,
     merge: (saved, current) => mergeSettings(saved, current),
   }),
 );
@@ -49,6 +50,7 @@ export const settings = {
   setIdentifyWithSearch: (identifyWithSearch: boolean) => set({ identifyWithSearch }),
   setPrealign: (prealign: boolean) => set({ prealign }),
   setLookahead: (lookahead: boolean) => set({ lookahead }),
+  setNextLine: (nextLine: boolean) => set({ nextLine }),
   lyric: (p: Partial<LyricStyle>) => set((s) => ({ lyric: { ...s.lyric, ...p } })),
   resetLyric: () => set({ lyric: defaultLyric }),
   translation: (p: Partial<TranslationPrefs>) => set((s) => ({ translation: { ...s.translation, ...p } })),

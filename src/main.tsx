@@ -4,11 +4,13 @@ import { createRoot } from "react-dom/client";
 import { MotionConfig } from "motion/react";
 import { Overlay } from "./overlay/Overlay";
 import { inTauri } from "./services/ipc/backend";
+import { forwardLogs } from "./services/ipc/logForward";
 import { LlmBridge } from "./services/ipc/llm";
 import { importLegacyKeys } from "./state/migrate";
 import { TooltipProvider } from "./ui/Tooltip";
 
 if (inTauri) {
+  forwardLogs("overlay");
   // Real bridge only: the dev fake would "accept" the keys and then forget them.
   void importLegacyKeys(localStorage, LlmBridge.importLegacyKeys).then((r) => {
     if (r === "failed") console.warn("[lyryc] legacy API keys not imported yet; kept in localStorage, will retry next launch");
