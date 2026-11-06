@@ -62,7 +62,8 @@ pub fn parse_translation_response(
 fn numbered(line: &str) -> Option<(usize, String)> {
     // Markdown around the number ("**1.**", "- 1.", "[1]") is still a number.
     let line = line.trim().trim_start_matches(['*', '-', '#', '[', ' ']);
-    let digits = line.find(|c: char| !c.is_numeric())?;
+    // ASCII or full-width digits only: "²" or "½" would normalize to a number too.
+    let digits = line.find(|c: char| !(c.is_ascii_digit() || ('０'..='９').contains(&c)))?;
     let number = line[..digits].nfkc().collect::<String>().parse().ok()?;
     let mut rest = line[digits..].chars();
     let mark = rest.next()?.nfkc().next()?;
@@ -122,6 +123,17 @@ mod tests {
         assert!(parse(&["1. A", "2. B", "3. C"], &five).is_ok());
         // A summary with a numbered list in it doesn't pass for the lyrics either.
         assert!(parse(&["Here is what the song covers:", "1. Loneliness", "2. Loss"], &five).is_err());
+    }
+
+    #[test]
+    fn only_numbered_lines_count() {
+        // A translation wrapped onto a second line keeps only its first part:
+        // folding unnumbered lines in would also fold in a model's notes.
+        let out = parse(&["1. first half", "second half", "2. B"], &["a", "b"]).unwrap();
+        assert_eq!(out.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(), ["first half", "B"]);
+        // A year opening a line is out of range, and other numerals aren't numbers.
+        let out = parse(&["1. A", "2024. was a year", "½. half", "²) two", "2. B"], &["a", "b"]).unwrap();
+        assert_eq!(out.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(), ["A", "B"]);
     }
 
     #[test]

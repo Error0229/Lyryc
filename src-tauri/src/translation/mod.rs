@@ -23,8 +23,11 @@ pub use types::{LyricLine, TranslationConfig, TranslationResult};
 /// Translate with the first of `targets` that answers every line: the routed
 /// provider, then the backup.
 pub async fn translate_lyrics(lyrics: Vec<LyricLine>, config: TranslationConfig, targets: &[Target]) -> Result<TranslationResult, String> {
-    translate_with(lyrics, config, targets, |target, system, user| async move {
-        let request = ChatRequest { system: Some(&system), user: &user, temperature: Some(0.3), max_tokens: 8192, json: false };
+    // Room for every line of a long song: about 100 tokens a line, at least
+    // the 8192 every provider accepts, at most 16384.
+    let max_tokens = (lyrics.len() as u32 * 100).clamp(8192, 16384);
+    translate_with(lyrics, config, targets, move |target, system, user| async move {
+        let request = ChatRequest { system: Some(&system), user: &user, temperature: Some(0.3), max_tokens, json: false };
         llm::complete(&target, &request).await.map_err(|e| e.to_string())
     })
     .await
