@@ -63,6 +63,28 @@ translate. Lyrics lookups send the title, artist and length to the lyrics sites.
 Word timing downloads the song's audio, aligns it locally and deletes it. The
 extension talks only to the app, on `localhost:8765`.
 
+## What Lyryc remembers
+
+A song played again costs no lookups or AI calls. Lyryc keeps what it found in
+one SQLite file, `%LOCALAPPDATA%\Lyryc\lyrics_cache.db`:
+
+| What | Keyed by | Kept for |
+| --- | --- | --- |
+| Lyrics, "no lyrics found" and "instrumental" | artist and title | 30 days, then looked up again |
+| Translations | the lyric text, languages, style, prompt and model | until you delete the file |
+| Word timing | the YouTube video and the lyric text | until you delete the file |
+
+- **Translations** are saved only when every line got one, so a partial answer
+  is asked for again next time. A new model, style or language translates the
+  song afresh. Better timing for the same words doesn't.
+- **The queue lookahead** fills this cache before a song starts, so it plays
+  straight from it.
+- **Wrong lyrics?** **Search lyrics again** in the toolbar drops that song's
+  saved lyrics and searches anew. **Mark instrumental** saves "no words" for it.
+- **To start over,** quit Lyryc and delete the file. Settings → Lyrics & sync →
+  **Remove downloaded files** deletes the word-timing model and yt-dlp, but
+  keeps the timings.
+
 ## Troubleshooting
 
 - **Nothing shows:** reload the music tab. The extension's popup says whether
