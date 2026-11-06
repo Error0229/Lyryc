@@ -464,21 +464,30 @@ fn set_click_through(w: &WebviewWindow, on: bool) {
 #[cfg(windows)]
 fn keep_layered(w: &WebviewWindow) {
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-    use windows_sys::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
-    use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowLongW, SetWindowLongW, GWL_EXSTYLE, STYLESTRUCT, WM_STYLECHANGING, WS_EX_LAYERED};
+    use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowLongW, SetWindowLongW, GWL_EXSTYLE, STYLESTRUCT, WM_NCDESTROY, WM_STYLECHANGING, WS_EX_LAYERED};
+    const ID: usize = 0x4c59_5259; // "LYRY"
 
     unsafe extern "system" fn hold(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _: usize, _: usize) -> LRESULT {
         if msg == WM_STYLECHANGING && wparam as i32 == GWL_EXSTYLE {
+            // SAFETY: for WM_STYLECHANGING, lparam points to the STYLESTRUCT
+            // Windows is about to apply, valid and writable for this call.
             (*(lparam as *mut STYLESTRUCT)).styleNew |= WS_EX_LAYERED;
+        }
+        if msg == WM_NCDESTROY {
+            // The window is going away: take the subclass off it, as the docs ask.
+            RemoveWindowSubclass(hwnd, Some(hold), ID);
         }
         DefSubclassProc(hwnd, msg, wparam, lparam)
     }
 
     let Ok(hwnd) = w.hwnd() else { return };
     let hwnd = hwnd.0 as isize;
+    // SAFETY: hwnd is the live overlay window, and this runs on its own (main)
+    // thread, which SetWindowSubclass requires.
     let _ = w.run_on_main_thread(move || unsafe {
         let hwnd = hwnd as HWND;
-        SetWindowSubclass(hwnd, Some(hold), 0x4c59_5259, 0); // "LYRY"
+        SetWindowSubclass(hwnd, Some(hold), ID, 0);
         let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
         SetWindowLongW(hwnd, GWL_EXSTYLE, (ex | WS_EX_LAYERED) as i32);
     });

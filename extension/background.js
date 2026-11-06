@@ -201,10 +201,22 @@ function sendUpcomingToApp(state) {
   }
 }
 
+// The track fields a content script may report, and only those that are set:
+// a partial message never blanks what's known. null is kept: a new song's
+// unknown length must not inherit the last song's.
+const TRACK_FIELDS = ['title', 'artist', 'thumbnail', 'source', 'url', 'timestamp', 'currentTime', 'duration', 'isPlaying'];
+function trackFields(data) {
+  const out = {};
+  for (const key of TRACK_FIELDS) {
+    if (data && data[key] !== undefined) out[key] = data[key];
+  }
+  return out;
+}
+
 // Listen for messages from content scripts
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'TRACK_DETECTED') {
-    currentTrack = { ...message.data, isPlaying: true };
+    currentTrack = { ...trackFields(message.data), isPlaying: true };
     console.log('Track detected:', currentTrack);
     
     // Send to desktop app
@@ -224,7 +236,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.type === 'TRACK_PAUSED') {
     // The message names the track: a new song still loading arrives paused,
     // and is announced now rather than once it plays.
-    currentTrack = { ...currentTrack, ...message.data, isPlaying: false };
+    currentTrack = { ...currentTrack, ...trackFields(message.data), isPlaying: false };
     if (currentTrack.title) sendTrackToApp(currentTrack, 'TRACK_PAUSED');
     
     chrome.action.setBadgeText({
@@ -258,7 +270,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.type === 'TRACK_PROGRESS') {
     // Progress carries the full track. Adopt it even if we have none: Chrome
     // restarts idle service workers, which wipes currentTrack mid-song.
-    currentTrack = { ...currentTrack, ...message.data };
+    currentTrack = { ...currentTrack, ...trackFields(message.data) };
     sendTrackToApp(currentTrack, 'TRACK_PROGRESS');
     
     sendResponse({ success: true });
