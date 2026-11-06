@@ -88,9 +88,7 @@ async fn translate_once(
     .map_err(|e| Failure::Service(e.to_string()))?;
 
     let (translated_lines, _is_same_language) =
-        parse_translation_response(&response_text, lyrics, &detected_language, Some(target))
-            .await
-            .map_err(Failure::Answer)?;
+        parse_translation_response(&response_text, lyrics, &detected_language).map_err(Failure::Answer)?;
 
     Ok(TranslationResult {
         success: true,
@@ -119,9 +117,6 @@ pub async fn translate_with_strategies(
                 translate_chunked(lyrics, config, target, *chunk_size).await
             }
             TranslationStrategy::LineByLine => translate_line_by_line(lyrics, config, target).await,
-            TranslationStrategy::AlignmentFix => {
-                Err(Failure::Answer("AlignmentFix strategy must be used with another strategy".to_string()))
-            }
         };
 
         match result {

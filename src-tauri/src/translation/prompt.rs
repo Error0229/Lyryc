@@ -224,39 +224,3 @@ You MUST use the correct character set for {}!"#,
         String::new()
     }
 }
-
-/// Build alignment correction prompt for line count mismatch resolution
-pub fn build_alignment_prompt(original_lines: &[String], translated_lines: &[&str]) -> String {
-    format!(
-        r#"**TASK**: Fix line count mismatch in translation alignment
-
-**ORIGINAL LYRICS** ({} lines):
-{}
-
-**TRANSLATED LYRICS** ({} lines):
-{}
-
-**PROBLEM**: The translation has a different number of lines than the original.
-
-**YOUR JOB**: Create a corrected translation that has EXACTLY {} lines to match the original.
-
-**RULES**:
-1. Output EXACTLY {} lines - one for each original line
-2. Use the existing translations as much as possible
-3. If translation is too short: split longer translations or repeat similar content
-4. If translation is too long: merge related translations intelligently
-5. Maintain meaning and flow
-6. Keep timing alignment (line 1 matches line 1, etc.)
-
-**OUTPUT FORMAT**:
-Return ONLY the corrected translation lines, one per line, NO numbering, NO explanations.
-
-**CORRECTED TRANSLATION**:"#,
-        original_lines.len(),
-        original_lines.join("\n"),
-        translated_lines.len(),
-        translated_lines.join("\n"),
-        original_lines.len(),
-        original_lines.len()
-    )
-}
