@@ -139,7 +139,8 @@ src-tauri/src/        Rust backend
   placement.rs        where the strip sits, lock, drag, hover
   websocket*.rs       the extension's connection
 extension/            the browser extension (Manifest V3)
-docs/                 design notes and research
+docs/  research/      design notes and research reports, and the code behind them
+archive/              retired material kept for reference
 ```
 
 ### Releasing
