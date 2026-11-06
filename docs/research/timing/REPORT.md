@@ -198,7 +198,7 @@ Trade-offs:
 - MMS goes through `ort` with `load-dynamic`, with `onnxruntime.dll` shipped next to the exe. The model is downloaded on first opt-in into `%LOCALAPPDATA%\Lyryc\models\mms-fa-int8.onnx`, with its SHA-256 pinned.
 
 **Where the audio comes from.**
-- Preferred: the extension prototype in [`extension/prototype-tabcapture/`](../../../extension/prototype-tabcapture/README.md). An offscreen document captures the tab and sends 16 kHz mono PCM16 in 1 s frames over the existing `ws://localhost:8765`. Each frame has an `audio_chunk` header carrying `capturedAt`. The app maps wall time to track position using the `currentTime` updates it already gets.
+- Preferred: the extension prototype in [`archive/extension-prototypes/tabcapture/`](../../../archive/extension-prototypes/tabcapture/README.md). An offscreen document captures the tab and sends 16 kHz mono PCM16 in 1 s frames over the existing `ws://localhost:8765`. Each frame has an `audio_chunk` header carrying `capturedAt`. The app maps wall time to track position using the `currentTime` updates it already gets.
   - Requires `tabCapture` + `offscreen` permissions and a user click on the action [16].
   - Not wired into `manifest.json` on this branch.
 - Alternative with no extension change: `cpal` WASAPI loopback [17]. It captures everything the system plays (notifications, calls), so it needs a clear UI toggle.
@@ -239,7 +239,7 @@ The contract already says lines may be swapped mid-song. Line count and text sta
   - The dead `convert_plain_lyrics_to_lines` is removed.
   - `execute_staged_search` returns the full result.
 - `src-tauri/src/lib.rs`: `mod timing;` (additive).
-- `extension/prototype-tabcapture/`: capture prototype, not referenced by the manifest.
+- `archive/extension-prototypes/tabcapture/`: capture prototype, never shipped.
 - `research/timing/`: dataset pins, scripts, per-line predictions (`results/*.json`), `results/TABLES.md`.
 - `alignment/` (the old whisperx stub) is untouched. It was never implemented and this work supersedes it, so I'd delete it.
 

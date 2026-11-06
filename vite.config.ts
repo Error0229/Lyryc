@@ -34,7 +34,7 @@ export default defineConfig(async () => ({
     // Only the app's own sources reload the overlay: research runs, docs and
     // the extension write files the webview never imports, and each write
     // used to reload it (and re-run the song's lyric lookup).
-    watch: { ignored: ["**/src-tauri/**", "**/research/**", "**/docs/**", "**/extension/**", "**/model_tester/**", "**/tests/**"] },
+    watch: { ignored: ["**/src-tauri/**", "**/research/**", "**/docs/**", "**/extension/**", "**/archive/**"] },
   },
 
   test: {

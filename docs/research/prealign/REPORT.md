@@ -1,6 +1,6 @@
 # Pre-aligning YouTube Music lyrics before they play: research report
 
-Branch `research/prealign`, 2026-11-02. Code and run instructions: [`research/prealign/`](../../../research/prealign/README.md). Queue-reader prototype: [`extension/prototype-queue/`](../../../extension/prototype-queue/README.md). Follows [`docs/research/timing/REPORT.md`](../timing/REPORT.md).
+Branch `research/prealign`, 2026-11-02. Code and run instructions: [`research/prealign/`](../../../research/prealign/README.md). Queue-reader prototype: [`archive/extension-prototypes/queue/`](../../../archive/extension-prototypes/queue/README.md) (shipped as `extension/youtube-queue.js`). Follows [`docs/research/timing/REPORT.md`](../timing/REPORT.md).
 
 ## Headline
 
@@ -155,7 +155,7 @@ Confidence is the mean frame posterior of a line's tokens. Rules were scored on 
 
 ## Queue reader (prototype, not wired in)
 
-`extension/prototype-queue/`. It needs no new permission.
+`archive/extension-prototypes/queue/`. It needs no new permission.
 
 - **How it reads the queue.** A MAIN-world script reads YTM's own Redux store, `document.querySelector("ytmusic-player-queue").getState().queue`, once per second. When anything changes it posts `{current, position, upNext[3], ad}`, and a bridge forwards that as `UPCOMING_TRACKS`.
 - **Why not the DOM or the player API.** Queue DOM items carry no videoId, and the player's `getPlaylist()` is empty on YTM.

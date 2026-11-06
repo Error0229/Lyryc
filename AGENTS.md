@@ -1,39 +1,51 @@
 # Repository Guidelines
 
-## Project Structure & Module Organization
-- `src/`: React + TypeScript app. Key folders: `components/`, `hooks/`, `services/`, `stores/`, `assets/`.
-- `src-tauri/`: Tauri (Rust) backend. Entry in `src/main.rs`, shared lib in `src/lib.rs`, config in `Cargo.toml` and `tauri.conf.json`.
-- `extension/`: Browser extension (MV3) with site detectors (`*-detector.js`), `background.js`, `manifest.json`.
-- `public/`, `index.html`, configs: `vite.config.ts`, `tailwind.config.js`, `tsconfig.json`.
-- `websocket_test.html|.js`: Manual test utilities for the extension socket.
+## Project Structure
+- `src/`: React + TypeScript frontend for three windows, each with its own entry:
+  `main.tsx` (the lyrics strip, `src/overlay/`), `settings.tsx` (`src/settings/`) and
+  `tray.tsx` (the tray menu, `src/tray/`). Shared code: `src/ui/` (components),
+  `src/state/` (Zustand stores and the settings schema), `src/services/ipc/` (the typed
+  backend API; `mock.ts` serves it in a plain browser), `src/lib/`, `src/design/`
+  (tokens and motion).
+- `src-tauri/`: Rust backend. `src/lib.rs` wires commands; lyrics lookup in `lyrics.rs`,
+  `sources/` and `ytmusic/`; translation in `translation/` and `llm/`; word timing in
+  `prealign/`; the strip's window in `placement.rs`; the tray in `tray.rs`; the
+  extension's socket in `websocket*.rs`.
+- `extension/`: the MV3 browser extension: site detectors (`*-detector.js`), the YouTube
+  Music queue reader, `background.js` and the popup.
+- `docs/`: design notes (`prealign.md`) and research reports (`docs/research/`); the
+  research code behind them is in `research/`.
+- `archive/`: retired material kept for reference (see its README). Nothing builds from it.
 
-## Build, Test, and Development Commands
-- `npm run dev`: Start Vite dev server (web UI only).
-- `npm run tauri dev`: Launch desktop app with Tauri.
-- `npm run build`: Type-check (`tsc`) and bundle with Vite.
-- `npm run preview`: Serve the production build locally.
-- `cd src-tauri && cargo build`: Build Rust backend.
-- `cd src-tauri && cargo test`: Run Rust tests (add as needed).
-- Load the extension: Chrome/Edge → `chrome://extensions` → Developer Mode → Load unpacked → `extension/`.
+## Build, Test and Development Commands
+- `npm run tauri dev`: the desktop app, with the frontend hot-reloading.
+- `npm run dev`: the frontend alone in a browser, served by the mock backend.
+- `npm run build`: type-check (`tsc`) and bundle with Vite.
+- `npm test`: frontend tests (Vitest).
+- `cd src-tauri && cargo test --lib`: backend tests.
+- Load the extension: `chrome://extensions` → Developer mode → Load unpacked → `extension/`.
+  Reload the music tab afterwards.
 
-## Coding Style & Naming Conventions
-- TypeScript + React hooks; functional components only.
-- Indent 2 spaces; use semicolons and double quotes.
-- Components: `PascalCase` in `src/components`; functions/vars: `camelCase`.
-- Place pure logic in `src/services`; global state in `src/stores` (Zustand).
-- Tailwind-first styling; prefer class utilities over inline styles.
+## Coding Style
+- TypeScript + React function components and hooks.
+- 2-space indent, semicolons, double quotes.
+- Tailwind for styling, with the tokens in `src/design/tokens.css`.
+- Keep pure logic out of components (`src/lib/`, `src/overlay/model.ts`), and test it.
 
-## Testing Guidelines
-- JS/TS: no framework configured yet. Prefer Vitest; name tests `*.test.ts(x)` colocated with source.
-- Rust: add `#[cfg(test)]` modules where relevant; run `cargo test`.
-- Manual: use `websocket_test.html` to simulate track/time events.
+## Testing
+- Frontend: Vitest, `*.test.ts(x)` next to the source.
+- Rust: `#[cfg(test)]` modules in the file they test.
+- The app log (`%LOCALAPPDATA%\com.lyryc.app\logs\lyryc.log`) has backend logs plus the
+  overlay's warnings and errors.
 
-## Commit & Pull Request Guidelines
-- Current history is mixed; write clear, imperative messages.
-- Prefer Conventional Commits (`feat:`, `fix:`, `refactor:`, `docs:`).
-- PRs: concise description, linked issues, UI screenshots/video when applicable, reproduction and test steps. Keep changes scoped.
+## Commits and Pull Requests
+- Conventional Commits (`feat:`, `fix:`, `refactor:`, `docs:`, `chore:`).
+- PRs: a concise description, linked issues, screenshots or video for UI changes,
+  reproduction and test steps. Keep changes scoped.
 
-## Security & Configuration Tips
-- Extension ↔ app uses WebSocket `ws://localhost:8765`; allow local connections.
-- Do not commit secrets (none required). 
-- Network HMR: set `TAURI_DEV_HOST=0.0.0.0` for external devices; Vite uses ports `5174` (dev) and `5175` (HMR) per `vite.config.ts`.
+## Security and Configuration
+- The extension talks to the app on `ws://localhost:8765`; the app refuses web pages.
+- Never commit secrets. AI keys live in the app's settings, not the repo; `.env` (see
+  `.env.example`) is for development only.
+- Vite serves on port 5274 (HMR on 5275 when `TAURI_DEV_HOST` is set), matching
+  `devUrl` in `src-tauri/tauri.conf.json`.
