@@ -50,7 +50,9 @@ export type LyricsSource =
   /** A cover with its original's real timing (same length): lines light up, word alignment of the cover wins. */
   | "original-timing"
   /** The song has no words: `lines` is empty. */
-  | "instrumental";
+  | "instrumental"
+  /** Lyrics the user edited in Settings → Saved lyrics: real timing, never looked up again. */
+  | "edited";
 
 /** `prealign_status` / `prealign-status`: the word-level timing feature's state. */
 export interface PrealignStatus {

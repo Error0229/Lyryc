@@ -12,6 +12,13 @@ use std::sync::Mutex;
 /// Cache TTL: 30 days in seconds
 const CACHE_TTL_SECONDS: i64 = 30 * 24 * 60 * 60;
 
+/// The `source` of lyrics the user edited (Settings → Saved lyrics). They
+/// never expire: a lookup would throw the user's fixes away.
+const EDITED: &str = "edited";
+
+mod editor;
+pub use editor::{saved_song, saved_song_change, saved_songs};
+
 lazy_static::lazy_static! {
     static ref DB_PATH: Option<PathBuf> = db_path();
     /// Single database connection protected by mutex.
@@ -128,8 +135,8 @@ fn init_db() -> Option<Connection> {
     // Clean up expired entries on startup
     let min_timestamp = now_timestamp() - CACHE_TTL_SECONDS;
     match conn.execute(
-        "DELETE FROM lyrics_cache WHERE cached_at <= ?1",
-        params![min_timestamp],
+        "DELETE FROM lyrics_cache WHERE cached_at <= ?1 AND source IS NOT ?2",
+        params![min_timestamp, EDITED],
     ) {
         Ok(count) if count > 0 => info!("Cleaned up {} expired cache entries", count),
         Ok(_) => {}
@@ -211,8 +218,8 @@ pub fn get_cached_lyrics(artist: &str, track: &str) -> CacheResult {
     let min_timestamp = now_timestamp() - CACHE_TTL_SECONDS;
 
     let result: Result<(Option<String>, Option<String>), _> = conn.query_row(
-        "SELECT lyrics_json, source FROM lyrics_cache WHERE artist = ?1 AND track = ?2 AND cached_at > ?3",
-        params![artist_key, track_key, min_timestamp],
+        "SELECT lyrics_json, source FROM lyrics_cache WHERE artist = ?1 AND track = ?2 AND (cached_at > ?3 OR source IS ?4)",
+        params![artist_key, track_key, min_timestamp, EDITED],
         |row| Ok((row.get(0)?, row.get(1)?)),
     );
 

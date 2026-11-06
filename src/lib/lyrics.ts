@@ -32,6 +32,11 @@ export function translationKey(text: string): string {
   return norm(text);
 }
 
+/** The cache's name for a song (`song_key` in lyrics_cache.rs): lowercase, spaces squashed. */
+export function songCacheKey(artist: string, title: string): string {
+  return [artist, title].map((s) => s.split(/\s+/).filter(Boolean).join(" ").toLowerCase()).join(" - ");
+}
+
 /** Stable signature of a lyric list's text; unchanged by retiming. */
 export function textSignature(lines: readonly LyricLine[]): string {
   return lines.map((l) => norm(l.text)).join("\n");

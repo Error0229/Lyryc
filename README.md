@@ -78,6 +78,7 @@ one SQLite file, `%LOCALAPPDATA%\com.lyryc.app\lyrics_cache.db`:
 | Lyrics, "no lyrics found" and "instrumental" | artist and title | 30 days, then looked up again |
 | Translations | the lyric text, languages, style, prompt and model | until you clear them |
 | Word timing | the YouTube video and the lyric text | until you clear them |
+| Lyrics you edited | artist and title | until you delete them |
 
 - **Translations** are saved only when every line got one, so a partial answer
   is asked for again next time. A new model, style or language translates the
@@ -86,6 +87,11 @@ one SQLite file, `%LOCALAPPDATA%\com.lyryc.app\lyrics_cache.db`:
   straight from it.
 - **Wrong lyrics?** **Search lyrics again** in the toolbar drops that song's
   saved lyrics and searches anew. **Mark instrumental** saves "no words" for it.
+- **To fix a song,** click **Browse** under Settings → Lyrics & sync → Saved lyrics
+  and translations. Open a song to edit its words, times and translation, paste
+  LRC, add lyrics where none were found, or delete any part of it. Changing the
+  words deletes its translation and word timing, which are made again when it
+  plays.
 - **To start over,** use **Clear** under Settings → Lyrics & sync → Saved lyrics
   and translations, which shows the cache's size. (**Remove downloaded files**
   there deletes the word-timing model and yt-dlp, not the cache.)
