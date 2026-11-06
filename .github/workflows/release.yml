@@ -72,6 +72,5 @@ jobs:
       - name: Attach the browser extension
         shell: pwsh
         run: |
-          $files = Get-ChildItem extension -Exclude 'prototype-*'
-          Compress-Archive -Path $files.FullName -DestinationPath lyryc-extension.zip
+          Compress-Archive -Path extension\* -DestinationPath lyryc-extension.zip
           gh release upload $env:GITHUB_REF_NAME lyryc-extension.zip --clobber
