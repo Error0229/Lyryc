@@ -50,7 +50,10 @@ pub async fn translate_lyrics_command(
         info!("Translation for {} lines from the cache", lyrics.len());
         return Ok(hit);
     }
-    let result = translate_lyrics(lyrics, config, &target).await?;
+    // The routed provider first; if it refuses or fails, the others in turn.
+    let mut targets = vec![target];
+    targets.extend(llm::fallbacks(Task::Translation));
+    let result = translate_lyrics(lyrics, config, &targets).await?;
     translation::cache::put(&key, &result);
     Ok(result)
 }

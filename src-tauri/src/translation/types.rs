@@ -4,15 +4,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::llm::store::{AdhocKey, LegacyKeys};
 
-/// How much of the song one request carries: all of it, then smaller pieces
-/// when a reply doesn't fit.
-#[derive(Debug, Clone)]
-pub enum TranslationStrategy {
-    Combined,
-    Chunked(usize),
-    LineByLine,
-}
-
 /// Configuration for translation request.
 ///
 /// `provider` and the two key fields are legacy: the backend settings store

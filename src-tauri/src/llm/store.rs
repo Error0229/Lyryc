@@ -197,6 +197,11 @@ pub fn resolve(task: Task, call_keys: &[AdhocKey]) -> Option<Target> {
     }
 }
 
+/// `Store::fallbacks` on the global store.
+pub fn fallbacks(task: Task) -> Vec<Target> {
+    GLOBAL.get().map(|state| lock(state).fallbacks(task)).unwrap_or_default()
+}
+
 /// Poisoning only means another thread panicked mid-update; the data is
 /// still a valid `Store`, so keep going rather than take the app down.
 pub fn lock(state: &LlmState) -> std::sync::MutexGuard<'_, Store> {
@@ -368,6 +373,38 @@ impl Store {
                     None
                 }
             })
+    }
+
+    /// The other providers that could do `task` when its own can't (it refused,
+    /// or it's down): each with the model a route already gives it, else its
+    /// preset's first suggestion. In the order they were added; providers
+    /// without a needed key, and retired ones, are left out.
+    pub fn fallbacks(&self, task: Task) -> Vec<Target> {
+        let routes = &self.settings.routes;
+        let own = match task {
+            Task::Translation => routes.translation.as_ref(),
+            Task::Cleaning => routes.cleaning.as_ref().or(routes.translation.as_ref()),
+        };
+        let routed_model = |id: &str| {
+            [&routes.translation, &routes.cleaning]
+                .into_iter()
+                .flatten()
+                .find(|r| r.provider_id == id)
+                .map(|r| r.model.clone())
+        };
+        self.settings
+            .providers
+            .iter()
+            .filter(|p| own.is_none_or(|r| r.provider_id != p.id))
+            .filter_map(|p| {
+                let preset = presets::find(&p.preset_id)?;
+                if preset.retired() || (preset.key_required && p.api_key.is_none()) {
+                    return None;
+                }
+                let model = routed_model(&p.id).or_else(|| preset.default_model().map(str::to_string))?;
+                self.target_for(&p.id, &model).ok()
+            })
+            .collect()
     }
 
     /// Create GitHub Models / Gemini instances from old frontend keys and
@@ -611,6 +648,28 @@ mod tests {
         assert_eq!(v.routes.cleaning, route(&b.id, "n"));
         assert!(s.set_route(Task::Translation, route(&a.id, "m")).is_err());
         assert!(s.set_route(Task::Translation, route(&b.id, "  ")).is_err());
+    }
+
+    #[test]
+    fn fallbacks_are_the_other_usable_providers() {
+        let mut s = Store::in_memory();
+        let a = s.upsert(input("anthropic", Some("k-anthropic"))).unwrap();
+        let g = s.upsert(input("gemini", Some("k-gemini"))).unwrap();
+        s.upsert(input("openai", None)).unwrap(); // no key: can't stand in
+        let o = s.upsert(input("ollama", None)).unwrap(); // local: needs none
+        s.set_route(Task::Translation, route(&a.id, "claude-sonnet-5-5")).unwrap();
+        s.set_route(Task::Cleaning, route(&g.id, "gemini-3.5-flash-lite")).unwrap();
+
+        let f = s.fallbacks(Task::Translation);
+        let got: Vec<(&str, &str)> = f.iter().map(|t| (t.preset.id, t.model.as_str())).collect();
+        // Gemini with the model its cleaning route uses, Ollama with its first suggestion.
+        let ollama = presets::find("ollama").unwrap().default_model().unwrap();
+        assert_eq!(got, [(GEMINI, "gemini-3.5-flash-lite"), ("ollama", ollama)]);
+
+        // For cleaning, its own provider is the one left out.
+        s.remove(&o.id).unwrap();
+        let got: Vec<&str> = s.fallbacks(Task::Cleaning).iter().map(|t| t.preset.id).collect();
+        assert_eq!(got, ["anthropic"]);
     }
 
     #[test]

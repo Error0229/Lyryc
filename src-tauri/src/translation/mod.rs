@@ -1,91 +1,116 @@
-//! Translation module for lyrics translation
-//!
-//! This module provides comprehensive lyrics translation functionality with:
-//! - Any BYOK provider via `crate::llm` (the caller resolves the route)
-//! - Intelligent language detection
-//! - One translation per lyric line, or a retry in smaller pieces
-//! - Progressive retry strategies
+//! Lyrics translation: the whole song in one request, numbered lines in,
+//! numbered translations out (see `prompt`). A provider whose reply doesn't
+//! fit (a refusal, a summary) or that fails outright hands the song to the
+//! next configured one; nothing is split up or guessed.
 
 pub mod cache;
 mod language;
 mod parser;
 mod prompt;
-mod strategy;
 mod types;
 
-use log::{error, info};
+use log::{error, info, warn};
 
-use crate::llm::Target;
-use types::TranslationStrategy;
+use crate::llm::{self, ChatRequest, Target};
+use language::detect_language_fallback;
+use parser::parse_translation_response;
 
-// Re-export public types and functions
 pub use types::{LyricLine, TranslationConfig, TranslationResult};
 
-/// Main translation function with enhanced mismatch resolution and fallback support
+/// Translate with the first of `targets` that gives a usable answer: the
+/// routed provider, then the fallbacks.
 pub async fn translate_lyrics(
     lyrics: Vec<LyricLine>,
     config: TranslationConfig,
-    target: &Target,
+    targets: &[Target],
 ) -> Result<TranslationResult, String> {
     let start_time = std::time::Instant::now();
-
     if lyrics.is_empty() {
+        return Ok(failed("No lyrics provided".to_string(), 0));
+    }
+
+    let mut errors = Vec::new();
+    for target in targets {
+        info!(
+            "Translating {} lines from {} to {} via {} ({})",
+            lyrics.len(),
+            config.source_language,
+            config.target_language,
+            target.label,
+            target.model
+        );
+        match translate_once(&lyrics, &config, target).await {
+            Ok(mut result) => {
+                result.processing_time_ms = start_time.elapsed().as_millis() as u64;
+                info!("Translation done in {}ms by {} ({})", result.processing_time_ms, target.label, target.model);
+                return Ok(result);
+            }
+            Err(e) => {
+                warn!("{} ({}) didn't translate this song: {e}", target.label, target.model);
+                errors.push(format!("{}: {e}", target.label));
+            }
+        }
+    }
+
+    let ms = start_time.elapsed().as_millis() as u64;
+    let e = if errors.is_empty() { "no provider to translate with".to_string() } else { errors.join("; ") };
+    error!("Translation failed after {ms}ms: {e}");
+    Ok(failed(e, ms))
+}
+
+/// One request for the whole song.
+async fn translate_once(lyrics: &[LyricLine], config: &TranslationConfig, target: &Target) -> Result<TranslationResult, String> {
+    let detected_language = if config.source_language == "auto" {
+        detect_language_fallback(lyrics)
+    } else {
+        config.source_language.clone()
+    };
+    if detected_language == config.target_language {
         return Ok(TranslationResult {
-            success: false,
+            success: true,
             translated_lines: vec![],
-            detected_language: None,
+            detected_language: Some(detected_language),
             processing_time_ms: 0,
-            error: Some("No lyrics provided".to_string()),
-            is_same_language: false,
+            error: None,
+            is_same_language: true,
         });
     }
 
-    info!(
-        "Starting enhanced translation for {} lines from {} to {} via {} ({})",
-        lyrics.len(),
-        config.source_language,
-        config.target_language,
-        target.label,
-        target.model
-    );
+    let lines: Vec<&str> = lyrics.iter().map(|l| l.text.as_str()).collect();
+    let system = prompt::system_prompt(&config.target_language, &config.style, config.custom_prompt.as_deref());
+    let user = prompt::user_prompt(&lines, &detected_language, &config.target_language);
+    let reply = llm::complete(
+        target,
+        &ChatRequest { system: Some(&system), user: &user, temperature: Some(0.3), max_tokens: 8192, json: false },
+    )
+    .await
+    .map_err(|e| e.to_string())?;
 
-    // Define progressive translation strategies
-    let strategies = vec![
-        TranslationStrategy::Combined,
-        TranslationStrategy::Chunked(5),
-        TranslationStrategy::LineByLine,
-    ];
+    let translated_lines = parse_translation_response(&reply, lyrics, &detected_language)?;
+    Ok(TranslationResult {
+        success: true,
+        translated_lines,
+        detected_language: Some(detected_language),
+        processing_time_ms: 0,
+        error: None,
+        is_same_language: false,
+    })
+}
 
-    let result = strategy::translate_with_strategies(&lyrics, &config, target, &strategies).await;
-
-    match result {
-        Ok(mut translation_result) => {
-            translation_result.processing_time_ms = start_time.elapsed().as_millis() as u64;
-            info!(
-                "Translation completed successfully in {}ms",
-                translation_result.processing_time_ms
-            );
-            Ok(translation_result)
-        }
-        Err(e) => {
-            let processing_time_ms = start_time.elapsed().as_millis() as u64;
-            error!("Translation failed after {}ms: {}", processing_time_ms, e);
-            Ok(TranslationResult {
-                success: false,
-                translated_lines: vec![],
-                detected_language: None,
-                processing_time_ms,
-                error: Some(e),
-                is_same_language: false,
-            })
-        }
+fn failed(error: String, processing_time_ms: u64) -> TranslationResult {
+    TranslationResult {
+        success: false,
+        translated_lines: vec![],
+        detected_language: None,
+        processing_time_ms,
+        error: Some(error),
+        is_same_language: false,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::translation::language::detect_language_fallback;
 
     #[test]
     fn test_language_detection() {
@@ -137,11 +162,5 @@ mod tests {
         let config: TranslationConfig = serde_json::from_str(modern).unwrap();
         assert!(config.legacy_keys().is_empty());
         assert!(config.custom_prompt.is_none());
-    }
-
-    #[test]
-    fn test_separator_constant() {
-        assert_eq!(prompt::TRANSLATION_SEPARATOR, "<sep>");
-        assert!(prompt::TRANSLATION_SEPARATOR.len() >= 5);
     }
 }
