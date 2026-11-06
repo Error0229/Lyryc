@@ -461,16 +461,23 @@ fn set_click_through(w: &WebviewWindow, on: bool) {
 /// show solid white until something else repainted it (user report; seen
 /// here: 39% of the window white after a fresh start's first unlock, and a
 /// repaint plus re-applied blur-behind didn't clear it). Locked mode already
-/// draws correctly as a layered window, and a layered window with no layered
-/// attributes still takes clicks (checked with WindowFromPoint on the strip,
-/// the toolbar and the room). So the window never leaves that state: a
-/// subclass adds WS_EX_LAYERED back to every extended-style change, whoever
-/// makes it, and click-through is only WS_EX_TRANSPARENT coming and going.
+/// draws correctly as a layered window. So the window never leaves that
+/// state: a subclass adds WS_EX_LAYERED back to every extended-style change,
+/// whoever makes it, and click-through is only WS_EX_TRANSPARENT coming and
+/// going.
+///
+/// It also gets layered attributes (opaque, alpha 255), which change nothing
+/// it draws. Without them, Windows takes input only within the size the
+/// window had when it became layered: once the strip grew (a translation row),
+/// clicks below that line fell through to the desktop, the toolbar and the
+/// Unlock pill among them (seen: a 202 px window taking clicks in its top 128).
 #[cfg(windows)]
 fn keep_layered(w: &WebviewWindow) {
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
-    use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowLongW, SetWindowLongW, GWL_EXSTYLE, STYLESTRUCT, WM_NCDESTROY, WM_STYLECHANGING, WS_EX_LAYERED};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongW, SetLayeredWindowAttributes, SetWindowLongW, GWL_EXSTYLE, LWA_ALPHA, STYLESTRUCT, WM_NCDESTROY, WM_STYLECHANGING, WS_EX_LAYERED,
+    };
     const ID: usize = 0x4c59_5259; // "LYRY"
 
     unsafe extern "system" fn hold(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _: usize, _: usize) -> LRESULT {
@@ -495,6 +502,9 @@ fn keep_layered(w: &WebviewWindow) {
         SetWindowSubclass(hwnd, Some(hold), ID, 0);
         let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
         SetWindowLongW(hwnd, GWL_EXSTYLE, (ex | WS_EX_LAYERED) as i32);
+        if SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA) == 0 {
+            warn!("placement: couldn't set layered attributes; part of the overlay may not take clicks");
+        }
     });
 }
 
