@@ -4,35 +4,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::llm::store::{AdhocKey, LegacyKeys};
 
-/// Line count mismatch types for alignment resolution
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub enum MismatchType {
-    LinesShort,
-    LinesExtra,
-    LinesSame,
-}
-
-/// Result of mismatch resolution attempt
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub struct MismatchResolution {
-    pub strategy_used: String,
-    pub confidence: f64,
-    pub original_count: usize,
-    pub translated_count: usize,
-    pub alignment_map: Vec<(usize, usize)>,
-    pub success: bool,
-}
-
-/// Translation strategy for handling different scenarios
-#[allow(dead_code)]
+/// How much of the song one request carries: all of it, then smaller pieces
+/// when a reply doesn't fit.
 #[derive(Debug, Clone)]
 pub enum TranslationStrategy {
     Combined,
     Chunked(usize),
     LineByLine,
-    AlignmentFix,
 }
 
 /// Configuration for translation request.

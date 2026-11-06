@@ -3,10 +3,9 @@
 //! This module provides comprehensive lyrics translation functionality with:
 //! - Any BYOK provider via `crate::llm` (the caller resolves the route)
 //! - Intelligent language detection
-//! - Line alignment and mismatch resolution
+//! - One translation per lyric line, or a retry in smaller pieces
 //! - Progressive retry strategies
 
-mod alignment;
 pub mod cache;
 mod language;
 mod parser;

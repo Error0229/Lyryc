@@ -3,17 +3,17 @@
 use log::{info, warn};
 use unicode_normalization::UnicodeNormalization;
 
-use super::alignment::resolve_line_count_mismatch;
 use super::prompt::TRANSLATION_SEPARATOR;
 use super::types::{LyricLine, TranslatedLyricLine};
-use crate::llm::Target;
 
-/// Parse translation response and align with original lyrics
-pub async fn parse_translation_response(
+/// One translation per original line, or an error saying why the reply isn't
+/// one. Never a guess: a reply that doesn't fit (a refusal, a summary, lines
+/// merged or dropped) is a failed attempt, and the caller retries in smaller
+/// pieces. Stretching it over the lyrics would show, and cache, nonsense.
+pub fn parse_translation_response(
     response_text: &str,
     original_lyrics: &[LyricLine],
     detected_language: &str,
-    target: Option<&Target>,
 ) -> Result<(Vec<TranslatedLyricLine>, bool), String> {
     let response_text = response_text.trim();
 
@@ -30,24 +30,10 @@ pub async fn parse_translation_response(
         .any(|line| line.contains(TRANSLATION_SEPARATOR));
 
     if uses_new_format {
-        let result = parse_paired_format(&cleaned_response, original_lyrics, detected_language);
-
-        if let Ok((lines, _is_same)) = &result {
-            if lines.len() == original_lyrics.len() {
-                return result;
-            }
-        }
+        return parse_paired_format(&cleaned_response, original_lyrics, detected_language);
     }
-
-    // Fallback to legacy format
     info!("[Parse Path: LEGACY_FORMAT] Falling back to legacy translation-only format");
-    parse_legacy_format(
-        &cleaned_response,
-        original_lyrics,
-        detected_language,
-        target,
-    )
-    .await
+    parse_legacy_format(&cleaned_response, original_lyrics, detected_language)
 }
 
 /// The LLM echoes each original line before its translation. Echoes are
@@ -70,7 +56,8 @@ fn parse_paired_format(
 
     let mut used = vec![false; pairs.len()];
     let mut next = 0;
-    let mut misses = 0;
+    let mut misses = 0; // reworded echoes and missing lines
+    let mut missing = 0; // lines with no translation at all
     let mut out = Vec::with_capacity(original_lyrics.len());
     for (i, line) in original_lyrics.iter().enumerate() {
         let exact = (next..pairs.len()).chain(0..next).find(|&j| !used[j] && pairs[j].0 == keys[i]);
@@ -87,6 +74,7 @@ fn parse_paired_format(
             }
             None => {
                 misses += 1;
+                missing += 1;
                 warn!("[Parse Path: NEW_FORMAT_MISSING] Line {}: '{}' has no translation", i, line.text.trim());
                 (line.text.clone(), 0.0)
             }
@@ -104,6 +92,10 @@ fn parse_paired_format(
 
     if misses == 0 {
         info!("[Parse Path: NEW_FORMAT_SUCCESS] Paired format parsing successful: {} lines", out.len());
+    } else if missing * 2 > out.len() {
+        // Most of the song untranslated: not an answer to keep. A reworded
+        // echo still carries its line's translation, so it doesn't count.
+        return Err(format!("the reply translates only {} of {} lines", out.len() - missing, out.len()));
     } else {
         warn!("[Parse Path: NEW_FORMAT_PARTIAL] Completed with {} mismatches out of {} lines", misses, out.len());
     }
@@ -117,27 +109,22 @@ fn echo_key(s: &str) -> String {
     s.nfkc().flat_map(char::to_lowercase).filter(|c| c.is_alphanumeric()).collect()
 }
 
-async fn parse_legacy_format(
+/// A reply without the separators: usable only if it has exactly one line per
+/// original, in order.
+fn parse_legacy_format(
     cleaned_response: &[&str],
     original_lyrics: &[LyricLine],
     detected_language: &str,
-    target: Option<&Target>,
 ) -> Result<(Vec<TranslatedLyricLine>, bool), String> {
-    // Handle line count mismatch
     if cleaned_response.len() != original_lyrics.len() {
+        let first = cleaned_response.first().map(|l| l.chars().take(120).collect::<String>()).unwrap_or_default();
         warn!(
-            "[Parse Path: LEGACY_MISMATCH] Line count mismatch: original {} vs translated {}",
+            "[Parse Path: LEGACY_MISMATCH] {} line(s) for {}, not a translation; it begins: {}",
+            cleaned_response.len(),
             original_lyrics.len(),
-            cleaned_response.len()
+            first
         );
-
-        return resolve_line_count_mismatch(
-            cleaned_response,
-            original_lyrics,
-            detected_language,
-            target,
-        )
-        .await;
+        return Err(format!("the reply has {} lines for {}", cleaned_response.len(), original_lyrics.len()));
     }
 
     // Perfect match - proceed normally
@@ -201,6 +188,28 @@ mod tests {
     fn a_skipped_line_does_not_shift_the_rest() {
         let out = parse(&["a|A", "c|C", "d|D"], &["a", "b", "c", "d"]);
         assert_eq!(out, vec![("A".into(), 0.98), ("b".into(), 0.0), ("C".into(), 0.98), ("D".into(), 0.98)]);
+    }
+
+    #[test]
+    fn a_reply_that_is_not_a_translation_is_an_error_not_a_guess() {
+        let five = lines(&["a", "b", "c", "d", "e"]);
+        // A refusal with a summary: 3 lines of prose for 5 lyric lines.
+        let refusal = ["I can't reproduce these lyrics.", "Here is a summary:", "The song is about loneliness."].join("
+");
+        assert!(parse_translation_response(&refusal, &five, "en").is_err());
+        // Paired, but most lines missing (3 of 5): an error. Two missing is kept.
+        let paired = |pairs: &[&str]| pairs.iter().map(|p| p.replace('|', TRANSLATION_SEPARATOR)).collect::<Vec<_>>().join("
+");
+        assert!(parse_translation_response(&paired(&["a|A", "b|B"]), &five, "en").is_err());
+        assert!(parse_translation_response(&paired(&["a|A", "b|B", "c|C"]), &five, "en").is_ok());
+        // Every echo reworded: each line still has its translation.
+        let reworded = paired(&["a!|A", "b!|B", "c!|C", "d!|D", "e!|E"]);
+        let reworded = reworded.replace("a!", "a x").replace("b!", "b x").replace("c!", "c x").replace("d!", "d x").replace("e!", "e x");
+        assert!(parse_translation_response(&reworded, &five, "en").is_ok());
+        // One line per original, without echoes: fine.
+        let (out, _) = parse_translation_response("A
+B", &lines(&["a", "b"]), "en").unwrap();
+        assert_eq!(out.iter().map(|l| l.translated_text.as_str()).collect::<Vec<_>>(), ["A", "B"]);
     }
 
     #[test]

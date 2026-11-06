@@ -88,9 +88,7 @@ async fn translate_once(
     .map_err(|e| Failure::Service(e.to_string()))?;
 
     let (translated_lines, _is_same_language) =
-        parse_translation_response(&response_text, lyrics, &detected_language, Some(target))
-            .await
-            .map_err(Failure::Answer)?;
+        parse_translation_response(&response_text, lyrics, &detected_language).map_err(Failure::Answer)?;
 
     Ok(TranslationResult {
         success: true,
@@ -119,9 +117,6 @@ pub async fn translate_with_strategies(
                 translate_chunked(lyrics, config, target, *chunk_size).await
             }
             TranslationStrategy::LineByLine => translate_line_by_line(lyrics, config, target).await,
-            TranslationStrategy::AlignmentFix => {
-                Err(Failure::Answer("AlignmentFix strategy must be used with another strategy".to_string()))
-            }
         };
 
         match result {
@@ -190,9 +185,16 @@ async fn translate_line_by_line(
 
     for line in lyrics {
         let single_line = vec![line.clone()];
-        let line_result = translate_once(&single_line, config, target).await?;
+        // The last resort: a line whose reply doesn't fit stays untranslated
+        // instead of failing the song. A service failure still ends it.
+        let line_result = match translate_once(&single_line, config, target).await {
+            Ok(result) => Some(result),
+            Err(e) if e.retry_smaller() => None,
+            Err(e) => return Err(e),
+        };
+        let line_result = line_result.filter(|r| r.success && !r.translated_lines.is_empty());
 
-        if !line_result.success || line_result.translated_lines.is_empty() {
+        let Some(line_result) = line_result else {
             all_translated_lines.push(TranslatedLyricLine {
                 time: line.time,
                 text: line.text.clone(),
@@ -202,11 +204,11 @@ async fn translate_line_by_line(
                 translation_confidence: Some(0.0),
                 detected_language: detected_language.clone(),
             });
-        } else {
-            all_translated_lines.extend(line_result.translated_lines);
-            if detected_language.is_none() {
-                detected_language = line_result.detected_language;
-            }
+            continue;
+        };
+        all_translated_lines.extend(line_result.translated_lines);
+        if detected_language.is_none() {
+            detected_language = line_result.detected_language;
         }
     }
 
