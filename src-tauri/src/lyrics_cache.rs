@@ -6,38 +6,77 @@
 use crate::types::LyricLine;
 use log::{debug, error, info, warn};
 use rusqlite::{params, Connection};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 /// Cache TTL: 30 days in seconds
 const CACHE_TTL_SECONDS: i64 = 30 * 24 * 60 * 60;
 
 lazy_static::lazy_static! {
+    static ref DB_PATH: Option<PathBuf> = db_path();
     /// Single database connection protected by mutex.
     /// SQLite with WAL mode handles concurrent reads well, mutex serializes writes.
     static ref DB_CONNECTION: Mutex<Option<Connection>> = Mutex::new(init_db());
 }
 
-/// Get the database path in user's app data directory
-fn get_db_path() -> Option<PathBuf> {
-    let base_dir = std::env::var("LOCALAPPDATA")
+const DB_FILE: &str = "lyrics_cache.db";
+
+/// `%LOCALAPPDATA%\com.lyryc.app\lyrics_cache.db`, beside the log and the
+/// word-timing files, so it goes with them (the uninstaller's "delete app
+/// data" included). Versions before 0.2.4 kept it in `%LOCALAPPDATA%\Lyryc`;
+/// a cache found there is moved over once.
+fn db_path() -> Option<PathBuf> {
+    let base = std::env::var("LOCALAPPDATA")
         .or_else(|_| std::env::var("XDG_DATA_HOME"))
         .or_else(|_| std::env::var("HOME").map(|h| format!("{}/.local/share", h)))
-        .ok()?;
-
-    let app_dir = PathBuf::from(base_dir).join("Lyryc");
-
-    if let Err(e) = std::fs::create_dir_all(&app_dir) {
+        .ok()
+        .map(PathBuf::from)?;
+    let dir = base.join("com.lyryc.app");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
         error!("Failed to create app data directory: {}. Cache disabled.", e);
         return None;
     }
+    let path = dir.join(DB_FILE);
+    move_old_cache(&base.join("Lyryc").join(DB_FILE), &path);
+    Some(path)
+}
 
-    Some(app_dir.join("lyrics_cache.db"))
+/// Copy the old cache to `to` (VACUUM INTO: one consistent file, whatever
+/// sat in its WAL), then delete it and its folder. Nothing happens if `to`
+/// exists, and a failed copy leaves the old cache where it was.
+fn move_old_cache(from: &Path, to: &Path) {
+    if !from.exists() || to.exists() {
+        return;
+    }
+    let copied = Connection::open(from).and_then(|c| c.execute("VACUUM INTO ?1", params![to.to_string_lossy()]));
+    if let Err(e) = copied {
+        warn!("Couldn't move the lyrics cache from {:?}: {}", from, e);
+        let _ = std::fs::remove_file(to);
+        return;
+    }
+    info!("Moved the lyrics cache from {:?} to {:?}", from, to);
+    for file in db_files(from) {
+        let _ = std::fs::remove_file(file);
+    }
+    if let Some(dir) = from.parent() {
+        let _ = std::fs::remove_dir(dir); // only if nothing else is in it
+    }
+}
+
+/// The database and the WAL files beside it.
+fn db_files(db: &Path) -> [PathBuf; 3] {
+    let name = db.as_os_str();
+    let with = |suffix: &str| {
+        let mut n = name.to_owned();
+        n.push(suffix);
+        PathBuf::from(n)
+    };
+    [db.to_path_buf(), with("-wal"), with("-shm")]
 }
 
 /// Initialize database connection and schema. Called once at startup.
 fn init_db() -> Option<Connection> {
-    let db_path = get_db_path()?;
+    let db_path = DB_PATH.clone()?;
     info!("Initializing lyrics cache database at: {:?}", db_path);
 
     let conn = match Connection::open(&db_path) {
@@ -394,43 +433,36 @@ pub fn cache_translation(key: &str, result_json: &str) {
     }
 }
 
-/// Clear the entire cache
-#[allow(dead_code)]
-pub fn clear_cache() {
-    let guard = match DB_CONNECTION.lock() {
-        Ok(g) => g,
-        Err(_) => return,
-    };
+/// The cache's size on disk, bytes.
+pub fn size() -> u64 {
+    let Some(path) = DB_PATH.as_ref() else { return 0 };
+    db_files(path).iter().filter_map(|f| std::fs::metadata(f).ok()).map(|m| m.len()).sum()
+}
 
-    if let Some(conn) = guard.as_ref() {
-        match conn.execute("DELETE FROM lyrics_cache", []) {
-            Ok(count) => info!("Cleared {} entries from lyrics cache", count),
-            Err(e) => error!("Failed to clear lyrics cache: {}", e),
-        }
+/// Forget everything: lyrics, translations and word timings.
+fn clear_in(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        "DELETE FROM lyrics_cache; DELETE FROM translation_cache; DELETE FROM aligned_cache;
+         VACUUM; PRAGMA wal_checkpoint(TRUNCATE);",
+    )
+}
+
+/// Settings → Lyrics & sync: how big the cache is.
+#[tauri::command]
+pub fn cache_size() -> u64 {
+    size()
+}
+
+/// Settings → Lyrics & sync → Clear: empties the cache and returns its new size.
+#[tauri::command]
+pub fn cache_clear() -> Result<u64, String> {
+    {
+        let guard = DB_CONNECTION.lock().map_err(|e| e.to_string())?;
+        let conn = guard.as_ref().ok_or("the cache isn't available")?;
+        clear_in(conn).map_err(|e| e.to_string())?;
     }
-}
-
-/// Get cache statistics
-#[allow(dead_code)]
-pub fn get_cache_stats() -> Option<(usize, i64)> {
-    let guard = DB_CONNECTION.lock().ok()?;
-    let conn = guard.as_ref()?;
-
-    let count: usize = conn
-        .query_row("SELECT COUNT(*) FROM lyrics_cache", [], |row| row.get(0))
-        .ok()?;
-
-    let oldest: i64 = conn
-        .query_row("SELECT MIN(cached_at) FROM lyrics_cache", [], |row| row.get(0))
-        .unwrap_or(0);
-
-    Some((count, oldest))
-}
-
-/// Check if cache is available
-#[allow(dead_code)]
-pub fn is_cache_available() -> bool {
-    DB_CONNECTION.lock().map(|g| g.is_some()).unwrap_or(false)
+    info!("Cleared the lyrics cache");
+    Ok(size())
 }
 
 #[cfg(test)]
@@ -459,5 +491,52 @@ mod tests {
         assert_eq!(get_aligned_in(&conn, "vid2", "h1"), AlignedCache::Miss, "same lyrics, other upload");
         cache_aligned_in(&conn, "vid1", "h1", Some("[2]"));
         assert_eq!(get_aligned_in(&conn, "vid1", "h1"), AlignedCache::Hit("[2]".into()));
+    }
+
+    #[test]
+    fn clearing_forgets_lyrics_translations_and_timings() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute(
+            "CREATE TABLE lyrics_cache (artist TEXT, track TEXT, lyrics_json TEXT, cached_at INTEGER, source TEXT)",
+            [],
+        )
+        .unwrap();
+        create_aligned_table(&conn);
+        create_translation_table(&conn);
+        conn.execute("INSERT INTO lyrics_cache VALUES ('a', 't', NULL, 0, NULL)", []).unwrap();
+        cache_translation_in(&conn, "k", "x");
+        cache_aligned_in(&conn, "v", "h", Some("[1]"));
+        clear_in(&conn).unwrap();
+        let rows: i64 = conn.query_row("SELECT COUNT(*) FROM lyrics_cache", [], |r| r.get(0)).unwrap();
+        assert_eq!(rows, 0);
+        assert_eq!(get_translation_in(&conn, "k"), None);
+        assert_eq!(get_aligned_in(&conn, "v", "h"), AlignedCache::Miss);
+    }
+
+    #[test]
+    fn the_old_cache_moves_once() {
+        let root = std::env::temp_dir().join(format!("lyryc-cache-move-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (old, new) = (root.join("Lyryc").join(DB_FILE), root.join("com.lyryc.app").join(DB_FILE));
+        std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(new.parent().unwrap()).unwrap();
+        {
+            let c = Connection::open(&old).unwrap();
+            c.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
+            create_translation_table(&c);
+            cache_translation_in(&c, "k", "kept");
+        }
+        move_old_cache(&old, &new);
+        let c = Connection::open(&new).unwrap();
+        assert_eq!(get_translation_in(&c, "k").as_deref(), Some("kept"));
+        assert!(!old.exists() && !old.parent().unwrap().exists(), "the old cache and its folder are gone");
+
+        // A cache already in the new place is never overwritten.
+        std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+        Connection::open(&old).unwrap().execute_batch("CREATE TABLE stale (x)").unwrap();
+        move_old_cache(&old, &new);
+        assert_eq!(get_translation_in(&c, "k").as_deref(), Some("kept"));
+        drop(c);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

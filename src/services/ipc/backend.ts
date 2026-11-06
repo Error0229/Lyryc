@@ -84,6 +84,10 @@ export interface Backend {
   prealignStatus(): Promise<PrealignStatus>;
   /** "Prepare lyrics for upcoming songs", mirrored like `prealignConfigure`. */
   lookaheadConfigure(enabled: boolean, extraSources: boolean): Promise<void>;
+  /** The cache of lyrics, translations and word timings: its size on disk, bytes. */
+  cacheSize(): Promise<number>;
+  /** Empties that cache; resolves to its new size. */
+  cacheClear(): Promise<number>;
   /** Deletes the model, runtime and yt-dlp, and turns the feature off. */
   prealignRemoveFiles(): Promise<PrealignStatus>;
   /** The backend checks for updates by itself; `updateCheck` is "Check now". */
@@ -178,6 +182,8 @@ const tauriBackend: Backend = {
   prealignStatus: () => invoke<PrealignStatus>("prealign_status"),
   lookaheadConfigure: (enabled, extraSources) => invoke<void>("lookahead_configure", { enabled, extraSources }),
   prealignRemoveFiles: () => invoke<PrealignStatus>("prealign_remove_files"),
+  cacheSize: () => invoke<number>("cache_size"),
+  cacheClear: () => invoke<number>("cache_clear"),
   updateStatus: () => invoke<UpdateStatus>("update_status"),
   updateCheck: () => invoke<UpdateStatus>("update_check"),
   updateInstall: () => invoke<void>("update_install"),

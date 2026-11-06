@@ -25,6 +25,8 @@ const params = new URLSearchParams(typeof location === "undefined" ? "" : locati
 export const mockScenario = params.get("scenario") ?? "playing";
 
 const songs = [englishSong, japaneseSong];
+/** The fake cache of lyrics, translations and timings. */
+let cacheBytes = 15_400_000;
 let songIndex = mockScenario === "furigana" ? 1 : 0;
 let playing = !params.has("paused");
 let base = Number(params.get("t") ?? 0);
@@ -223,6 +225,11 @@ export const mockBackend: Backend = {
   async prealignRemoveFiles() {
     setPrealign({ enabled: false, state: "off", download: null, diskBytes: 0 });
     return prealign;
+  },
+  cacheSize: async () => cacheBytes,
+  async cacheClear() {
+    cacheBytes = 0;
+    return cacheBytes;
   },
 
   updateStatus: async () => update,

@@ -34,6 +34,7 @@ use llm::commands::{
     llm_set_route, llm_test, llm_upsert_provider,
 };
 use lyrics::{fetch_lrclib_raw, fetch_lyrics, fetch_lyrics_timed, lookahead_configure, mark_instrumental};
+use lyrics_cache::{cache_clear, cache_size};
 use prealign::{prealign_configure, prealign_remove_files, prealign_status};
 use updater::{update_check, update_install, update_status, UpdaterState};
 use types::{TrackState, WebSocketState};
@@ -153,6 +154,8 @@ pub fn run() {
             prealign_configure,
             prealign_status,
             prealign_remove_files,
+            cache_size,
+            cache_clear,
             update_status,
             update_check,
             update_install
