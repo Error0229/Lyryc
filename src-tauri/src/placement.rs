@@ -502,7 +502,9 @@ fn keep_layered(w: &WebviewWindow) {
         SetWindowSubclass(hwnd, Some(hold), ID, 0);
         let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
         SetWindowLongW(hwnd, GWL_EXSTYLE, (ex | WS_EX_LAYERED) as i32);
-        SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
+        if SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA) == 0 {
+            warn!("placement: couldn't set layered attributes; part of the overlay may not take clicks");
+        }
     });
 }
 
