@@ -60,12 +60,14 @@ pub fn parse_translation_response(
 /// number is an empty translation of an empty or instrumental line, and
 /// still counts.
 fn numbered(line: &str) -> Option<(usize, String)> {
-    let line = line.trim();
+    // Markdown around the number ("**1.**", "- 1.", "[1]") is still a number.
+    let line = line.trim().trim_start_matches(['*', '-', '#', '[', ' ']);
     let digits = line.find(|c: char| !c.is_numeric())?;
     let number = line[..digits].nfkc().collect::<String>().parse().ok()?;
     let mut rest = line[digits..].chars();
     let mark = rest.next()?.nfkc().next()?;
-    ['.', ')', '、', ':'].contains(&mark).then(|| (number, rest.as_str().trim().to_string()))
+    let text = rest.as_str().trim_start_matches(['*', ' ']).trim();
+    ['.', ')', ']', '、', ':'].contains(&mark).then(|| (number, text.to_string()))
 }
 
 #[cfg(test)]
@@ -96,6 +98,12 @@ mod tests {
         let out = parse(&["１．你好，世界", "2、世界？", "3: !"], &["a", "b", "c"]).unwrap();
         // The translation's own full-width punctuation is kept as written.
         assert_eq!(out.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(), ["你好，世界", "世界？", "!"]);
+    }
+
+    #[test]
+    fn markdown_around_the_number_is_still_a_number() {
+        let out = parse(&["**1.** A", "- 2. B", "[3] C", "### 4) D"], &["a", "b", "c", "d"]).unwrap();
+        assert_eq!(out.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(), ["A", "B", "C", "D"]);
     }
 
     #[test]
