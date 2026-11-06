@@ -1,4 +1,4 @@
-/** Route one task (translation, cleaning) to a provider and a model. */
+/** Route one task (translation, cleaning, the translation backup) to a provider and a model. */
 import { useEffect, useState } from "react";
 import { Popover } from "radix-ui";
 import { Check, ChevronDown, LoaderCircle, RefreshCw } from "lucide-react";
