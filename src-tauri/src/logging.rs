@@ -9,12 +9,11 @@ use std::path::PathBuf;
 
 const MAX_BYTES: u64 = 5 * 1024 * 1024;
 
-pub fn log_dir() -> PathBuf {
-    std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("com.lyryc.app")
-        .join("logs")
+/// The user's own local data directory (`%LOCALAPPDATA%` on Windows), never
+/// a shared one like /tmp, where another user could plant a symlink. None:
+/// no file log, stderr only.
+fn log_dir() -> Option<PathBuf> {
+    Some(dirs::data_local_dir()?.join("com.lyryc.app").join("logs"))
 }
 
 /// The log file, moved to `lyryc.old.log` whenever it passes `max` bytes:
@@ -54,7 +53,7 @@ impl LogFile {
 }
 
 fn open_log() -> Option<LogFile> {
-    let dir = log_dir();
+    let dir = log_dir()?;
     fs::create_dir_all(&dir).ok()?;
     Some(LogFile::open(dir.join("lyryc.log"), MAX_BYTES))
 }

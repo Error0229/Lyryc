@@ -2958,6 +2958,7 @@ dependencies = [
  "autoruby",
  "base64 0.22.1",
  "csv",
+ "dirs",
  "dotenv",
  "env_logger 0.11.8",
  "flate2",
