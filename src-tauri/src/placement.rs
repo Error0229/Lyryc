@@ -293,11 +293,13 @@ pub struct Strip {
     hover: Hover,
     /// Click-through is off right now because the cursor is on a clickable rect.
     hit_open: bool,
+    /// Where the system last had the window when `put_back` moved it.
+    put_back_from: Option<Rect>,
 }
 
 pub type StripState = Mutex<Strip>;
 
-/// Bumped by every user move or resize; a settle only runs for the latest one.
+/// Bumped by every move or resize of the window; only the latest one is acted on.
 static MOVES: AtomicU64 = AtomicU64::new(0);
 /// Our drag is running: the window's moves are its own.
 static DRAGGING: AtomicBool = AtomicBool::new(false);
@@ -365,6 +367,7 @@ pub fn init(app: &AppHandle) {
         hits: Vec::new(),
         hover: Hover::default(),
         hit_open: false,
+        put_back_from: None,
     }));
     // No native shadow: it would box the transparent room, and it adds an
     // invisible frame (`set_bounds` measures one anyway). The overlay draws its own outline.
@@ -396,6 +399,8 @@ fn apply(app: &AppHandle) {
         let k = s.display.scale;
         s.strip = strip.scaled(k).round();
         let r = window_of(strip, s.room).scaled(k).round();
+        // Exact: both sides are whole physical pixels. A default `bounds`
+        // (`put_back`) never matches, so that forces the move.
         let changed = r != s.bounds;
         s.bounds = r;
         changed.then_some(r)
@@ -605,20 +610,26 @@ pub fn reset(app: &AppHandle) {
     }
 }
 
-/// The user moved or resized the strip: once it has rested (and the mouse
-/// button is up), snap it, anchor it to the nearer edge and save.
+/// The window moved or resized. Unlocked, the user did it: once it has rested
+/// (and the mouse button is up), snap it, anchor it to the nearer edge and
+/// save. Locked, the user can't move it, so once it has rested it is either
+/// where we put it or the system moved it (`put_back`). Waiting out the rest
+/// also lets our own queued moves land before anything is compared.
 pub fn on_window_event(window: &Window, event: &WindowEvent) {
     if window.label() != "main" || !matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_)) {
         return;
     }
     let app = window.app_handle().clone();
-    if locked(&app) || DRAGGING.load(Ordering::SeqCst) {
-        return; // only our own moves: the user can't drag a locked strip, and our drag settles as it goes
+    if DRAGGING.load(Ordering::SeqCst) {
+        return; // our drag settles as it goes
     }
+    let moved_by_user = !locked(&app);
     // While it is still moving, the overlay follows: the toolbar swaps sides as
     // soon as the strip crosses the middle, not after the drop.
-    if let Some((_, (_, p))) = placement_now(&app) {
-        tell_anchor(&app, p.anchor);
+    if moved_by_user {
+        if let Some((_, (_, p))) = placement_now(&app) {
+            tell_anchor(&app, p.anchor);
+        }
     }
     let mine = MOVES.fetch_add(1, Ordering::SeqCst) + 1;
     tauri::async_runtime::spawn(async move {
@@ -629,10 +640,82 @@ pub fn on_window_event(window: &Window, event: &WindowEvent) {
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        if MOVES.load(Ordering::SeqCst) == mine {
+        if MOVES.load(Ordering::SeqCst) != mine {
+            return;
+        }
+        if moved_by_user {
             settle(&app);
+        } else if locked(&app) {
+            put_back(&app);
         }
     });
+}
+
+/// A locked window that isn't where we put it was moved by the system: after
+/// sleep, a lock or a display change, Windows pulls a window whose top hangs
+/// off-screen (the room above a top-anchored strip) back onto the screen. The
+/// cursor poll and the hit rects still go by `bounds`, so the strip would draw
+/// in one place and take hover and the Unlock click in another. Put it back,
+/// on its display if that display is still there.
+fn put_back(app: &AppHandle) {
+    let Some(w) = main_window(app) else { return };
+    if w.is_minimized().unwrap_or(false) {
+        return;
+    }
+    let (Ok(pos), Ok(size)) = (w.inner_position(), w.inner_size()) else { return };
+    let now = Rect { x: pos.x as f64, y: pos.y as f64, w: size.width as f64, h: size.height as f64 };
+    let (list, primary) = displays(app);
+    if list.is_empty() {
+        return; // nowhere to put it
+    }
+    let moved = with(app, |s| {
+        let verdict = put_back_verdict(now, s.bounds, &mut s.put_back_from);
+        if verdict != PutBack::Move {
+            return (verdict, None);
+        }
+        if !list.contains(&s.display) {
+            let (i, placement) = s.store.choose(&list, primary);
+            debug_assert!(i < list.len(), "choose picked display {i} of {}", list.len());
+            s.display = list[i.min(list.len() - 1)].clone();
+            s.placement = placement;
+        }
+        s.bounds = Rect::default(); // stale: makes `apply` move it
+        (verdict, Some((s.display.key.clone(), s.placement.anchor)))
+    });
+    let Some((verdict, target)) = moved else { return };
+    if verdict == PutBack::GiveUp {
+        warn!("placement: the system keeps the window at {now:?}; leaving it there");
+    }
+    let Some((key, anchor)) = target else { return };
+    info!("placement: the window was moved to {now:?} by the system; putting it back on {key}");
+    apply(app);
+    tell_anchor(app, anchor);
+}
+
+#[derive(Debug, PartialEq)]
+enum PutBack {
+    /// The window is where we put it.
+    InPlace,
+    Move,
+    /// It is where it was before our last put-back: the system won't let it
+    /// move (a clamp, say). Moving it again would fire another move event and
+    /// loop, so it stays; only the system moving it again asks again.
+    GiveUp,
+}
+
+/// What to do about a locked window at `now` that we put at `bounds`.
+/// `tried` remembers the spot the last put-back moved it from, until the
+/// window is seen in place again.
+fn put_back_verdict(now: Rect, bounds: Rect, tried: &mut Option<Rect>) -> PutBack {
+    if now == bounds {
+        *tried = None;
+        return PutBack::InPlace;
+    }
+    if tried.replace(now) == Some(now) {
+        PutBack::GiveUp
+    } else {
+        PutBack::Move
+    }
 }
 
 /// The display under a window (physical px) and the placement its strip would settle to.
@@ -883,6 +966,23 @@ mod tests {
     fn display(key: &str, x: f64) -> Display {
         let bounds = Rect { x, y: 0.0, w: 1920.0, h: 1080.0 };
         Display { key: key.into(), scale: 1.0, bounds, work: Rect { h: 1032.0, ..bounds } }
+    }
+
+    #[test]
+    fn a_locked_window_the_system_moved_goes_back_once() {
+        let ours = Rect { x: 216.0, y: -60.0, w: 1488.0, h: 164.0 };
+        let pulled = Rect { x: 216.0, y: 0.0, w: 1488.0, h: 190.0 };
+        let mut tried = None;
+        assert_eq!(put_back_verdict(ours, ours, &mut tried), PutBack::InPlace, "our own move");
+        assert_eq!(put_back_verdict(pulled, ours, &mut tried), PutBack::Move);
+        // It came back: the next system move is put back too.
+        assert_eq!(put_back_verdict(ours, ours, &mut tried), PutBack::InPlace);
+        assert_eq!(put_back_verdict(pulled, ours, &mut tried), PutBack::Move);
+        // It didn't come back (the system holds it there): stop, don't loop.
+        assert_eq!(put_back_verdict(pulled, ours, &mut tried), PutBack::GiveUp);
+        // Somewhere new is a new move.
+        let elsewhere = Rect { y: 20.0, ..pulled };
+        assert_eq!(put_back_verdict(elsewhere, ours, &mut tried), PutBack::Move);
     }
 
     #[test]
