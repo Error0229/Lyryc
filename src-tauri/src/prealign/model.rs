@@ -1,6 +1,7 @@
 //! The MMS forced-alignment wav2vec2 (int8 ONNX) on ONNX Runtime, CPU only.
 
 use super::align::{self, AlignError, AlignedLine, Chunking};
+use super::ctc::Emissions;
 use super::romanize;
 use ort::execution_providers::CPUExecutionProvider;
 use ort::session::{builder::GraphOptimizationLevel, Session};
@@ -56,11 +57,16 @@ impl Model {
         Ok((frames, vocab, data.to_vec()))
     }
 
+    /// The track's log-posteriors (see `align::emissions`).
+    pub fn emissions(&mut self, wav: &[f32], cancel: &AtomicBool) -> Result<Emissions, AlignError> {
+        align::emissions(wav, Chunking::default(), cancel, |x| self.logits(x))
+    }
+
     /// Align `lines` to 16 kHz mono `wav`.
     pub fn align(&mut self, wav: &[f32], lines: &[String], cancel: &AtomicBool) -> Result<Vec<AlignedLine>, AlignError> {
         // Readings first: the Japanese dictionary is gone before activations need the memory.
         let plan = romanize::plan(lines);
-        let em = align::emissions(wav, Chunking::default(), cancel, |x| self.logits(x))?;
-        align::align_lines(&em, lines, &plan, wav.len())
+        let em = self.emissions(wav, cancel)?;
+        align::align_lines(&em, lines, &plan, wav.len(), align::SKIP)
     }
 }

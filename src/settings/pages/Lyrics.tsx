@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { RotateCcw, Trash2 } from "lucide-react";
-import { formatOffset, OFFSET_LIMIT, trackKey } from "../../lib/offset";
+import { formatOffset, OFFSET_KEY_STEP, trackKey } from "../../lib/offset";
 import { settings, useSettings } from "../../state/settings";
 import { Button } from "../../ui/Button";
 import { ConfirmDialog } from "../../ui/Dialog";
 import { Row } from "../../ui/Field";
 import { IconButton } from "../../ui/IconButton";
+import { OffsetField } from "../../ui/OffsetField";
 import { Section } from "../../ui/Section";
 import { Slider } from "../../ui/Slider";
 import { Switch } from "../../ui/Switch";
@@ -14,7 +15,12 @@ import { useCurrentTrack } from "../useTrack";
 import { presetOf, useLlm } from "../providers/useLlm";
 import { WordTiming } from "./WordTiming";
 
-const RANGE = OFFSET_LIMIT / 2;
+/**
+ * The sliders cover ±3 s, where nearly every offset sits, so a pixel is a few
+ * hundredths of a second; the number beside them takes anything up to the
+ * full ±OFFSET_LIMIT.
+ */
+const SLIDER_RANGE = 3;
 
 /**
  * Whether the provider song identification runs on (Track name cleanup, else
@@ -31,7 +37,8 @@ function useIdentifySearchSupport(): boolean | undefined {
 function OffsetSlider({ label, value, onChange }: { label: string; value: number; onChange: (v: number) => void }) {
   return (
     <>
-      <Slider label={label} value={value} min={-RANGE} max={RANGE} step={0.05} format={formatOffset} onChange={onChange} />
+      <Slider label={label} value={value} min={-SLIDER_RANGE} max={SLIDER_RANGE} step={OFFSET_KEY_STEP} onChange={onChange} className="w-60" />
+      <OffsetField label={`${label} (seconds)`} value={value} onChange={onChange} />
       <IconButton label="Reset to zero" icon={<RotateCcw />} disabled={value === 0} onClick={() => onChange(0)} />
     </>
   );
@@ -60,6 +67,7 @@ export function LyricsPage() {
   const extraSources = useSettings((s) => s.extraSources);
   const identifyWithSearch = useSettings((s) => s.identifyWithSearch);
   const lookahead = useSettings((s) => s.lookahead);
+  const nextLine = useSettings((s) => s.nextLine);
   const canSearch = useIdentifySearchSupport();
   const { globalOffset, trackOffsets } = useSettings((s) => s.sync);
   const track = useCurrentTrack();
@@ -73,6 +81,9 @@ export function LyricsPage() {
       <Section title="Display">
         <Row label="Word-by-word highlight" hint="Sweeps each word when the lyrics have word timing. Off shows the line in one colour.">
           <Switch label="Word-by-word highlight" checked={wordHighlight} onChange={settings.setWordHighlight} />
+        </Row>
+        <Row label="Show the next line" hint="A dim, smaller line under the current one. The strip gets one row taller.">
+          <Switch label="Show the next line" checked={nextLine} onChange={settings.setNextLine} />
         </Row>
       </Section>
 

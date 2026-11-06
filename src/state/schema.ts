@@ -25,6 +25,8 @@ export interface LyricStyle {
   glowColor: string;
   background: string;
   backgroundOpacity: number; // 0..100
+  /** A feathered dark backdrop behind the words, 0..1: lyrics stay readable on light or busy desktops. */
+  scrim: number;
 }
 
 /** Which songs get translated, by lyric language. "all" ignores `languages`. */
@@ -80,6 +82,8 @@ export interface Settings {
    * their lyrics are ready when they start. Never uses paid web search.
    */
   lookahead: boolean;
+  /** A dim, smaller row with the next line under the current one. */
+  nextLine: boolean;
   lyric: LyricStyle;
   translation: TranslationPrefs;
   furigana: FuriganaPrefs;
@@ -104,6 +108,7 @@ export const defaultLyric: LyricStyle = {
   glowColor: "#ffffff",
   background: "#000000",
   backgroundOpacity: 0,
+  scrim: 0.6,
 };
 
 export const defaultSettings: Settings = {
@@ -113,6 +118,7 @@ export const defaultSettings: Settings = {
   identifyWithSearch: false,
   prealign: false,
   lookahead: true,
+  nextLine: false,
   lyric: defaultLyric,
   translation: {
     enabled: false,

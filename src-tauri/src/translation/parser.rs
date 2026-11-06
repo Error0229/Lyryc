@@ -1,7 +1,7 @@
 //! Translation response parsing
 
 use log::{info, warn};
-use std::collections::{HashMap, HashSet};
+use unicode_normalization::UnicodeNormalization;
 
 use super::alignment::resolve_line_count_mismatch;
 use super::prompt::TRANSLATION_SEPARATOR;
@@ -50,125 +50,71 @@ pub async fn parse_translation_response(
     .await
 }
 
+/// The LLM echoes each original line before its translation. Echoes are
+/// matched loosely (`echo_key`), in order. An echo that doesn't match is still
+/// this line's, slightly rewritten, unless it is a later line's: then the LLM
+/// skipped this one, and it stays untranslated rather than shifting every
+/// translation after it onto the wrong line.
 fn parse_paired_format(
     cleaned_response: &[&str],
     original_lyrics: &[LyricLine],
     detected_language: &str,
 ) -> Result<(Vec<TranslatedLyricLine>, bool), String> {
-    info!(
-        "Parsing paired format with separator: '{}'",
-        TRANSLATION_SEPARATOR
-    );
+    info!("Parsing paired format with separator: '{}'", TRANSLATION_SEPARATOR);
+    let pairs: Vec<(String, &str, &str)> = cleaned_response
+        .iter()
+        .filter_map(|l| l.split_once(TRANSLATION_SEPARATOR))
+        .map(|(echo, translated)| (echo_key(echo), echo.trim(), translated.trim()))
+        .collect();
+    let keys: Vec<String> = original_lyrics.iter().map(|l| echo_key(&l.text)).collect();
 
-    // Build a map of original text -> (response_index, translated_text)
-    let mut response_map: HashMap<String, Vec<(usize, String)>> = HashMap::new();
-
-    for (resp_idx, response_line) in cleaned_response.iter().enumerate() {
-        if let Some(separator_pos) = response_line.find(TRANSLATION_SEPARATOR) {
-            let original_part = response_line[..separator_pos].trim().to_string();
-            let translated_part = response_line[separator_pos + TRANSLATION_SEPARATOR.len()..]
-                .trim()
-                .to_string();
-
-            response_map
-                .entry(original_part)
-                .or_default()
-                .push((resp_idx, translated_part));
-        }
-    }
-
-    let mut translated_lines = Vec::new();
-    let mut mismatch_count = 0;
-    let mut used_response_indices = HashSet::new();
-
-    for (orig_idx, original_line) in original_lyrics.iter().enumerate() {
-        let original_text_trimmed = original_line.text.trim();
-
-        // Try exact match first
-        if let Some(matches) = response_map.get(original_text_trimmed) {
-            if let Some((resp_idx, translated_text)) = matches
-                .iter()
-                .find(|(idx, _)| !used_response_indices.contains(idx))
-            {
-                used_response_indices.insert(*resp_idx);
-
-                translated_lines.push(TranslatedLyricLine {
-                    time: original_line.time,
-                    text: translated_text.clone(),
-                    duration: original_line.duration,
-                    original_text: original_line.text.clone(),
-                    translated_text: translated_text.clone(),
-                    translation_confidence: Some(0.98),
-                    detected_language: Some(detected_language.to_string()),
-                });
-                continue;
+    let mut used = vec![false; pairs.len()];
+    let mut next = 0;
+    let mut misses = 0;
+    let mut out = Vec::with_capacity(original_lyrics.len());
+    for (i, line) in original_lyrics.iter().enumerate() {
+        let exact = (next..pairs.len()).chain(0..next).find(|&j| !used[j] && pairs[j].0 == keys[i]);
+        let in_order = (next..pairs.len()).find(|&j| !used[j]).filter(|&j| !keys[i + 1..].contains(&pairs[j].0));
+        let (translated, confidence) = match exact.or(in_order) {
+            Some(j) => {
+                used[j] = true;
+                next = j + 1;
+                if exact.is_none() {
+                    misses += 1;
+                    warn!("[Parse Path: NEW_FORMAT_MISMATCH] Line {}: '{}' echoed as '{}'", i, line.text.trim(), pairs[j].1);
+                }
+                (pairs[j].2.to_string(), if exact.is_some() { 0.98 } else { 0.5 })
             }
-        }
-
-        // No exact match found - this is a real mismatch
-        mismatch_count += 1;
-
-        // Try to find the best match from unused response lines
-        let best_match = cleaned_response
-            .iter()
-            .enumerate()
-            .filter(|(idx, _)| !used_response_indices.contains(idx))
-            .filter_map(|(idx, line)| {
-                line.find(TRANSLATION_SEPARATOR).map(|sep_pos| {
-                    let orig_part = line[..sep_pos].trim();
-                    let trans_part = line[sep_pos + TRANSLATION_SEPARATOR.len()..].trim();
-                    (idx, orig_part, trans_part)
-                })
-            })
-            .next();
-
-        if let Some((resp_idx, _orig_part, trans_part)) = best_match {
-            warn!(
-                "[Parse Path: NEW_FORMAT_MISMATCH] Line {}: Original '{}' not found, using fallback",
-                orig_idx, original_text_trimmed
-            );
-            used_response_indices.insert(resp_idx);
-
-            translated_lines.push(TranslatedLyricLine {
-                time: original_line.time,
-                text: trans_part.to_string(),
-                duration: original_line.duration,
-                original_text: original_line.text.clone(),
-                translated_text: trans_part.to_string(),
-                translation_confidence: Some(0.5),
-                detected_language: Some(detected_language.to_string()),
-            });
-        } else {
-            warn!(
-                "[Parse Path: NEW_FORMAT_MISSING] Line {}: No translation found, using original",
-                orig_idx
-            );
-            translated_lines.push(TranslatedLyricLine {
-                time: original_line.time,
-                text: original_line.text.clone(),
-                duration: original_line.duration,
-                original_text: original_line.text.clone(),
-                translated_text: original_line.text.clone(),
-                translation_confidence: Some(0.0),
-                detected_language: Some(detected_language.to_string()),
-            });
-        }
+            None => {
+                misses += 1;
+                warn!("[Parse Path: NEW_FORMAT_MISSING] Line {}: '{}' has no translation", i, line.text.trim());
+                (line.text.clone(), 0.0)
+            }
+        };
+        out.push(TranslatedLyricLine {
+            time: line.time,
+            text: translated.clone(),
+            duration: line.duration,
+            original_text: line.text.clone(),
+            translated_text: translated,
+            translation_confidence: Some(confidence),
+            detected_language: Some(detected_language.to_string()),
+        });
     }
 
-    if translated_lines.len() == original_lyrics.len() && mismatch_count == 0 {
-        info!(
-            "[Parse Path: NEW_FORMAT_SUCCESS] Paired format parsing successful: {} lines",
-            translated_lines.len()
-        );
+    if misses == 0 {
+        info!("[Parse Path: NEW_FORMAT_SUCCESS] Paired format parsing successful: {} lines", out.len());
     } else {
-        warn!(
-            "[Parse Path: NEW_FORMAT_PARTIAL] Completed with {} mismatches out of {} lines",
-            mismatch_count,
-            original_lyrics.len()
-        );
+        warn!("[Parse Path: NEW_FORMAT_PARTIAL] Completed with {} mismatches out of {} lines", misses, out.len());
     }
+    Ok((out, false))
+}
 
-    Ok((translated_lines, false))
+/// What an echo is compared by: width and case folded (NFKC, lowercase),
+/// spaces and punctuation dropped. LLMs swap full-width and ASCII spaces,
+/// add or drop a comma; the line is still the same line.
+fn echo_key(s: &str) -> String {
+    s.nfkc().flat_map(char::to_lowercase).filter(|c| c.is_alphanumeric()).collect()
 }
 
 async fn parse_legacy_format(
@@ -217,4 +163,49 @@ async fn parse_legacy_format(
     }
 
     Ok((translated_lines, false))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lines(texts: &[&str]) -> Vec<LyricLine> {
+        texts
+            .iter()
+            .enumerate()
+            .map(|(i, t)| LyricLine { time: i as f64, text: t.to_string(), duration: None })
+            .collect()
+    }
+
+    /// `|` stands for the separator.
+    fn parse(reply: &[&str], originals: &[&str]) -> Vec<(String, f64)> {
+        let reply: Vec<String> = reply.iter().map(|r| r.replace('|', TRANSLATION_SEPARATOR)).collect();
+        let reply: Vec<&str> = reply.iter().map(String::as_str).collect();
+        let (out, _) = parse_paired_format(&reply, &lines(originals), "ja").unwrap();
+        out.into_iter().map(|l| (l.translated_text, l.translation_confidence.unwrap())).collect()
+    }
+
+    #[test]
+    fn echoes_match_across_space_width_and_punctuation() {
+        let out = parse(&["あの日の 森の中|那天 森林中", "Hello, world!|你好世界"], &["あの日の　森の中", "hello world"]);
+        assert_eq!(out, vec![("那天 森林中".into(), 0.98), ("你好世界".into(), 0.98)]);
+    }
+
+    #[test]
+    fn a_rewritten_echo_is_still_its_lines() {
+        let out = parse(&["a|A", "b rewritten|B", "c|C"], &["a", "b", "c"]);
+        assert_eq!(out, vec![("A".into(), 0.98), ("B".into(), 0.5), ("C".into(), 0.98)]);
+    }
+
+    #[test]
+    fn a_skipped_line_does_not_shift_the_rest() {
+        let out = parse(&["a|A", "c|C", "d|D"], &["a", "b", "c", "d"]);
+        assert_eq!(out, vec![("A".into(), 0.98), ("b".into(), 0.0), ("C".into(), 0.98), ("D".into(), 0.98)]);
+    }
+
+    #[test]
+    fn repeated_lines_take_their_own_translations_in_order() {
+        let out = parse(&["la|啦1", "x|X", "la|啦2"], &["la", "x", "la"]);
+        assert_eq!(out, vec![("啦1".into(), 0.98), ("X".into(), 0.98), ("啦2".into(), 0.98)]);
+    }
 }

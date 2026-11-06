@@ -1,140 +1,155 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="color-scheme" content="light dark">
+  <title>Lyryc</title>
   <style>
+    /* The app's tokens (src/design/tokens.css): settings surfaces, brand teal #3F6F75. */
+    :root {
+      --brand: #3f6f75;
+      --brand-tint: color-mix(in oklab, #3f6f75 12%, white);
+      --bg: oklch(0.985 0.002 260);
+      --surface: oklch(1 0 0);
+      --surface-sunken: oklch(0.945 0.004 260);
+      --line: oklch(0.91 0.004 260);
+      --fg: oklch(0.22 0.01 260);
+      --fg-muted: oklch(0.46 0.012 260);
+      --fg-subtle: oklch(0.6 0.01 260);
+      --accent: var(--brand);
+      --accent-soft: var(--brand-tint);
+      --danger: oklch(0.56 0.19 25);
+      --danger-soft: oklch(0.95 0.03 25);
+      --shadow: 0 1px 2px oklch(0.2 0.01 260 / 0.08), 0 0 0 1px oklch(0.2 0.01 260 / 0.05);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: oklch(0.17 0.006 260);
+        --surface: oklch(0.205 0.007 260);
+        --surface-sunken: oklch(0.15 0.006 260);
+        --line: oklch(0.29 0.008 260);
+        --fg: oklch(0.95 0.003 260);
+        --fg-muted: oklch(0.72 0.008 260);
+        --fg-subtle: oklch(0.58 0.01 260);
+        --accent: color-mix(in oklab, #3f6f75 62%, white);
+        --accent-soft: color-mix(in oklab, #3f6f75 40%, var(--surface));
+        --danger: oklch(0.7 0.16 25);
+        --danger-soft: oklch(0.3 0.06 25);
+        --shadow: 0 1px 2px oklch(0 0 0 / 0.3), 0 0 0 1px oklch(1 0 0 / 0.04);
+      }
+    }
+
+    * { box-sizing: border-box; }
     body {
       width: 300px;
-      padding: 20px;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       margin: 0;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white;
+      background: var(--bg);
+      color: var(--fg);
+      font: 13px/1.45 "Inter Variable", "Inter", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+      -webkit-font-smoothing: antialiased;
     }
-    
-    .header {
-      text-align: center;
-      margin-bottom: 20px;
-    }
-    
-    .header h1 {
-      margin: 0;
-      font-size: 18px;
-      font-weight: 600;
-    }
-    
-    .status {
+
+    header {
       display: flex;
       align-items: center;
-      margin-bottom: 15px;
-      padding: 10px;
-      background: rgba(255, 255, 255, 0.1);
-      border-radius: 8px;
+      gap: 8px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
     }
-    
-    .status-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      margin-right: 8px;
-    }
-    
-    .status-dot.connected {
-      background: #4CAF50;
-      box-shadow: 0 0 10px rgba(76, 175, 80, 0.6);
-    }
-    
-    .status-dot.disconnected {
-      background: #f44336;
-    }
-    
-    .track-info {
-      background: rgba(255, 255, 255, 0.1);
-      border-radius: 12px;
-      padding: 15px;
-      margin-bottom: 15px;
-    }
-    
-    .track-title {
-      font-weight: 600;
-      font-size: 16px;
-      margin-bottom: 5px;
-      word-wrap: break-word;
-    }
-    
-    .track-artist {
-      opacity: 0.8;
-      font-size: 14px;
-      margin-bottom: 8px;
-    }
-    
-    .track-source {
-      font-size: 12px;
-      opacity: 0.6;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-    
-    .no-track {
-      text-align: center;
-      padding: 20px;
-      opacity: 0.7;
-      font-style: italic;
-    }
-    
-    .footer {
-      text-align: center;
-      font-size: 12px;
-      opacity: 0.6;
-      margin-top: 15px;
-    }
-    
-    .open-app-btn {
-      width: 100%;
-      padding: 10px;
-      background: rgba(255, 255, 255, 0.2);
-      border: none;
-      border-radius: 8px;
-      color: white;
-      font-size: 14px;
+    header img { width: 20px; height: 20px; border-radius: 5px; }
+    header .name { font-weight: 600; letter-spacing: -0.01em; }
+
+    .conn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: auto;
+      padding: 2px 8px 2px 7px;
+      border-radius: 999px;
+      background: var(--surface-sunken);
+      color: var(--fg-muted);
+      font-size: 11px;
       font-weight: 500;
-      cursor: pointer;
-      transition: background 0.2s;
     }
-    
-    .open-app-btn:hover {
-      background: rgba(255, 255, 255, 0.3);
+    .conn::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--fg-subtle);
     }
+    .conn[data-state="on"] { background: var(--accent-soft); color: var(--fg); }
+    .conn[data-state="on"]::before { background: var(--accent); }
+    .conn[data-state="error"] { background: var(--danger-soft); color: var(--danger); }
+    .conn[data-state="error"]::before { background: var(--danger); }
+
+    main { padding: 12px 14px 14px; }
+
+    .card {
+      padding: 12px 14px;
+      border-radius: 10px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+    .eyebrow {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 6px;
+      color: var(--fg-subtle);
+      font-size: 11px;
+      font-weight: 500;
+    }
+    .eyebrow svg { width: 13px; height: 13px; color: var(--accent); flex: none; }
+    .eyebrow[data-paused] svg { color: var(--fg-subtle); }
+    .title {
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 1.3;
+      overflow-wrap: anywhere;
+    }
+    .artist { margin-top: 2px; color: var(--fg-muted); overflow-wrap: anywhere; }
+
+    .empty { padding: 14px 4px 6px; text-align: center; }
+    .empty .title { font-size: 13px; }
+    .empty p { margin: 4px 0 0; color: var(--fg-muted); font-size: 12px; }
+
+    .hint {
+      margin: 10px 2px 0;
+      text-align: center;
+      color: var(--fg-muted);
+      font-size: 12px;
+    }
+
+    [hidden] { display: none !important; }
   </style>
 </head>
 <body>
-  <div class="header">
-    <h1>🎵 Lyryc</h1>
-  </div>
-  
-  <div class="status">
-    <div class="status-dot" id="statusDot"></div>
-    <span id="statusText">Checking connection...</span>
-  </div>
-  
-  <div id="trackInfo" class="track-info" style="display: none;">
-    <div class="track-title" id="trackTitle"></div>
-    <div class="track-artist" id="trackArtist"></div>
-    <div class="track-source" id="trackSource"></div>
-  </div>
-  
-  <div id="noTrack" class="no-track">
-    No music detected.<br>
-    Play something on Spotify or YouTube Music!
-  </div>
-  
-  <button class="open-app-btn" id="openAppBtn">
-    Open Lyryc App
-  </button>
-  
-  <div class="footer">
-    Music lyrics sync
-  </div>
+  <header>
+    <img src="icons/icon32.png" alt="">
+    <span class="name">Lyryc</span>
+    <span class="conn" id="conn" role="status">Checking…</span>
+  </header>
+
+  <main>
+    <section class="card" id="track" hidden>
+      <div class="eyebrow" id="eyebrow">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" />
+        </svg>
+        <span id="where"></span>
+      </div>
+      <div class="title" id="title"></div>
+      <div class="artist" id="artist"></div>
+    </section>
+
+    <section class="empty" id="empty" hidden>
+      <div class="title">Nothing playing</div>
+      <p>Play a song on YouTube Music, Spotify, Apple Music or SoundCloud.</p>
+    </section>
+
+    <p class="hint" id="hint" hidden>Open Lyryc on this computer to see the lyrics.</p>
+  </main>
 
   <script src="popup.js"></script>
 </body>

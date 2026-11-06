@@ -10,12 +10,34 @@ use super::types::{
 };
 use crate::llm::{self, ChatRequest, Target};
 
+/// Why a strategy failed. The service refusing (busy, out of quota, bad key)
+/// is not fixed by asking in smaller pieces: that only multiplies the requests
+/// (one 503 on a whole song once turned into 13 chunk and 62 line requests and
+/// spent the free quota). An answer that doesn't fit the lines may be.
+#[derive(Debug, PartialEq)]
+enum Failure {
+    Service(String),
+    Answer(String),
+}
+
+impl Failure {
+    fn retry_smaller(&self) -> bool {
+        matches!(self, Failure::Answer(_))
+    }
+
+    fn message(self) -> String {
+        match self {
+            Failure::Service(e) | Failure::Answer(e) => e,
+        }
+    }
+}
+
 /// Translate one batch of lines with a single LLM call
 async fn translate_once(
     lyrics: &[LyricLine],
     config: &TranslationConfig,
     target: &Target,
-) -> Result<TranslationResult, String> {
+) -> Result<TranslationResult, Failure> {
     let detected_language = if config.source_language == "auto" {
         detect_language_fallback(lyrics)
     } else {
@@ -62,11 +84,13 @@ async fn translate_once(
             json: false,
         },
     )
-    .await?;
+    .await
+    .map_err(|e| Failure::Service(e.to_string()))?;
 
     let (translated_lines, _is_same_language) =
         parse_translation_response(&response_text, lyrics, &detected_language, Some(target))
-            .await?;
+            .await
+            .map_err(Failure::Answer)?;
 
     Ok(TranslationResult {
         success: true,
@@ -96,7 +120,7 @@ pub async fn translate_with_strategies(
             }
             TranslationStrategy::LineByLine => translate_line_by_line(lyrics, config, target).await,
             TranslationStrategy::AlignmentFix => {
-                Err("AlignmentFix strategy must be used with another strategy".to_string())
+                Err(Failure::Answer("AlignmentFix strategy must be used with another strategy".to_string()))
             }
         };
 
@@ -108,7 +132,11 @@ pub async fn translate_with_strategies(
                 }
                 debug!("Strategy {:?} succeeded but with errors", strategy);
             }
+            Err(e) if !e.retry_smaller() => {
+                return Err(format!("Translation service failed: {}", e.message()));
+            }
             Err(e) => {
+                let e = e.message();
                 debug!("Strategy {:?} failed: {}", strategy, e);
                 last_error = e;
             }
@@ -123,7 +151,7 @@ async fn translate_chunked(
     config: &TranslationConfig,
     target: &Target,
     chunk_size: usize,
-) -> Result<TranslationResult, String> {
+) -> Result<TranslationResult, Failure> {
     let start_time = std::time::Instant::now();
     let mut all_translated_lines = Vec::new();
     let mut detected_language = None;
@@ -132,7 +160,7 @@ async fn translate_chunked(
         let chunk_result = translate_once(chunk, config, target).await?;
 
         if !chunk_result.success {
-            return Err("Chunk translation failed".to_string());
+            return Err(Failure::Answer("Chunk translation failed".to_string()));
         }
 
         all_translated_lines.extend(chunk_result.translated_lines);
@@ -155,7 +183,7 @@ async fn translate_line_by_line(
     lyrics: &[LyricLine],
     config: &TranslationConfig,
     target: &Target,
-) -> Result<TranslationResult, String> {
+) -> Result<TranslationResult, Failure> {
     let start_time = std::time::Instant::now();
     let mut all_translated_lines = Vec::new();
     let mut detected_language = None;
@@ -190,4 +218,16 @@ async fn translate_line_by_line(
         error: None,
         is_same_language: false,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_an_answer_that_doesnt_fit_is_retried_in_smaller_pieces() {
+        assert!(Failure::Answer("3 of 5 lines".into()).retry_smaller());
+        assert!(!Failure::Service("HTTP 503 Service Unavailable".into()).retry_smaller());
+        assert!(!Failure::Service("HTTP 429 Too Many Requests".into()).retry_smaller());
+    }
 }

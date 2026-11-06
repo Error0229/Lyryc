@@ -71,26 +71,33 @@ export function Preview({ sample = "en", forceTranslation = false }: { sample?: 
         : tokenize(s.line.text, 0, 4, wordHighlight ? s.line.words : undefined, ruby ? s.spans : undefined),
     [s, translatedOnly, wordHighlight, ruby],
   );
-  const vars = stageVars({ lyric, translation, furigana, showTranslation });
+  const rows = { furigana: ruby && furigana.mode !== "replace", translation: showTranslation && translation.display === "bilingual", next: false };
+  const vars = stageVars({ lyric, translation, furigana, rows });
 
+  // Docked to the top of the page while the settings below it scroll, so each
+  // change shows next to the control that made it. The page colour behind it
+  // hides the rows scrolling underneath.
   return (
-    <div
-      aria-label="Overlay preview"
-      className="relative overflow-hidden rounded-lg bg-[#1f2228] bg-[radial-gradient(circle_at_20%_20%,#3a3f4a_0,transparent_55%),radial-gradient(circle_at_85%_80%,#2c3340_0,transparent_50%)] p-3 shadow-1"
-    >
-      <div className="flex min-h-24 items-center rounded-md bg-(--strip-bg) px-4 py-2" style={vars}>
-        <div
-          ref={ref}
-          className="lyric-stage grid min-h-(--stage-min) w-full items-center"
-          style={{ fontSize: "min(var(--lyric-size), 2.25rem)" }}
-          data-ruby={furigana.mode === "under" ? "under" : undefined}>
-          <LineView
-            tokens={tokens}
-            sub={showTranslation && !translatedOnly ? s.translation : null}
-            plain={!wordHighlight}
-            kana={furigana.mode === "replace"}
-            display={translation.display}
-          />
+    <div className="sticky top-0 z-10 -mx-2 -mt-2 bg-bg px-2 pt-2 pb-3">
+      <div
+        aria-label="Overlay preview"
+        className="relative overflow-hidden rounded-lg bg-[#1f2228] bg-[radial-gradient(circle_at_20%_20%,#3a3f4a_0,transparent_55%),radial-gradient(circle_at_85%_80%,#2c3340_0,transparent_50%)] p-3 shadow-1"
+      >
+        <div className="relative flex min-h-24 items-center overflow-hidden rounded-md bg-(--strip-bg) px-4 py-2" style={vars}>
+          {lyric.scrim > 0 && <div aria-hidden className="lyric-scrim" />}
+          <div
+            ref={ref}
+            className="lyric-stage grid min-h-(--stage-min) w-full items-center"
+            style={{ fontSize: "min(var(--lyric-size), 2.25rem)" }}
+            data-ruby={furigana.mode === "under" ? "under" : undefined}>
+            <LineView
+              tokens={tokens}
+              sub={showTranslation && !translatedOnly ? s.translation : null}
+              plain={!wordHighlight}
+              kana={furigana.mode === "replace"}
+              display={translation.display}
+            />
+          </div>
         </div>
       </div>
     </div>

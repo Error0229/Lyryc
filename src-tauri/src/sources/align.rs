@@ -17,7 +17,7 @@ fn credit_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"(?i)^(作词|作詞|作曲|编曲|編曲|词|詞|曲|制作人|製作人|监制|合声|吉他|贝斯|鼓|录音|混音|母带|和声|(Lyrics|Composed|Arranged|Produced|Written|Music)( by)?|Composer|Producer)\s*[:：]",
+            r"(?i)^(?:(?:作词|作詞|作曲|编曲|編曲|词|詞|曲|制作人|製作人|监制|合声|吉他|贝斯|鼓|录音|混音|母带|和声|(?:Lyrics|Composed|Arranged|Produced|Written|Music)(?: by)?|Composer|Producer)[\s/・&、]*)+[:：]",
         )
         .unwrap()
     })
@@ -43,18 +43,36 @@ fn is_credit(text: &str, track: &str, artist: &str) -> bool {
     text.contains(" - ") && (named(track) || named(artist))
 }
 
-/// One `[mm:ss.xx]` tag at the start of `s`: (seconds, rest).
-fn leading_tag(s: &str) -> Option<(f64, &str)> {
+/// One `[mm:ss.xx]` time tag at the start of `s`, and what follows it.
+/// `[mm:ss:xx]` counts too: NetEase writes whole songs that way.
+pub(crate) fn leading_tag(s: &str) -> Option<(f64, &str)> {
     let close = s.strip_prefix('[')?.find(']')? + 1;
     let (min, sec) = s[1..close].split_once(':')?;
     if min.is_empty() || !min.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
     let sec: f64 = sec
+        .replacen(':', ".", 1)
         .parse()
         .ok()
         .filter(|v: &f64| v.is_finite() && *v >= 0.0)?;
     Some((min.parse::<f64>().ok()? * 60.0 + sec, &s[close + 1..]))
+}
+
+/// The sung lines of a lyric with no time tags, as some providers keep a
+/// song's words: no metadata (`[ar:…]`), credits, blanks, or the bare title.
+pub(crate) fn untimed_lines(lrc: &str, track: &str, artist: &str) -> Vec<String> {
+    lrc.lines()
+        .map(|l| sung_text(l.trim()))
+        .filter(|t| !t.is_empty() && !t.starts_with('[') && !is_credit(t, track, artist) && squash(t) != squash(track))
+        .map(String::from)
+        .collect()
+}
+
+/// What a lyric line sings: some bilingual files append their translation
+/// after `^` ("相槌が上手くなったんだ^You've gotten better at nodding along").
+pub(crate) fn sung_text(line: &str) -> &str {
+    line.split('^').next().unwrap_or("").trim()
 }
 
 /// Timed lines of an LRC text, sorted, without credits, blanks and the
@@ -68,7 +86,7 @@ pub fn parse_lrc(lrc: &str, track: &str, artist: &str) -> Vec<(f64, String)> {
             times.push(t);
             rest = r;
         }
-        let text = rest.split('^').next().unwrap_or("").trim();
+        let text = sung_text(rest);
         if times.is_empty() || text.is_empty() || is_credit(text, track, artist) {
             continue;
         }
@@ -186,6 +204,28 @@ pub fn interpolate(times: &[Option<f64>], duration: f64) -> Vec<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn untimed_lyrics_keep_only_the_sung_lines() {
+        // QQ's ネバーランドより by さとう。, as served: the title, credits, blanks.
+        let lrc = "[ti:ネバーランドより]
+ネバーランドより
+
+作詞作曲：さとう。
+編曲：さとう。・時乗浩一郎
+
+やあ、元気にしているかい
+ずっと上から見ていたんだけど";
+        assert_eq!(untimed_lines(lrc, "ネバーランドより", "さとう。"), vec!["やあ、元気にしているかい", "ずっと上から見ていたんだけど"]);
+    }
+
+    #[test]
+    fn stacked_credit_roles_are_credits() {
+        for c in ["作詞作曲：さとう。", "作词/作曲: 某人", "Lyrics & Music: Someone", "編曲：X"] {
+            assert!(is_credit(c, "", ""), "{c}");
+        }
+        assert!(!is_credit("曲がり角で会おう", "", ""), "a lyric that starts with 曲");
+    }
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()

@@ -124,3 +124,120 @@ async fn parity() {
     let summary = json!({"threads": threads, "load_s": load_s, "peak_rss_mb": rss, "tracks": speed});
     std::fs::write(speed_out, serde_json::to_string_pretty(&summary).unwrap()).unwrap();
 }
+
+/// `reject::apply` over stored alignments, as the app lays them over lyrics.
+///
+/// ```text
+/// PREALIGN_TRACKS=<JSON [{lines: [LyricLine], real_timing, aligned: [AlignedLine]}]>
+/// PREALIGN_OUT=<JSON [applied lines or null]>
+/// cargo test --lib prealign::bench::replay -- --ignored
+/// ```
+#[test]
+#[ignore = "bench: needs stored alignments"]
+fn replay() {
+    use super::align::AlignedLine;
+    use crate::types::LyricLine;
+    #[derive(serde::Deserialize)]
+    struct Track {
+        lines: Vec<LyricLine>,
+        real_timing: bool,
+        aligned: Vec<AlignedLine>,
+    }
+    let env = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("set {k}"));
+    let tracks: Vec<Track> = serde_json::from_str(&std::fs::read_to_string(env("PREALIGN_TRACKS")).unwrap()).unwrap();
+    let out: Vec<_> = tracks.iter().map(|t| super::reject::apply(&t.lines, t.real_timing, &t.aligned)).collect();
+    std::fs::write(env("PREALIGN_OUT"), serde_json::to_string(&out).unwrap()).unwrap();
+}
+
+/// Lines left out vs kept, across skip costs, on the same emissions.
+///
+/// ```text
+/// PREALIGN_DIR=<app prealign dir: model, runtime, yt-dlp (read only)>
+/// PREALIGN_TRACKS=<JSON [{id, lines: [LyricLine], real_timing}]>
+/// PREALIGN_EM=<dir: <id>.em emissions, computed once (downloads into <dir>/tmp)>
+/// PREALIGN_COSTS=<open:each,...> e.g. inf:0,40:3   PREALIGN_OUT=<JSON per track, per cost>
+/// cargo test --release --lib prealign::bench::skips -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore = "bench: network, minutes of CPU"]
+async fn skips() {
+    use super::align::{align_lines, AlignedLine};
+    use super::ctc::{Emissions, SkipCost};
+    use crate::types::LyricLine;
+    let env = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("set {k}"));
+    let paths = Paths { dir: PathBuf::from(env("PREALIGN_DIR")) };
+    let em_dir = PathBuf::from(env("PREALIGN_EM"));
+    let tracks: Vec<Value> = serde_json::from_str(&std::fs::read_to_string(env("PREALIGN_TRACKS")).unwrap()).unwrap();
+    let costs: Vec<SkipCost> = env("PREALIGN_COSTS")
+        .split(',')
+        .map(|c| {
+            let (open, each) = c.split_once(':').unwrap();
+            SkipCost { open: open.parse().unwrap(), each: each.parse().unwrap() }
+        })
+        .collect();
+    let mut model: Option<model::Model> = None;
+    let mut out = Vec::new();
+    for t in &tracks {
+        let id = t["id"].as_str().unwrap();
+        let lines: Vec<LyricLine> = serde_json::from_value(t["lines"].clone()).unwrap();
+        let real_timing = t["real_timing"].as_bool().unwrap();
+        let file = em_dir.join(format!("{id}.em"));
+        let (samples, em) = match std::fs::read(&file) {
+            Ok(b) => {
+                let n = |i: usize| u64::from_le_bytes(b[i * 8..i * 8 + 8].try_into().unwrap()) as usize;
+                let data = b[24..].chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect();
+                (n(0), Emissions { data, frames: n(1), vocab: n(2) })
+            }
+            Err(_) => {
+                let fetched = match ytdlp::fetch(&paths.ytdlp(), &em_dir.join("tmp"), id).await {
+                    Ok(f) => f,
+                    Err(e) => {
+                        println!("{id}: download failed: {e}");
+                        out.push(json!({"id": id, "error": e}));
+                        continue;
+                    }
+                };
+                let wav = audio::decode_16k(&fetched.path).expect("decode");
+                drop(fetched);
+                let m = model.get_or_insert_with(|| model::Model::load(&paths.runtime(), &paths.model(), model::threads()).expect("model"));
+                let em = m.emissions(&wav, &AtomicBool::new(false)).expect("emissions");
+                let mut b = Vec::new();
+                for v in [wav.len(), em.frames, em.vocab] {
+                    b.extend((v as u64).to_le_bytes());
+                }
+                b.extend(em.data.iter().flat_map(|v| v.to_le_bytes()));
+                std::fs::write(&file, b).unwrap();
+                (wav.len(), em)
+            }
+        };
+        let texts: Vec<String> = lines.iter().map(|l| l.text.clone()).collect();
+        let plan = super::romanize::plan(&texts);
+        let mut runs = Vec::new();
+        for &cost in &costs {
+            let aligned = align_lines(&em, &texts, &plan, samples, cost).expect("align");
+            let applied = super::reject::apply(&lines, real_timing, &aligned);
+            let sung: Vec<&AlignedLine> = aligned.iter().filter(|a| !a.skipped).collect();
+            // Shown lines whose words are the aligner's own.
+            let kept = applied.as_ref().map(|out| {
+                out.iter()
+                    .zip(&sung)
+                    .filter(|(l, al)| !al.words.is_empty() && l.words.as_ref().is_some_and(|w| w[0].time == al.words[0].start))
+                    .count()
+            });
+            let skipped: Vec<usize> = (0..aligned.len()).filter(|&i| aligned[i].skipped).collect();
+            println!(
+                "{id} cost {}:{}: {} lines, skipped {:?}, track {}, kept {:?}",
+                cost.open,
+                cost.each,
+                lines.len(),
+                skipped,
+                if applied.is_some() { "accepted" } else { "rejected" },
+                kept
+            );
+            runs.push(json!({"cost": format!("{}:{}", cost.open, cost.each), "skipped": skipped, "accepted": applied.is_some(), "shown": applied.as_ref().map(Vec::len),
+                             "kept": kept, "aligned": aligned}));
+        }
+        out.push(json!({"id": id, "lines": lines.len(), "real_timing": real_timing, "runs": runs}));
+        std::fs::write(env("PREALIGN_OUT"), serde_json::to_string(&out).unwrap()).unwrap();
+    }
+}

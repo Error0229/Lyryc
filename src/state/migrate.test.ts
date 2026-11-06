@@ -9,6 +9,7 @@ import {
   seedFromLegacy,
   SETTINGS_KEY,
   type KV,
+  upgradeSettings,
 } from "./migrate";
 import { defaultSettings } from "./schema";
 
@@ -146,6 +147,8 @@ describe("fromLegacy", () => {
     expect(fromLegacy({ lyricsStyle: { fontSize: "big", textColor: 42 }, trackOffsets: { a: "x" } }, null)).toEqual({
       ...defaultSettings,
       theme: defaultSettings.theme,
+      // The old app had no backdrop: an upgraded setup keeps its look.
+      lyric: { ...defaultSettings.lyric, scrim: 0 },
     });
   });
 });
@@ -155,7 +158,7 @@ describe("seedFromLegacy", () => {
     const kv = memory({ [LEGACY_CONFIG_KEY]: envelope(v2State) });
     expect(seedFromLegacy(kv)).toBe(true);
     const out = kv.dump();
-    expect(out[SETTINGS_KEY]).toMatchObject({ version: 1, state: { sync: { globalOffset: 0.3 } } });
+    expect(out[SETTINGS_KEY]).toMatchObject({ version: 2, state: { sync: { globalOffset: 0.3 } } });
     expect(out[LEGACY_CONFIG_KEY]).toEqual(envelope(v2State));
     expect(seedFromLegacy(kv)).toBe(false); // already migrated
   });
@@ -213,5 +216,17 @@ describe("legacy API keys", () => {
     const send = vi.fn().mockRejectedValue("command llm_import_legacy_keys not found");
     expect(await importLegacyKeys(kv, send)).toBe("failed");
     expect(findLegacyKeys(kv)).toEqual({ githubApiKey: "ghp_secret", geminiApiKey: "AIza_secret" });
+  });
+});
+
+describe("upgradeSettings", () => {
+  it("keeps an existing setup's look: the soft backdrop stays off for v1 settings", () => {
+    const v1 = { theme: "dark", lyric: { fontSize: 3, backgroundOpacity: 20 } };
+    expect(upgradeSettings(v1, 1)).toEqual({ theme: "dark", lyric: { fontSize: 3, backgroundOpacity: 20, scrim: 0 } });
+  });
+
+  it("leaves current settings alone", () => {
+    const v2 = { lyric: { scrim: 0.4 } };
+    expect(upgradeSettings(v2, 2)).toEqual(v2);
   });
 });

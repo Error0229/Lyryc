@@ -3,6 +3,7 @@
  * inside the app. URL params (overlay):
  *   ?scenario=idle|playing|translation|furigana|estimate   see services/ipc/mock.ts
  *   &backdrop=dark|light                          fake desktop behind the strip
+ *   &next                                         show the next-line preview
  * Settings window:
  *   ?theme=light|dark   &page=<settings page>     &providers (seed the fake LLM)
  */
@@ -18,6 +19,7 @@ export function applyOverlayScenario() {
   if (!params.has("scenario")) return;
   settings.translation({ enabled: mockScenario === "translation" || params.has("translate") });
   settings.furigana({ enabled: mockScenario === "furigana" });
+  settings.setNextLine(params.has("next"));
 }
 
 export async function applySettingsScenario() {

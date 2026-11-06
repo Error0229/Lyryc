@@ -5,8 +5,7 @@
  */
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { LyricLine, LyricsSource, PlaybackCommand, PrealignStatus, Span, TimedLyrics, TimeSample, Track, UpdateStatus } from "../../lib/types";
+import type { Anchor, HitRect, LookupStage, LyricLine, LyricsSource, PlaybackCommand, PrealignStatus, Span, StripHover, StripView, TimedLyrics, TimeSample, Track, UpdateStatus } from "../../lib/types";
 import type { TranslationPrefs } from "../../state/schema";
 import { mockBackend } from "./mock";
 
@@ -19,15 +18,26 @@ export interface BackendEvents {
   track: (t: Track) => void;
   time: (s: TimeSample) => void;
   playing: (p: boolean) => void;
-  clickThrough: (on: boolean) => void;
+  /** Locked (click-through) or Move mode, from any source: hotkey, tray, the overlay. */
+  locked: (on: boolean) => void;
+  /** The strip's anchored edge changed: live while it is dragged, and after it settles. */
+  anchor: (a: Anchor) => void;
+  /** The cursor over the locked strip (`strip-hover`). */
+  hover: (h: StripHover) => void;
   /**
    * Better timing for a track that is already showing (`lyrics-timing-updated`).
    * `track` is the title/artist the request was made with, so a late upgrade
    * for an earlier song can be told apart.
    */
   lyrics: (p: { track: Pick<Track, "title" | "artist">; lines: LyricLine[]; source: LyricsSource }) => void;
+  /** The lookup for `track` moved on to a slower pass (`lyrics-progress`). */
+  progress: (p: { track: Pick<Track, "title" | "artist">; stage: LookupStage }) => void;
+  /** A pending upgrade for `track` ended without better timing (`lyrics-timing-final`). */
+  timingFinal: (track: Pick<Track, "title" | "artist">) => void;
   /** Word-level timing: download progress and state changes (`prealign-status`). */
   prealign: (s: PrealignStatus) => void;
+  /** The lookahead found an upcoming song's lyrics (`lyrics-ahead`): translate them before it plays. */
+  ahead: (lines: LyricLine[]) => void;
   /** AI providers or routes changed, in any window (`llm-settings-changed`). */
   llmSettings: () => void;
   /** Self-update checks, downloads and failures (`update-status`). */
@@ -50,10 +60,19 @@ export interface Backend {
   furigana(text: string): Promise<Span[]>;
   languages(): Promise<Array<[code: string, name: string]>>;
   playback(cmd: PlaybackCommand, seekTime?: number): Promise<void>;
-  fitHeight(contentHeight: number, hasTranslation: boolean, hasFurigana: boolean): Promise<void>;
+  /** The strip's height (CSS px; it grows away from its anchored edge) and the transparent room around it. */
+  setFrame(height: number, room: { x: number; y: number }): Promise<void>;
+  /** Move mode's edge handles (CSS px), symmetric about the strip's centre; `done` saves it. */
+  setWidth(width: number, done: boolean): Promise<void>;
   openSettings(): Promise<void>;
   hideOverlay(): Promise<void>;
-  startDrag(): Promise<void>;
+  /** A press on the strip in Move mode: the backend drags it until the button is let go. */
+  dragStrip(): Promise<void>;
+  stripState(): Promise<StripView>;
+  setLocked(locked: boolean): Promise<void>;
+  /** Replaces the rects the backend hit-tests the cursor against while locked. */
+  stripHits(hits: HitRect[]): Promise<void>;
+  resetPosition(): Promise<void>;
   openUrl(url: string): Promise<void>;
   appVersion(): Promise<string>;
   /**
@@ -135,11 +154,15 @@ const tauriBackend: Backend = {
 
   languages: () => invoke<Array<[string, string]>>("get_supported_languages"),
   playback: (command, seekTime) => invoke("send_playback_command", { command, seekTime: seekTime ?? null }),
-  fitHeight: (contentHeight, hasTranslation, hasFurigana) =>
-    invoke("adjust_window_height", { contentHeight, hasTranslation, hasFurigana }),
+  setFrame: (height, room) => invoke<void>("strip_set_frame", { height, room }),
+  setWidth: (width, done) => invoke<void>("strip_set_width", { width, done }),
   openSettings: () => invoke("open_settings_window"),
   hideOverlay: () => invoke("minimize_to_tray"),
-  startDrag: () => getCurrentWindow().startDragging(),
+  dragStrip: () => invoke<void>("strip_drag"),
+  stripState: () => invoke<StripView>("strip_state"),
+  setLocked: (locked) => invoke<void>("strip_set_locked", { locked }),
+  stripHits: (hits) => invoke<void>("strip_hits", { hits }),
+  resetPosition: () => invoke<void>("strip_reset"),
 
   async openUrl(url) {
     const { openUrl } = await import("@tauri-apps/plugin-opener");
@@ -164,14 +187,22 @@ const tauriBackend: Backend = {
       on.track && listen<Track>("track-updated", (e) => on.track!(e.payload)),
       on.time && listen<TimeSample>("track-time-update", (e) => on.time!(e.payload)),
       on.playing && listen<boolean>("playback-state", (e) => on.playing!(e.payload)),
-      on.clickThrough && listen("click-through-enabled", () => on.clickThrough!(true)),
-      on.clickThrough && listen("click-through-disabled", () => on.clickThrough!(false)),
+      on.locked && listen<boolean>("strip-locked", (e) => on.locked!(e.payload)),
+      on.anchor && listen<Anchor>("strip-anchor", (e) => on.anchor!(e.payload)),
+      on.hover && listen<StripHover>("strip-hover", (e) => on.hover!(e.payload)),
       on.lyrics &&
         listen<TimingUpdate>("lyrics-timing-updated", ({ payload: p }) =>
           on.lyrics!({ track: { title: p.title, artist: p.artist }, lines: p.lines, source: p.source }),
         ),
       on.prealign && listen<PrealignStatus>("prealign-status", (e) => on.prealign!(e.payload)),
+      on.progress &&
+        listen<{ title: string; artist: string; stage: LookupStage }>("lyrics-progress", ({ payload: p }) =>
+          on.progress!({ track: { title: p.title, artist: p.artist }, stage: p.stage }),
+        ),
+      on.timingFinal &&
+        listen<{ title: string; artist: string }>("lyrics-timing-final", ({ payload: p }) => on.timingFinal!({ title: p.title, artist: p.artist })),
       on.llmSettings && listen("llm-settings-changed", () => on.llmSettings!()),
+      on.ahead && listen<LyricLine[]>("lyrics-ahead", (e) => on.ahead!(e.payload)),
       on.update && listen<UpdateStatus>("update-status", (e) => on.update!(e.payload)),
     ].filter((p): p is Promise<() => void> => !!p);
     return () => pending.forEach((p) => void p.then((off) => off()));

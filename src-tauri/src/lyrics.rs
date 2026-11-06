@@ -320,11 +320,14 @@ struct Lookup<'a, E> {
     incomplete: bool,
     /// LRCLIB's exact lookup matched a record marked instrumental.
     instrumental: bool,
+    /// The song is a cover: another length is another arrangement, whose
+    /// timing is wrong for this one even when its words are right.
+    cover: bool,
 }
 
 impl<'a, E: Effects> Lookup<'a, E> {
     fn new(fx: &'a E, req: &'a Request) -> Self {
-        Lookup { fx, req, asked: HashMap::new(), incomplete: false, instrumental: false }
+        Lookup { fx, req, asked: HashMap::new(), incomplete: false, instrumental: false, cover: marked_cover(req) }
     }
 
     async fn ask(&mut self, url: String) -> Option<Value> {
@@ -369,11 +372,16 @@ impl<'a, E: Effects> Lookup<'a, E> {
         Some(record).filter(has_lyrics)
     }
 
+    /// For a cover, only results of the wanted length count (a `want` without
+    /// one asks for words, which any recording has).
     async fn search(&mut self, params: &[(&str, &str)], want: &Want) -> Option<Value> {
-        match self.ask(lrclib_url("search", params)).await? {
-            Value::Array(results) => best_match(results, want),
-            _ => None,
+        let Value::Array(mut results) = self.ask(lrclib_url("search", params)).await? else {
+            return None;
+        };
+        if let (true, Some(secs)) = (self.cover, want.duration) {
+            results.retain(|r| r["duration"].as_f64().is_some_and(|d| (d - secs).abs() <= 2.0));
         }
+        best_match(results, want)
     }
 
     /// Steps 2-3 for one spelling: exact lookups for each title, one structured
@@ -429,8 +437,32 @@ impl<'a, E: Effects> Lookup<'a, E> {
     async fn regex_pass(&mut self) -> Option<Lrclib> {
         let (raw, artist) = (self.req.title.clone(), self.req.artist.clone());
         let cleaned = clean_title(&raw, &artist);
+        if marked_cover(self.req) {
+            return self.by_title_at_this_length(if cleaned.is_empty() { &raw } else { &cleaned }).await;
+        }
         let titles = if cleaned.is_empty() || cleaned == raw { vec![raw] } else { vec![raw, cleaned] };
         self.find(&titles, &artist, true).await
+    }
+
+    /// A cover the player marks names the cover's singer, not the song's, and
+    /// spending the budget on that name finds nothing. Search by title alone
+    /// and take only an entry of this length: the original's arrangement,
+    /// which most covers sing over.
+    async fn by_title_at_this_length(&mut self, title: &str) -> Option<Lrclib> {
+        let secs = self.req.duration.filter(|_| !title.trim().is_empty())?;
+        let want = Want { titles: vec![title.to_string()], artists: Vec::new(), duration: Some(secs) };
+        let record = self.search(&[("track_name", title)], &want).await?;
+        info!("'{}' is a cover; found the song by title at the same length", self.req.title);
+        Some(self.settle(record).await)
+    }
+
+    /// The original of a cover at this recording's length. `/api/get` matches
+    /// names and length (+-2 s), so a hit is the same arrangement, timing and
+    /// all. Equal lengths are also what makes an unconfirmed "cover of" safe.
+    async fn original_at_this_length(&mut self, original: &Names) -> Option<Lrclib> {
+        let record = self.exact(&original.title, &original.artist).await?;
+        info!("'{}' is a cover of '{}' by '{}' at the same length: using its timing", self.req.title, original.title, original.artist);
+        Some(self.settle(record).await)
     }
 
     /// A song's words from LRCLIB, whatever recording they were filed under:
@@ -473,8 +505,18 @@ pub enum TimingSource {
     Aligned,
     /// No lyrics: the song has no words (no `lines`). Not a timing.
     Instrumental,
-    /// A cover: the original's words spread over this recording by syllables.
+    /// Another recording's words (a cover's original, or the song at another
+    /// length) spread over this one by syllables. Stored as "cover-estimate".
     CoverEstimate,
+    /// A source's untimed words (QQ / NetEase / Kugou) spread over this
+    /// recording by syllables.
+    SourcesEstimate,
+    /// A cover with its original's real timing, found at the same length.
+    /// Right when the cover sings over the original's backing track; seconds
+    /// off when its tempo or arrangement differ (Hanon's 晩餐歌 drifts from +2.5
+    /// to +11 s). Lines still light up, but word alignment of this recording
+    /// wins wherever it disagrees.
+    OriginalTiming,
 }
 
 impl TimingSource {
@@ -491,12 +533,23 @@ impl TimingSource {
             TimingSource::Aligned => "aligned",
             TimingSource::Instrumental => "instrumental",
             TimingSource::CoverEstimate => "cover-estimate",
+            TimingSource::SourcesEstimate => "sources-estimate",
+            TimingSource::OriginalTiming => "original-timing",
         }
+    }
+
+    /// Real timing of the recording that plays: what word alignment is
+    /// checked against. An estimate isn't, and neither is a cover's original.
+    fn times_this_recording(self) -> bool {
+        !self.is_estimate() && self != TimingSource::OriginalTiming
     }
 
     /// Plain text spread over the track, not real timing.
     fn is_estimate(self) -> bool {
-        matches!(self, TimingSource::LrclibEstimate | TimingSource::YtmusicEstimate | TimingSource::CoverEstimate)
+        matches!(
+            self,
+            TimingSource::LrclibEstimate | TimingSource::YtmusicEstimate | TimingSource::CoverEstimate | TimingSource::SourcesEstimate
+        )
     }
 
     /// Cache rows from before sources were recorded are LRCLIB.
@@ -509,6 +562,8 @@ impl TimingSource {
             Some("lrclib-estimate") => TimingSource::LrclibEstimate,
             Some("ytmusic-estimate") => TimingSource::YtmusicEstimate,
             Some("cover-estimate") => TimingSource::CoverEstimate,
+            Some("sources-estimate") => TimingSource::SourcesEstimate,
+            Some("original-timing") => TimingSource::OriginalTiming,
             _ => TimingSource::Lrclib,
         }
     }
@@ -540,6 +595,44 @@ impl TimedLyrics {
 }
 
 pub const TIMING_UPDATED_EVENT: &str = "lyrics-timing-updated";
+/// The lookup moved on to a slower pass (`Progress`): the overlay says so.
+pub const PROGRESS_EVENT: &str = "lyrics-progress";
+/// A `pending` answer's upgrade ended without better timing: nothing more is coming.
+pub const TIMING_FINAL_EVENT: &str = "lyrics-timing-final";
+
+/// The slower passes of a lookup, as the overlay names them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Stage {
+    /// The LLM names the song.
+    Identify,
+    /// The same, searching the web first (paid, opt-in).
+    WebSearch,
+    /// QQ Music / NetEase / Kugou.
+    Sources,
+    /// Another recording's words: a cover's original, a music video's studio version.
+    OtherRecording,
+}
+
+/// `lyrics-progress` and `lyrics-timing-final` payload, keyed like `TimingUpdate`.
+#[derive(Clone, Debug, Serialize)]
+pub struct Progress {
+    pub title: String,
+    pub artist: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage: Option<Stage>,
+}
+
+/// Where `Live` sends its events; set by the first lookup.
+static APP: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
+
+fn emit_progress(event: &str, req: &Request, stage: Option<Stage>) {
+    let Some(app) = APP.get() else { return };
+    let payload = Progress { title: req.title.clone(), artist: req.artist.clone(), stage };
+    if let Err(e) = app.emit(event, payload) {
+        warn!("Failed to emit {}: {}", event, e);
+    }
+}
 
 /// `lyrics-timing-updated` payload, keyed by the names the frontend asked for.
 #[derive(Clone, Debug, Serialize)]
@@ -606,6 +699,9 @@ struct SongNames {
     instrumental: bool,
     /// A cover: the original song's names, whose words it sings.
     cover_of: Option<Names>,
+    /// Asked, but no answer came (network, quota, overload): the lookup is
+    /// incomplete, and its "nothing" must not be remembered.
+    failed: bool,
 }
 
 /// Everything the lookup does to the outside world, behind a trait so tests
@@ -627,6 +723,8 @@ trait Effects: Send + Sync {
     fn aligned(&self, _req: &Request, _lines: &[LyricLine], _source: TimingSource) -> Served {
         Served::Off
     }
+    /// The lookup reached a slower pass.
+    fn progress(&self, _req: &Request, _stage: Stage) {}
 }
 
 struct Live;
@@ -650,6 +748,9 @@ impl Effects for Live {
     fn cached(&self, artist: &str, track: &str) -> CacheResult {
         get_cached_lyrics(artist, track)
     }
+    fn progress(&self, req: &Request, stage: Stage) {
+        emit_progress(PROGRESS_EVENT, req, Some(stage));
+    }
     async fn lrclib(&self, url: &str) -> Reply {
         if LRCLIB_HEALTH.lock().unwrap().paused(tokio::time::Instant::now()) {
             return Reply::Paused;
@@ -664,8 +765,10 @@ impl Effects for Live {
     /// -> 雪国 / ヨルシカ. With `web_search` the provider searches first (10/10
     /// hard cases in the study, ~$0.015-0.05 per song on the user's key).
     async fn names(&self, req: &Request, web_search: bool) -> SongNames {
-        let Some(id) = llm::identify::identify_song(&req.title, &req.artist, req.duration, web_search).await else {
-            return SongNames::default();
+        let id = match llm::identify::identify_song(&req.title, &req.artist, req.duration, web_search).await {
+            Ok(Some(id)) => id,
+            Ok(None) => return SongNames::default(),
+            Err(_) => return SongNames { failed: true, ..SongNames::default() },
         };
         info!(
             "Identified '{}' by '{}' as '{}' by '{}'{}{}",
@@ -680,8 +783,15 @@ impl Effects for Live {
             },
             if web_search { " (web search)" } else { "" }
         );
-        let cover_of = id.cover_of.clone().map(|artist| Names { artist, title: id.title_native.clone() });
-        SongNames { names: identified_names(&id), instrumental: id.instrumental, cover_of }
+        // The model sometimes names the cover's own singer as the original
+        // ("晩餐歌 by tuki., a cover of Hanon" for Hanon's cover): then the
+        // original is the artist it named.
+        let original = match id.cover_of.clone() {
+            Some(a) if sources::align::norm(&a) == sources::align::norm(&req.artist) => Some(id.artist_native.clone()),
+            other => other,
+        };
+        let cover_of = original.map(|artist| Names { artist, title: id.title_native.clone() });
+        SongNames { names: identified_names(&id), instrumental: id.instrumental, cover_of, failed: false }
     }
     fn sources(&self, q: &sources::Query, plain: Option<&[String]>) -> impl Future<Output = Option<Found>> + Send {
         sources::find(q, plain)
@@ -702,7 +812,7 @@ impl Effects for Live {
         cache_instrumental(artist, track);
     }
     fn aligned(&self, req: &Request, lines: &[LyricLine], source: TimingSource) -> Served {
-        prealign::serve(req.video_id.as_deref(), &req.title, &req.artist, req.duration, lines, !source.is_estimate())
+        prealign::serve(req.video_id.as_deref(), &req.title, &req.artist, req.duration, lines, source.times_this_recording())
     }
 }
 
@@ -733,10 +843,15 @@ pub async fn fetch_lyrics_timed(
     web_search: Option<bool>, // the user's "identify with web search" opt-in
     refetch: Option<bool>,    // "Search again": the lyrics on screen are wrong
 ) -> Result<TimedLyrics, String> {
+    let _ = APP.set(app.clone());
     let mut req = Request::new(track_name, artist_name, duration);
     req.video_id = video_id.filter(|id| ytmusic::is_video_id(id));
     req.web_search = web_search.unwrap_or(false);
     req.refetch = refetch.unwrap_or(false);
+    debug!(
+        "Lookup asked for '{}' by '{}' (length {:?}, video {:?}, search again {})",
+        req.title, req.artist, req.duration, req.video_id, req.refetch
+    );
     let (mut timed, mut upgrade) = {
         // The lock first: a lookahead holding it must not wait on this lookup.
         let _song = song_lock(&req).await;
@@ -756,6 +871,8 @@ pub async fn fetch_lyrics_timed(
     if let Some(job) = upgrade {
         tauri::async_runtime::spawn(async move {
             let Some(update) = run_upgrade(&Live, &req, job).await else {
+                // Without this the overlay would say "syncing" until the song ends.
+                emit_progress(TIMING_FINAL_EVENT, &req, None);
                 return;
             };
             if let Err(e) = app.emit(TIMING_UPDATED_EVENT, update) {
@@ -943,12 +1060,16 @@ pub async fn lookup_ahead(
     }
     let _song = song_lock(&req).await;
     let (timed, upgrade) = fetch_timed(&Live, &req, extra_sources).await.ok()?;
+    // The overlay translates them now, so the song starts with its translation.
+    if let Some(app) = prealign::app() {
+        let _ = app.emit("lyrics-ahead", &timed.lines);
+    }
     if let Some(job) = upgrade {
         if let Some(update) = run_upgrade(&Live, &req, job).await {
             return Some((update.lines, true));
         }
     }
-    let real = !timed.source.is_estimate();
+    let real = timed.source.times_this_recording();
     Some((timed.lines, real))
 }
 
@@ -963,9 +1084,10 @@ enum Pass {
     SourcesOnly,
 }
 
-/// Cheapest first, normally. "Search again" goes the other way: the player's
-/// names are what found the wrong song, so the LLM with web search leads (one
-/// paid call the user asked for; it falls through when the provider can't search).
+/// The LLM's names first (a cheap call; without an LLM it answers nothing at
+/// once), then the player's. "Search again" leads with web search instead, and
+/// the player's names come last: they are what found the wrong song (one paid
+/// call the user asked for; it falls through when the provider can't search).
 fn passes(req: &Request, negative: bool) -> &'static [Pass] {
     use Pass::*;
     const WEB: Pass = Identified { web_search: true };
@@ -973,8 +1095,11 @@ fn passes(req: &Request, negative: bool) -> &'static [Pass] {
     match (req.refetch, negative, req.web_search) {
         (true, _, _) => &[WEB, NO_WEB, Player],
         (false, true, _) => &[SourcesOnly],
-        (false, false, false) => &[Player, NO_WEB],
-        (false, false, true) => &[Player, NO_WEB, WEB],
+        // The LLM's names lead: noisy player titles would spend LRCLIB's budget
+        // first. The first identified pass also asks LRCLIB with the player's
+        // names before any source is asked (see `fetch_timed`).
+        (false, false, false) => &[NO_WEB],
+        (false, false, true) => &[NO_WEB, WEB],
     }
 }
 
@@ -1009,38 +1134,66 @@ async fn fetch_timed<E: Effects>(
     let settled = |instrumental: bool| instrumental && !req.refetch;
     // Names the sources were already asked with (e.g. no LLM set up: always empty).
     let mut tried: Vec<Vec<Names>> = Vec::new();
-    // Originals whose words were already looked for.
-    let mut covers: Vec<Names> = Vec::new();
+    // Songs whose words were already looked for.
+    let mut worded: Vec<Names> = Vec::new();
     for &pass in passes(req, negative) {
         let said = match pass {
-            Pass::Identified { web_search } => fx.names(req, web_search).await,
+            Pass::Identified { web_search } => {
+                fx.progress(req, if web_search { Stage::WebSearch } else { Stage::Identify });
+                fx.names(req, web_search).await
+            }
             Pass::Player | Pass::SourcesOnly => SongNames::default(),
         };
         instrumental |= said.instrumental;
+        // A web-search pass the key can't make (free tier) is not this song's failure.
+        run.incomplete |= said.failed && pass != (Pass::Identified { web_search: true });
         if settled(instrumental) {
             break;
         }
         let names = said.names;
-        found = match pass {
-            Pass::Player => run.regex_pass().await,
-            _ => run.identified_pass(&names).await,
-        };
+        // A cover's words are the original's: its entry first, not the singer's.
+        if let Some(original) = &said.cover_of {
+            run.cover = true;
+            found = run.original_at_this_length(original).await;
+        }
+        if found.is_none() {
+            found = match pass {
+                Pass::Player => run.regex_pass().await,
+                _ => run.identified_pass(&names).await,
+            };
+        }
+        // Outside "Search again", the player's names get their LRCLIB turn
+        // right after the LLM's, before any source is asked.
+        if found.is_none() && pass == (Pass::Identified { web_search: false }) && !req.refetch {
+            found = run.regex_pass().await;
+        }
         instrumental |= run.instrumental;
         if found.is_some() || settled(instrumental) {
             break;
         }
+        // Whose words this recording sings, for when nothing has it at this
+        // length: a trusted cover's original, else the identified song itself
+        // (a music video, a live take). An unconfirmed "cover of" gives none.
+        let words_from = match said.cover_of {
+            Some(original) => trusted_cover(req, pass).then_some(original),
+            None => names.first().cloned(),
+        };
         // The player's names reach the sources with every other pass.
         if pass != Pass::Player && !tried.contains(&names) {
-            if let Some(timed) = from_sources(fx, req, &names, extra).await {
+            if extra && req.duration.is_some() {
+                fx.progress(req, Stage::Sources);
+            }
+            if let Some(timed) = from_sources(fx, req, &names, extra, run.cover).await {
                 return Ok((timed, None));
             }
             tried.push(names);
         }
-        if let Some(original) = said.cover_of.filter(|o| trusted_cover(req, pass) && !covers.contains(o)) {
-            if let Some(timed) = from_original(fx, &mut run, req, &original, extra).await {
+        if let Some(song) = words_from.filter(|s| !worded.contains(s)) {
+            fx.progress(req, Stage::OtherRecording);
+            if let Some(timed) = from_words_of(fx, &mut run, req, &song, extra).await {
                 return Ok((timed, None));
             }
-            covers.push(original);
+            worded.push(song);
         }
     }
     info!(
@@ -1060,8 +1213,9 @@ async fn fetch_timed<E: Effects>(
 
     match found {
         Some(Lrclib::Synced(lines)) => {
-            fx.save(&req.artist, &req.title, &lines, TimingSource::Lrclib);
-            Ok((TimedLyrics { lines, source: TimingSource::Lrclib, pending: false }, None))
+            let source = if run.cover { TimingSource::OriginalTiming } else { TimingSource::Lrclib };
+            fx.save(&req.artist, &req.title, &lines, source);
+            Ok((TimedLyrics { lines, source, pending: false }, None))
         }
         Some(Lrclib::Plain { estimate, src }) => {
             fx.save(&req.artist, &req.title, &estimate, TimingSource::LrclibEstimate);
@@ -1076,7 +1230,11 @@ async fn fetch_timed<E: Effects>(
         None if negative => Err("No lyrics found (cached)".to_string()),
         None if run.incomplete => Err("Lyrics service unavailable, try again later".to_string()),
         None => {
-            fx.save_none(&req.artist, &req.title);
+            // Without a length the exact lookups, the sources and a cover's
+            // words never ran: not an answer to remember.
+            if req.duration.is_some() {
+                fx.save_none(&req.artist, &req.title);
+            }
             Err("No lyrics found".to_string())
         }
     }
@@ -1084,42 +1242,55 @@ async fn fetch_timed<E: Effects>(
 
 /// Step 5: with the setting on and a length to match recordings by, the extra
 /// sources, whether LRCLIB had nothing or could not answer. A hit is cached.
-async fn from_sources<E: Effects>(fx: &E, req: &Request, names: &[Names], extra: bool) -> Option<TimedLyrics> {
+async fn from_sources<E: Effects>(fx: &E, req: &Request, names: &[Names], extra: bool, cover: bool) -> Option<TimedLyrics> {
     let duration = req.duration.filter(|_| extra)?;
     let q = source_query(&req.title, &req.artist, names, duration);
     let found = fx.sources(&q, None).await?;
-    let source = TimingSource::from(found.provider);
-    info!("LRCLIB had nothing for '{}'; {} did", req.title, source.as_str());
+    let source = match (found.timed, cover) {
+        (false, _) => TimingSource::SourcesEstimate,
+        (true, true) => TimingSource::OriginalTiming,
+        (true, false) => TimingSource::from(found.provider),
+    };
+    info!("LRCLIB had nothing for '{}'; {:?} did ({})", req.title, found.provider, source.as_str());
     fx.save(&req.artist, &req.title, &found.lines, source);
     Some(TimedLyrics { lines: found.lines, source, pending: false })
 }
 
 /// "Cover", "歌ってみた", "翻唱" in what the player shows.
 static COVER_MARK: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)\bcover(ed)?\b|カバー|歌ってみた|翻唱").unwrap());
+    LazyLock::new(|| Regex::new(r"(?i)\bcover(ed)?\b|カバー|歌ってみた|翻唱|弾き語り").unwrap());
 
 /// Taking another artist's words is only safe when the cover is plain: the
 /// player says so, or a web search found it. A guessed "cover of" would put
 /// some other song's lyrics on screen.
 fn trusted_cover(req: &Request, pass: Pass) -> bool {
-    pass == (Pass::Identified { web_search: true }) || COVER_MARK.is_match(&req.title) || COVER_MARK.is_match(&req.artist)
+    pass == (Pass::Identified { web_search: true }) || marked_cover(req)
 }
 
-/// A cover sings the original's words to its own arrangement: the words are
-/// taken from the original (LRCLIB, then the sources at any length) and
-/// spread over this recording. Word-level timing retimes them to the audio.
-async fn from_original<E: Effects>(
+fn marked_cover(req: &Request) -> bool {
+    COVER_MARK.is_match(&req.title) || COVER_MARK.is_match(&req.artist)
+}
+
+/// Another recording's words for this one: a cover sings its original's, a
+/// music video or live take the song's own, each to its own arrangement and
+/// length. The words come from `song` (LRCLIB, then the sources at any length,
+/// which must name it) and are spread over this recording; word-level timing
+/// retimes them to the audio.
+async fn from_words_of<E: Effects>(
     fx: &E,
     run: &mut Lookup<'_, E>,
     req: &Request,
-    original: &Names,
+    song: &Names,
     extra: bool,
 ) -> Option<TimedLyrics> {
     let duration = req.duration?;
-    let words = match run.words_of(original).await {
+    let words = match run.words_of(song).await {
         Some(words) => words,
         None if extra => {
-            let q = sources::Query::words_of([sources::Name { title: original.title.clone(), artist: original.artist.clone() }], duration);
+            // The player's artist too: the LLM can misname the artist (潮レイラ for
+            // 汐れいら), and the player's romanized "Reira Ushio" still sounds like it.
+            let names = [song.artist.clone(), req.artist.clone()].map(|artist| sources::Name { title: song.title.clone(), artist });
+            let q = sources::Query::words_of(names, duration);
             fx.sources(&q, None).await?.lines.into_iter().map(|l| l.text).collect()
         }
         None => return None,
@@ -1127,7 +1298,7 @@ async fn from_original<E: Effects>(
     if words.len() < MIN_RECORD_LINES {
         return None;
     }
-    info!("'{}' is a cover of '{}' by '{}': using its words", req.title, original.title, original.artist);
+    info!("'{}': using the words of '{}' by '{}' from another recording", req.title, song.title, song.artist);
     let lines = timing::estimate_plain(&words.join("\n"), duration);
     fx.save(&req.artist, &req.title, &lines, TimingSource::CoverEstimate);
     Some(TimedLyrics { lines, source: TimingSource::CoverEstimate, pending: false })
@@ -1138,8 +1309,12 @@ async fn from_original<E: Effects>(
 /// spellings, which only count as the song's names.
 pub(crate) fn source_query(title: &str, artist: &str, names: &[Names], duration: f64) -> sources::Query {
     let name = |n: &Names| sources::Name { title: n.title.clone(), artist: n.artist.clone() };
-    let player = sources::Name { title: clean_title(title, artist), artist: artist.to_string() };
-    let all = names.first().map(name).into_iter().chain([player]).chain(names.iter().skip(1).map(name));
+    let cleaned = clean_title(title, artist);
+    // "ネバーランドより - From Neverland": the sources list the native half
+    // alone, and searching the whole bilingual title finds other songs.
+    let half = cleaned.split_once(" - ").map(|(native, _)| sources::Name { title: native.trim().to_string(), artist: artist.to_string() });
+    let player = sources::Name { title: cleaned, artist: artist.to_string() };
+    let all = names.first().map(name).into_iter().chain(half).chain([player]).chain(names.iter().skip(1).map(name));
     sources::Query::new(all, duration)
 }
 
@@ -1273,25 +1448,22 @@ pub async fn fetch_lrclib_raw(
     }))
 }
 
-static LRC_LINE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\[(\d{2}):(\d{2})(?:\.(\d{2}))?\](.*)$").unwrap());
-
+/// Every time tag of a line counts: `[00:10.00][01:20.00]chorus` is sung twice.
 pub fn parse_lrc_format(lrc_content: &str) -> Vec<LyricLine> {
-    let mut lyrics: Vec<LyricLine> = lrc_content
-        .lines()
-        .filter_map(|line| {
-            let caps = LRC_LINE.captures(line)?;
-            let text = caps[4].trim().to_string();
-            let num = |i: usize| caps.get(i).map_or(0.0, |m| m.as_str().parse().unwrap_or(0.0));
-            (!text.is_empty()).then(|| LyricLine {
-                time: num(1) * 60.0 + num(2) + num(3) / 100.0,
-                text,
-                duration: None,
-                words: None,
-            })
-        })
-        .collect();
-
+    let mut lyrics = Vec::new();
+    for raw in lrc_content.lines() {
+        let mut rest = raw.trim();
+        let mut times = Vec::new();
+        while let Some((t, r)) = sources::align::leading_tag(rest) {
+            times.push(t);
+            rest = r;
+        }
+        let text = sources::align::sung_text(rest);
+        if text.is_empty() {
+            continue;
+        }
+        lyrics.extend(times.into_iter().map(|time| LyricLine { time, text: text.to_string(), duration: None, words: None }));
+    }
     lyrics.sort_by(|a, b| a.time.total_cmp(&b.time));
     with_durations(lyrics)
 }
@@ -1390,11 +1562,18 @@ mod tests {
         /// What the pre-aligner answers, and the source it was asked with.
         prealigned: Option<Served>,
         aligned_asked: Mutex<Vec<(TimingSource, usize)>>,
+        /// The sources have the song only at another length: they answer
+        /// words (any-length) queries alone.
+        words_only: bool,
+        /// The LLM is asked but gives no answer (an outage, a quota).
+        llm_fails: bool,
+        /// Every `progress` report, in order.
+        stages: Mutex<Vec<Stage>>,
     }
 
     impl Fake {
         fn answering(provider: Provider) -> Self {
-            Fake { answer: Some(Found { provider, lines: parse_lrc_format(SYNCED) }), ..Default::default() }
+            Fake { answer: Some(Found { provider, lines: parse_lrc_format(SYNCED), timed: true }), ..Default::default() }
         }
         fn rule(mut self, needle: &'static str, reply: Reply) -> Self {
             self.lrclib.push((needle, reply));
@@ -1440,13 +1619,13 @@ mod tests {
         fn names(&self, _req: &Request, web_search: bool) -> impl Future<Output = SongNames> + Send {
             *self.llm_calls.lock().unwrap() += 1;
             let names = if web_search { self.names_searched.clone() } else { self.names.clone() };
-            let said = SongNames { names, instrumental: self.llm_instrumental, cover_of: self.llm_cover_of.clone() };
+            let said = SongNames { names, instrumental: self.llm_instrumental, cover_of: self.llm_cover_of.clone(), failed: self.llm_fails };
             async move { said }
         }
         fn sources(&self, q: &sources::Query, plain: Option<&[String]>) -> impl Future<Output = Option<Found>> + Send {
             self.calls.lock().unwrap().push(plain.map(<[String]>::len));
             self.searched.lock().unwrap().push(q.names.iter().map(|n| format!("{} / {}", n.title, n.artist)).collect());
-            let answer = self.answer.clone();
+            let answer = self.answer.clone().filter(|_| q.any_length || !self.words_only);
             async move { answer }
         }
         fn ytmusic(&self, _video_id: &str) -> impl Future<Output = Option<YtLyrics>> + Send {
@@ -1466,6 +1645,9 @@ mod tests {
         fn aligned(&self, _req: &Request, lines: &[LyricLine], source: TimingSource) -> Served {
             self.aligned_asked.lock().unwrap().push((source, lines.len()));
             self.prealigned.clone().unwrap_or(Served::Off)
+        }
+        fn progress(&self, _req: &Request, stage: Stage) {
+            self.stages.lock().unwrap().push(stage);
         }
     }
 
@@ -1507,6 +1689,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_sources_untimed_words_are_an_estimate_word_timing_can_fix() {
+        // QQ had ネバーランドより's 57 lines untimed: words for this recording, guessed timing.
+        let mut fx = Fake::answering(Provider::Qq);
+        fx.answer.as_mut().unwrap().timed = false;
+        let (timed, _) = fetch_timed(&fx, &req(), true).await.unwrap();
+        assert_eq!(timed.source, TimingSource::SourcesEstimate);
+        assert!(timed.source.is_estimate(), "pre-align retimes it");
+        assert_eq!(fx.saved(), vec![TimingSource::SourcesEstimate]);
+    }
+
+    #[tokio::test]
     async fn exact_hit_costs_one_request_and_never_asks_sources() {
         let fx = Fake::answering(Provider::Qq).rule("/get?", json_reply(record("Koi", "Minori", 265.0, true)));
         let (timed, upgrade) = fetch_timed(&fx, &req(), true).await.unwrap();
@@ -1514,7 +1707,7 @@ mod tests {
         assert!(upgrade.is_none());
         assert_eq!(fx.urls().len(), 1);
         assert!(fx.calls().is_empty());
-        assert_eq!(fx.llm_calls(), 0);
+        assert_eq!(fx.llm_calls(), 1, "the LLM is asked first; here it knew nothing");
         assert_eq!(fx.saved(), vec![TimingSource::Lrclib]);
     }
 
@@ -1576,11 +1769,12 @@ mod tests {
 
         let urls = fx.urls();
         assert_eq!(urls.len(), MAX_REQUESTS, "{urls:#?}");
-        assert!(urls[0].contains("/get?track_name=Minori%20-%20Koi"), "raw title first");
-        assert!(urls[1].contains("/get?track_name=Koi&"), "then the cleaned title");
-        assert!(urls[2].contains("/search?track_name=Koi&"));
-        assert!(urls[3].contains("/search?q=Koi%20Minori"));
-        assert!(urls[4].contains("/get?track_name=Koi%20no%20Uta&artist_name=Chihara%20Minori"));
+        // The LLM's names lead, so a noisy player title can't spend the budget first.
+        assert!(urls[0].contains("/get?track_name=Koi%20no%20Uta&artist_name=Chihara%20Minori"), "identified names first");
+        assert!(urls[1].contains("/search?track_name=Koi%20no%20Uta&artist_name=Chihara%20Minori"));
+        assert!(urls[2].contains("/get?track_name=Minori%20-%20Koi"), "then the raw title");
+        assert!(urls[3].contains("/get?track_name=Koi&"), "then the cleaned title");
+        assert!(urls[4].contains("/search?track_name=Koi&"));
         assert_eq!(fx.llm_calls(), 1);
         assert_eq!(fx.saved_none(), 1, "a complete miss is negative-cached");
     }
@@ -1594,7 +1788,7 @@ mod tests {
         let (timed, _) = fetch_timed(&fx, &req, false).await.unwrap();
         assert_eq!(timed.source, TimingSource::Lrclib);
         assert_eq!(fx.asked("/get?"), 0, "no length, no exact lookups");
-        assert_eq!(fx.urls().len(), 3, "search, q, LLM search");
+        assert_eq!(fx.urls().len(), 1, "the LLM's names lead: one search");
     }
 
     fn snow_country() -> (Request, Vec<Names>) {
@@ -1613,6 +1807,18 @@ mod tests {
             evidence_urls: vec![],
         };
         (req, identified_names(&id))
+    }
+
+    #[tokio::test]
+    async fn slower_passes_are_reported_as_they_start() {
+        let (req, names) = snow_country();
+        let fx = Fake { names, ..Fake::answering(Provider::Qq) }.rule("search?", json_reply(json!([])));
+        fetch_timed(&fx, &req, true).await.unwrap();
+        assert_eq!(*fx.stages.lock().unwrap(), [Stage::Identify, Stage::Sources]);
+        // A cached answer says nothing: there was nothing slow to say.
+        let fx = Fake { cached_hit: Some((estimate_lines(), Some("lrclib".into()))), ..Fake::default() };
+        fetch_timed(&fx, &req, true).await.unwrap();
+        assert!(fx.stages.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -1727,15 +1933,19 @@ mod tests {
         assert_eq!(q.names.len(), 1);
         let q = source_query("YOASOBI「夜に駆ける」 Official Music Video", "Ayase / YOASOBI", &[], 261.0);
         assert_eq!((q.names[0].title.as_str(), q.names[0].artist.as_str()), ("夜に駆ける", "Ayase / YOASOBI"));
+        // A bilingual title searches its native half first.
+        let q = source_query("ネバーランドより - From Neverland", "Sato", &[], 317.0);
+        let titles: Vec<&str> = q.names.iter().map(|n| n.title.as_str()).collect();
+        assert_eq!(titles, ["ネバーランドより", "ネバーランドより - From Neverland"]);
     }
 
     #[tokio::test]
-    async fn a_structured_hit_skips_full_text_and_llm() {
+    async fn a_structured_hit_skips_full_text() {
         let results = json!([record("Koi (Live)", "Minori", 300.0, true), record("Koi", "Minori", 266.0, true)]);
         let fx = Fake::default().rule("search?track_name=", json_reply(results));
         let (timed, _) = fetch_timed(&fx, &req(), false).await.unwrap();
         assert_eq!(timed.source, TimingSource::Lrclib);
-        assert_eq!((fx.asked("q="), fx.llm_calls()), (0, 0));
+        assert_eq!((fx.asked("q="), fx.llm_calls()), (0, 1));
         assert_eq!(fx.urls().len(), 2, "get, search");
     }
 
@@ -1844,12 +2054,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lrclib_marking_the_exact_recording_instrumental_skips_the_llm() {
+    async fn lrclib_marking_the_exact_recording_instrumental_skips_the_sources() {
         let fx = Fake::answering(Provider::Qq)
             .rule("/get?", json_reply(json!({"instrumental": true, "syncedLyrics": null, "plainLyrics": null})));
         let (timed, _) = fetch_timed(&fx, &req(), true).await.unwrap();
         assert_eq!(timed.source, TimingSource::Instrumental);
-        assert_eq!(fx.llm_calls(), 0);
+        assert_eq!(fx.llm_calls(), 1, "asked first, before LRCLIB said instrumental");
         assert!(fx.calls().is_empty());
     }
 
@@ -1892,6 +2102,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_covers_original_timing_lights_lines_but_alignment_of_the_cover_wins() {
+        // Hanon's 晩餐歌: LRCLIB has tuki.'s original at the same length, but the
+        // cover's tempo differs and drifts up to 11 s from it.
+        let (_, original) = a_cover();
+        let req = Request::new("Bye My Sigh (Cover)".into(), "Someone".into(), Some(240.0));
+        let fx = Fake { names: vec![original.clone()], llm_cover_of: Some(original), prealigned: Some(Served::Pending), ..Default::default() }
+            .rule("get?track_name=Bye%20My%20Sigh&artist_name=Original", json_reply(record("Bye My Sigh", "Original Band", 240.0, true)));
+        let (mut timed, _) = fetch_timed(&fx, &req, false).await.unwrap();
+        assert_eq!(timed.source, TimingSource::OriginalTiming);
+        assert!(!timed.source.is_estimate(), "lines still light up without word timing");
+        assert!(!timed.source.times_this_recording(), "but alignment isn't checked against another recording");
+        assert_eq!(fx.saved(), vec![TimingSource::OriginalTiming]);
+        with_aligned(&fx, &req, &mut timed);
+        assert_eq!(fx.aligned_asked.lock().unwrap()[0].0, TimingSource::OriginalTiming);
+    }
+
+    #[tokio::test]
+    async fn a_cover_named_after_its_original_never_takes_another_lengths_timing() {
+        // 回る空うさぎ 和風アレンジ: the LLM names the song by its original artist,
+        // and LRCLIB has the original at another length. Its timing is another
+        // arrangement's; only its words fit this recording.
+        let (req, original) = a_cover();
+        let fx = Fake { names: vec![original.clone()], llm_cover_of: Some(original), ..Default::default() }
+            .rule("search?track_name=Bye%20My%20Sigh&artist_name=Original", json_reply(json!([record("Bye My Sigh", "Original Band", 240.0, true)])))
+            .rule("search?", json_reply(json!([])));
+        let (timed, _) = fetch_timed(&fx, &req, false).await.unwrap();
+        assert_eq!(timed.source, TimingSource::CoverEstimate, "the words, spread over this recording");
+    }
+
+    #[tokio::test]
+    async fn a_music_video_sings_its_songs_words_from_another_recording() {
+        // '汐れいら / 味噌汁とバター【Playing Video】': identified, but LRCLIB lacks
+        // it and the sources have it only at the studio recording's length.
+        let req = Request::new("汐れいら / 味噌汁とバター【Playing Video】".into(), "Reira Ushio".into(), Some(299.0));
+        let song = Names { title: "味噌汁とバター".into(), artist: "汐れいら".into() };
+        let fx = Fake { names: vec![song], words_only: true, ..Fake::answering(Provider::Qq) }.rule("search?", json_reply(json!([])));
+        let (timed, _) = fetch_timed(&fx, &req, true).await.unwrap();
+        assert_eq!(timed.source, TimingSource::CoverEstimate, "its words, spread over this recording");
+        assert!(timed.lines.last().unwrap().time < 299.0);
+        assert_eq!(fx.saved(), vec![TimingSource::CoverEstimate]);
+    }
+
+    #[tokio::test]
     async fn the_originals_words_come_from_the_sources_at_any_length() {
         let (req, original) = a_cover();
         let fx = Fake { llm_cover_of: Some(original), ..Fake::answering(Provider::Netease) }
@@ -1910,7 +2163,59 @@ mod tests {
             .rule("artist_name=Original", json_reply(json!([record("Bye My Sigh", "Original Band", 240.0, true)])))
             .rule("search?", json_reply(json!([])));
         assert!(fetch_timed(&fx, &req, false).await.is_err());
-        assert_eq!(fx.asked("artist_name=Original"), 0, "another artist's words only when the cover is plain");
+        assert_eq!(fx.asked("get?track_name=Bye%20My%20Sigh&artist_name=Original"), 1, "the original at this length is safe to ask");
+        assert_eq!(
+            fx.asked("search?track_name=Bye%20My%20Sigh&artist_name=Original"),
+            0,
+            "another artist's words at another length only when the cover is plain"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cover_at_the_originals_length_takes_the_originals_timing() {
+        let (_, original) = a_cover();
+        // Unmarked: the LLM's guess is confirmed by the length.
+        let req = Request::new("Bye My Sigh".into(), "Someone".into(), Some(240.0));
+        let fx = Fake { llm_cover_of: Some(original), ..Default::default() }
+            .rule("get?track_name=Bye%20My%20Sigh&artist_name=Original", json_reply(record("Bye My Sigh", "Original Band", 240.0, true)));
+        let (timed, _) = fetch_timed(&fx, &req, false).await.unwrap();
+        assert_eq!((timed.source, timed.lines.len()), (TimingSource::OriginalTiming, 3), "the original's timing, lines light up");
+        assert_eq!(fx.saved(), vec![TimingSource::OriginalTiming]);
+    }
+
+    #[tokio::test]
+    async fn a_marked_cover_is_found_by_title_at_its_length_without_the_singers_name() {
+        let req = Request::new("Bye My Sigh (Cover)".into(), "Someone".into(), Some(241.0));
+        let results = json!([record("Bye My Sigh", "Other Band", 200.0, true), record("Bye My Sigh", "Original Band", 240.0, true)]);
+        let fx = Fake::default().rule("search?", json_reply(results));
+        let (timed, _) = fetch_timed(&fx, &req, false).await.unwrap();
+        assert_eq!(timed.source, TimingSource::OriginalTiming);
+        assert_eq!(fx.urls().len(), 1, "one title search, no budget spent on the singer: {:#?}", fx.urls());
+        assert_eq!(fx.asked("artist_name="), 0);
+
+        // Only another length on LRCLIB: some other arrangement, or some other song.
+        let other = json!([record("Bye My Sigh", "Other Band", 200.0, true)]);
+        let fx = Fake::default().rule("search?", json_reply(other));
+        assert!(fetch_timed(&fx, &req, false).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn nothing_found_while_the_llm_was_down_is_not_remembered() {
+        // 未来図 (弾き語り cover): Gemini answered 503, so no "cover of マルシィ" and
+        // no original's words. A passing outage must not bury the song as "none".
+        let fx = Fake { llm_fails: true, ..Default::default() };
+        assert!(fetch_timed(&fx, &req(), true).await.is_err());
+        assert_eq!(fx.saved_none(), 0);
+    }
+
+    #[tokio::test]
+    async fn nothing_found_without_a_length_is_not_remembered() {
+        // The player often sends the title before the length; the lookup then
+        // skips everything that needs one, and must not bury the song as "none".
+        let fx = Fake::default();
+        let req = Request::new("Koi".into(), "Minori".into(), None);
+        assert!(fetch_timed(&fx, &req, true).await.is_err());
+        assert_eq!(fx.saved_none(), 0);
     }
 
     #[tokio::test]
@@ -2164,8 +2469,28 @@ mod tests {
 
     #[test]
     fn parses_lrc() {
-        let lines = parse_lrc_format("[00:02.50]b\n[00:01.00]a\n[00:03]\nnot a line");
+        let lines = parse_lrc_format("[ar:Someone]\n[00:02.50]b\n[00:01.00]a\n[00:03]\nnot a line");
         let got: Vec<(f64, &str, Option<f64>)> = lines.iter().map(|l| (l.time, l.text.as_str(), l.duration)).collect();
         assert_eq!(got, vec![(1.0, "a", Some(1.5)), (2.5, "b", Some(3.0))]);
+    }
+
+    #[test]
+    fn a_line_with_several_tags_is_sung_at_each() {
+        let lines = parse_lrc_format("[00:01.00][00:05.00]chorus\n[00:03.00]verse");
+        let got: Vec<(f64, &str)> = lines.iter().map(|l| (l.time, l.text.as_str())).collect();
+        assert_eq!(got, vec![(1.0, "chorus"), (3.0, "verse"), (5.0, "chorus")]);
+    }
+
+    #[test]
+    fn a_bilingual_lines_appended_translation_is_not_sung() {
+        let lines = parse_lrc_format("[00:22.38]相槌が上手くなったんだ^You've gotten better at nodding along");
+        assert_eq!(lines[0].text, "相槌が上手くなったんだ");
+    }
+
+    #[test]
+    fn colon_hundredths_are_read_like_dotted_ones() {
+        let lines = parse_lrc_format("[00:04:27]a\n[01:02:50]b\n[00:09.15]c");
+        let got: Vec<f64> = lines.iter().map(|l| l.time).collect();
+        assert_eq!(got, vec![4.27, 9.15, 62.5]);
     }
 }

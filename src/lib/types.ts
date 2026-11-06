@@ -43,8 +43,12 @@ export type LyricsSource =
   | "ytmusic"
   | "ytmusic-estimate"
   | "aligned"
-  /** A cover: the original's words, spread over this recording (an estimate). */
+  /** Another recording's words (a cover's original, the studio version), spread over this one (an estimate). */
   | "cover-estimate"
+  /** QQ / NetEase / Kugou had this recording's words untimed; spread over it (an estimate). */
+  | "sources-estimate"
+  /** A cover with its original's real timing (same length): lines light up, word alignment of the cover wins. */
+  | "original-timing"
   /** The song has no words: `lines` is empty. */
   | "instrumental";
 
@@ -86,6 +90,38 @@ export interface TimeSample {
   currentTime: number;
   duration: number;
   isPlaying: boolean;
+  /** When the extension read `currentTime` (Date.now() ms, same machine). */
+  measuredAt?: number | null;
 }
 
 export type PlaybackCommand = "play" | "pause" | "next" | "previous" | "seek";
+
+/** The edge of the screen's work area the lyric strip hangs from; it grows away from it. */
+export type Anchor = "top" | "bottom";
+
+/** `strip_state`: locked = click-through; unlocked = Move mode. */
+export interface StripView {
+  locked: boolean;
+  anchor: Anchor;
+  /** No placement saved yet: the strip opened in Move mode, with a hint. */
+  firstRun: boolean;
+}
+
+/** `strip-hover`: the cursor over the locked strip, and the reported rect under it. */
+export interface StripHover {
+  inside: boolean;
+  target: string | null;
+}
+
+/** A rect the overlay reports (CSS px from the window's top-left); `clickable` ones take clicks while locked. */
+export interface HitRect {
+  id: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  clickable?: boolean;
+}
+
+/** `lyrics-progress`: the lookup moved on to a slower pass. */
+export type LookupStage = "identify" | "web-search" | "sources" | "other-recording";

@@ -25,26 +25,32 @@ pub async fn init_extension_connection(
         // (title, artist) we last announced. Checked synchronously so messages are
         // judged in arrival order. Any message may introduce the track, so opening
         // the app mid-song, or the extension restarting, picks it up at once.
-        let last_track: Arc<StdMutex<Option<(String, String)>>> = Arc::default();
+        // With whether its length and video id were known: the player often
+        // reports those a moment after the title, and the lyric lookup needs
+        // both, so the same song with either newly known is announced again.
+        let last_track: Arc<StdMutex<Option<Announced>>> = Arc::default();
         ws_server.set_track_callback(move |track_update: TrackUpdate| {
-            let key = (track_update.title.clone(), track_update.artist.clone());
-            let changed = !key.0.trim().is_empty() && {
+            let track_info = TrackInfo {
+                title: track_update.title.clone(),
+                artist: track_update.artist.clone(),
+                album: None,
+                duration: track_update.duration.filter(|d| *d > 0.0), // 0 = unknown
+                thumbnail: track_update.thumbnail.clone(),
+                video_id: crate::ytmusic::video_id_from_url(&track_update.url),
+            };
+            let changed = !track_info.title.trim().is_empty() && {
                 let mut last = last_track.lock().unwrap();
-                let changed = last.as_ref() != Some(&key);
-                *last = Some(key);
-                changed
+                let next = Announced::of(&track_info, last.as_ref());
+                let news = last.as_ref() != Some(&next);
+                *last = Some(next);
+                news
             };
 
             if changed {
-                let track_info = TrackInfo {
-                    title: track_update.title.clone(),
-                    artist: track_update.artist.clone(),
-                    album: None,
-                    duration: track_update.duration.filter(|d| *d > 0.0), // 0 = unknown
-                    thumbnail: track_update.thumbnail.clone(),
-                    video_id: crate::ytmusic::video_id_from_url(&track_update.url),
-                };
-                info!("Track changed: '{}' by '{}'", track_info.title, track_info.artist);
+                info!(
+                    "Track changed: '{}' by '{}' (length {:?}, video {:?})",
+                    track_info.title, track_info.artist, track_info.duration, track_info.video_id
+                );
                 if let Err(e) = app_handle_clone.emit("track-updated", &track_info) {
                     error!("Failed to emit track-updated event: {}", e);
                 }
@@ -65,7 +71,9 @@ pub async fn init_extension_connection(
                     &serde_json::json!({
                         "currentTime": current_time,
                         "duration": track_update.duration.unwrap_or(0.0),
-                        "isPlaying": track_update.is_playing
+                        "isPlaying": track_update.is_playing,
+                        // When the extension read currentTime: the overlay adds the transit delay.
+                        "measuredAt": track_update.timestamp
                     }),
                 ) {
                     error!("Failed to emit track-time-update event: {}", e);
@@ -167,5 +175,103 @@ pub async fn send_playback_command(
         Ok("Command sent to extension".to_string())
     } else {
         Err("WebSocket server not available".to_string())
+    }
+}
+
+/// What was last announced of the playing track. Knowing a length or a video
+/// id is never forgotten for the same song, so a later message without them
+/// is not news.
+#[derive(Clone, Debug, PartialEq)]
+struct Announced {
+    title: String,
+    artist: String,
+    video: Option<String>,
+    has_length: bool,
+}
+
+impl Announced {
+    fn of(t: &TrackInfo, last: Option<&Announced>) -> Self {
+        // The same video under half of the bilingual title it had ("雨景色 - The
+        // Shape of Rain" → "The Shape of Rain" as the queue moves on near the
+        // end): the same song, not a new one that restarts the clock at 0.
+        if let Some(l) = last.filter(|l| {
+            l.video.is_some() && l.video == t.video_id && l.artist == t.artist && l.title.contains(t.title.trim())
+        }) {
+            return Announced { has_length: l.has_length || t.duration.is_some(), ..l.clone() };
+        }
+        let same = last.filter(|l| l.title == t.title && l.artist == t.artist);
+        Announced {
+            video: t.video_id.clone().or_else(|| same.and_then(|l| l.video.clone())),
+            title: t.title.clone(),
+            artist: t.artist.clone(),
+            has_length: t.duration.is_some() || same.is_some_and(|l| l.has_length),
+        }
+    }
+}
+
+#[cfg(test)]
+mod announce_tests {
+    use super::*;
+
+    fn track(title: &str, duration: Option<f64>, video: Option<&str>) -> TrackInfo {
+        TrackInfo {
+            title: title.into(),
+            artist: "a".into(),
+            album: None,
+            duration,
+            thumbnail: None,
+            video_id: video.map(String::from),
+        }
+    }
+
+    /// Feed messages through the same rule as the callback; true = announced.
+    fn announced(messages: &[TrackInfo]) -> Vec<bool> {
+        let mut last: Option<Announced> = None;
+        messages
+            .iter()
+            .map(|t| {
+                let next = Announced::of(t, last.as_ref());
+                let news = last.as_ref() != Some(&next);
+                last = Some(next);
+                news
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_same_song_is_announced_again_only_when_it_gains_a_length_or_video() {
+        let got = announced(&[
+            track("s", None, None),            // new song
+            track("s", None, None),            // nothing new
+            track("s", Some(200.0), None),     // the length arrives
+            track("s", None, Some("abcdefghijk")), // the video id arrives; the length is still known
+            track("s", Some(200.0), Some("abcdefghijk")),
+            track("s", None, None),            // a sparse message forgets nothing
+            track("t", None, None),            // the next song
+        ]);
+        assert_eq!(got, vec![true, false, true, true, false, false, true]);
+    }
+
+    #[test]
+    fn the_same_video_losing_half_its_title_is_not_a_new_song() {
+        let got = announced(&[
+            track("雨景色 - The Shape of Rain", Some(200.0), Some("TfZUcD7mwck")),
+            track("The Shape of Rain", Some(200.0), Some("TfZUcD7mwck")), // the queue moved on
+            track("雨景色 - The Shape of Rain", Some(200.0), Some("TfZUcD7mwck")),
+            track("The Shape of Rain", Some(200.0), Some("other_video")), // another recording
+            track("The Shape of Rain (Live)", Some(200.0), Some("other_video")), // gains words: news
+        ]);
+        assert_eq!(got, vec![true, false, false, true, true]);
+    }
+
+    #[test]
+    fn a_shorter_title_without_the_video_id_is_a_new_song() {
+        // The rule rests on the video id: without one, a title that is part of
+        // the last one is just another song.
+        let got = announced(&[
+            track("雨景色 - The Shape of Rain", Some(200.0), Some("TfZUcD7mwck")),
+            track("The Shape of Rain", Some(200.0), None),
+        ]);
+        assert_eq!(got, vec![true, true]);
     }
 }

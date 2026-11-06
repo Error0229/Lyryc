@@ -8,6 +8,8 @@
 
 .lyric-stage {
   --t: 0;
+  /* The shortest the dimming sweep takes (s): a short word still settles, not snaps. */
+  --dim-min: 0.35;
   position: relative;
   font-family: var(--lyric-font);
   font-size: var(--lyric-size);
@@ -18,6 +20,7 @@
 }
 
 .lyric-line {
+  position: relative; /* the status slot hangs off its end */
   display: inline-block;
   white-space: nowrap;
   transform: scale(var(--fit, 1));
@@ -26,38 +29,74 @@
 
 .tok {
   --p: clamp(0, (var(--t) - var(--ws)) / var(--wl), 1);
+  /* The dimming sweep (0..1): once the word is done, the sung colour moves
+     across it left to right, at the pace the highlight did (never quicker than
+     --dim-min), so it dims the way it lit up, a character at a time. */
+  --q: clamp(0, (var(--t) - var(--wd)) / max(var(--wl), var(--dim-min)), 1);
   position: relative;
   display: inline-block;
   white-space: pre;
 }
 
+/*
+ * Each glyph is drawn once and casts one shadow. The base layer carries the
+ * shadow; once its word is swept, its glyph turns transparent (a transparent
+ * glyph still casts its text-shadow), so its translucent "upcoming" colour
+ * never shows as a fringe around the words drawn over it. The lit layer on top
+ * casts no shadow (only the user's opt-in glow). Never two opaque copies of a
+ * glyph stacked: their anti-aliased edges would add up and the word would look
+ * bolder, as if highlighted twice.
+ */
 .tok-base {
-  color: var(--lyric-upcoming);
+  color: color-mix(in srgb, var(--lyric-upcoming) calc(clamp(0, (1 - var(--p)) * 1000, 1) * 100%), transparent);
   text-shadow: var(--lyric-shadow);
 }
 
-.tok-fill,
-.tok-sung {
+.tok-fill {
   position: absolute;
   inset: 0;
   pointer-events: none;
   text-shadow: var(--lyric-glow);
 }
 
-/* Counter-translated pair: the window slides right, the text stays put. */
+/*
+ * The lit layer, one copy of the word, with two fronts moving left to right:
+ *
+ *  - the highlight (--p): a counter-translated window, the window sliding
+ *    right while the text stays put. Its front edge is feathered over 0.16em
+ *    (a static mask, riding along at no per-frame cost); the window reaches
+ *    0.16em past the token, so once the word is lit that feathered strip is
+ *    empty space, not its last letter.
+ *  - the dimming (--q): the same copy's colour, active ahead of the front and
+ *    sung behind it, with the same 0.16em feather: a gradient painted through
+ *    the glyphs (background-clip: text). One copy, so the dim never thickens
+ *    the word; it starts when the word is done and moves at the word's pace.
+ *
+ * The gradient is in the window's own width (the token + 0.16em): sung up to
+ * q·100% − 0.16em, active from q·100%. At q = 1 the last glyph (ending at
+ * 100% − 0.16em) is all sung.
+ */
 .tok-fill {
+  --edge: 0.16em;
+  right: calc(-1 * var(--edge));
   overflow: hidden;
-  color: var(--lyric-active);
   transform: translateX(calc((var(--p) - 1) * 100%));
+  mask-image: linear-gradient(90deg, #000 calc(100% - var(--edge)), transparent);
 }
 .tok-fill-in {
   display: block;
+  /* The window is 0.16em wider than the token: the stage's centring would
+     set this copy 0.08em right of the glyph under it, a visible double. */
+  text-align: left;
   transform: translateX(calc((1 - var(--p)) * 100%));
-}
-
-.tok-sung {
-  color: var(--lyric-sung);
-  opacity: clamp(0, (var(--t) - var(--wd)) * 4, 1);
+  color: transparent;
+  background-image: linear-gradient(
+    90deg,
+    var(--lyric-sung) calc(var(--q) * 100% - var(--edge)),
+    var(--lyric-active) calc(var(--q) * 100%)
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
 }
 
 /* Plain mode: one layer, one colour. */
@@ -93,12 +132,180 @@
   text-shadow: var(--lyric-shadow);
   white-space: nowrap;
 }
+/* The next-line preview: dim, smaller, never swept (rows.ts NEXT_SCALE). */
+.lyric-next {
+  display: block;
+  overflow: hidden;
+  font-size: 0.62em;
+  line-height: 1.3;
+  color: var(--lyric-text);
+  text-overflow: ellipsis;
+  text-shadow: var(--lyric-shadow);
+  white-space: nowrap;
+  opacity: 0.42;
+}
+
+/* The translation row, held until its text arrives. */
+/*
+ * "Show the next line": the stage scrolls by one row (Stage.tsx), and the line
+ * arriving in the lyric row grows from the preview's size as it rises, so the
+ * preview reads as moving up into place rather than being replaced.
+ */
+[data-advance="scroll"] .lyric-main {
+  transform-origin: var(--lyric-origin, center) top;
+  animation: lyric-grow var(--dur-slow) var(--ease-standard) both;
+}
+@keyframes lyric-grow {
+  from {
+    transform: scale(0.62);
+  }
+}
+
+.lyric-translation[data-await] {
+  letter-spacing: 0.3em;
+  opacity: calc(var(--tr-opacity) * 0.4);
+}
+
+/* The title card and the not-found message: the title in the lyric row, the byline below. */
+.lyric-card {
+  display: grid;
+  justify-items: var(--lyric-align);
+  text-shadow: var(--lyric-shadow);
+  color: var(--lyric-text);
+}
+.lyric-card-title {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 0.7em;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.78;
+}
+.lyric-card-sub {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: max(0.4em, 12px);
+  font-weight: 400;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.6;
+}
+
+/* Paused: the lyrics step back after a moment. */
+.lyric-dim {
+  transition: opacity var(--dur-line) var(--ease-standard);
+}
+.lyric-dim[data-dim] {
+  opacity: 0.5;
+}
+
+/* A feathered dark backdrop behind the words, for light and busy desktops (opacity only). */
+.lyric-scrim {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse 58% 75% at 50% 55%, rgb(0 0 0 / 0.72), rgb(0 0 0 / 0.42) 45%, transparent 78%);
+  opacity: var(--scrim);
+}
+
+/* The status icon: shape says the state; motion (transform/opacity) says it is working. */
+/*
+ * The status icon sits with the content, sized by its text: 1em icon in a
+ * 1.4em slot (its hover target).
+ *   after a line   .status-after: just past the last word, centred on the line
+ *   on the card    .lyric-card-head: ahead of the title
+ *   alone          .status-alone: in the middle of the lyric row
+ */
+.status-slot {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.4em;
+  height: 1.4em;
+}
+.lyric-words {
+  display: inline-block;
+}
+.status-after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 100%;
+  display: flex;
+  align-items: center;
+  margin-left: 0.15em;
+  font-size: 0.55em; /* slot + margin ≈ 0.85em of the line: within useFitWidth's 1em reserve */
+}
+.lyric-card-head {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 0.15em;
+  font-size: 0.7em;
+}
+.lyric-card-head .lyric-card-title {
+  min-width: 0;
+  font-size: 1em;
+}
+.lyric-card-head .status-slot {
+  font-size: 0.8em;
+}
+.status-alone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  font-size: 20px;
+}
+.status-icon {
+  display: grid;
+  color: var(--lyric-text);
+  opacity: 0.8;
+  filter: drop-shadow(0 1px 2px rgb(0 0 0 / 0.8)) drop-shadow(0 0 6px rgb(0 0 0 / 0.55));
+}
+.status-icon svg {
+  width: 1em;
+  height: 1em;
+}
+[data-motion="breathe"] .status-icon {
+  animation: status-breathe 1.6s ease-in-out infinite;
+}
+[data-motion="spin"] .status-icon svg {
+  animation: status-spin 1.1s linear infinite;
+}
+[data-motion="done"] .status-icon {
+  color: oklch(0.8 0.15 155);
+  opacity: 1;
+}
+.status-bars path {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: status-bar 0.9s ease-in-out infinite;
+}
+.status-bars path:nth-child(2) { animation-delay: -0.6s; }
+.status-bars path:nth-child(3) { animation-delay: -0.3s; }
+.status-bars path:nth-child(4) { animation-delay: -0.75s; }
+@keyframes status-breathe {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.9; }
+}
+@keyframes status-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes status-bar {
+  0%, 100% { transform: scaleY(0.35); }
+  50% { transform: scaleY(1); }
+}
 
 /*
  * After a timing swap the fill eases to the new position instead of jumping.
  * Transitions retarget every frame, so this only adds a brief lag.
  */
-.lyric-stage[data-retiming] :is(.tok-fill, .tok-fill-in, .tok-sung) {
+.lyric-stage[data-retiming] :is(.tok-fill, .tok-fill-in) {
   transition:
     transform var(--dur-retime) var(--ease-out),
     opacity var(--dur-retime) var(--ease-out);
@@ -109,7 +316,13 @@
   .tok {
     --p: clamp(0, (var(--t) - var(--ws)) * 1000, 1);
   }
-  .tok-sung {
-    opacity: clamp(0, (var(--t) - var(--wd)) * 1000, 1);
+  .tok {
+    --q: clamp(0, (var(--t) - var(--wd)) * 1000, 1);
+  }
+  [data-advance] .lyric-main,
+  [data-motion] .status-icon,
+  [data-motion] .status-icon svg,
+  .status-bars path {
+    animation: none;
   }
 }

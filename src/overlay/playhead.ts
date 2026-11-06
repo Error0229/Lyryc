@@ -23,9 +23,24 @@ function kick() {
   if (!frame && listeners.size) frame = requestAnimationFrame(tick);
 }
 
+/** Diagnostic (user report: lyrics jumping back): the last clock inputs, dumped with each warning. */
+const trail: string[] = [];
+function note(entry: string) {
+  trail.push(`${(performance.now() / 1000).toFixed(1)} ${entry}`);
+  if (trail.length > 12) trail.shift();
+}
+
 export const playhead = {
-  sample(time: number, playing: boolean) {
-    anchor = reconcile(anchor, time, playing, performance.now());
+  /** `age`: how much of `time` is the report's lateness correction (diagnostics only). */
+  sample(time: number, playing: boolean, age = 0) {
+    const now = performance.now();
+    const before = clockTime(anchor, now);
+    anchor = reconcile(anchor, time, playing, now);
+    note(`sample ${time.toFixed(2)}${age ? ` (+${age.toFixed(1)} late)` : ""}${playing ? "" : " paused"}, clock was ${before.toFixed(2)}`);
+    // Diagnostic: a snap is a seek, a track change, a pause, or time sources disagreeing.
+    if (anchor.correction === 0 && Math.abs(before - time) > 0.4 && before > 0.5) {
+      console.warn(`[clock] snapped ${time < before ? "back" : "forward"} ${before.toFixed(2)}s→${time.toFixed(2)}s${playing ? "" : " (paused)"} | ${trail.join(" ; ")}`);
+    }
     kick();
   },
   /** playback-state arrives with every progress report; only act on change. */
@@ -33,8 +48,10 @@ export const playhead = {
     if (anchor.playing === playing) return;
     const now = performance.now();
     anchor = { media: clockTime(anchor, now), at: now, playing, correction: 0 };
+    note(`${playing ? "play" : "pause"} at ${anchor.media.toFixed(2)}`);
     kick();
   },
+  trail: () => trail.join(" ; "),
   reset() {
     anchor = stopped;
     kick();

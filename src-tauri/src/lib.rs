@@ -1,6 +1,5 @@
 use log::{error, info};
-use tauri::tray::{TrayIconBuilder, TrayIconEvent};
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 use tokio::sync::Mutex;
 
 // Module declarations
@@ -8,12 +7,15 @@ mod cleaning;
 mod commands;
 mod furigana;
 mod llm;
+mod logging;
 mod lyrics;
 mod lyrics_cache;
+mod placement;
 mod prealign;
 mod sources;
 mod timing;
 mod translation;
+mod tray;
 mod types;
 mod updater;
 mod websocket;
@@ -34,14 +36,15 @@ use llm::commands::{
 use lyrics::{fetch_lrclib_raw, fetch_lyrics, fetch_lyrics_timed, lookahead_configure, mark_instrumental};
 use prealign::{prealign_configure, prealign_remove_files, prealign_status};
 use updater::{update_check, update_install, update_status, UpdaterState};
-use types::{ClickThroughState, TrackState, WebSocketState};
+use types::{TrackState, WebSocketState};
 use websocket_commands::{
     control_playback, debug_websocket_server, get_websocket_clients_count, get_websocket_status,
     init_extension_connection, send_playback_command,
 };
+use placement::{strip_drag, strip_hits, strip_reset, strip_set_frame, strip_set_locked, strip_set_width, strip_state};
 use window_management::{
-    adjust_window_height, close_settings_window, enable_drag_mode, initialize_window_sizing,
-    minimize_to_tray, open_settings_window, quit_app, restore_from_tray, toggle_window_visibility,
+    close_settings_window, minimize_to_tray, open_settings_window, quit_app,
+    restore_from_tray, toggle_window_visibility,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -51,12 +54,7 @@ pub fn run() {
         eprintln!("Could not load .env file: {}. Continuing without it.", e);
     }
 
-    // Initialize logger
-    // RUST_LOG overrides. tao's event-loop warnings are upstream noise.
-    env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info,lyryc_lib=debug,tao=error"),
-    )
-    .init();
+    logging::init();
 
     info!("Starting Lyryc application...");
 
@@ -64,6 +62,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
+            // First: the window is hidden until placed, and the overlay asks for this state as it loads.
+            placement::init(app.handle());
             app.manage(llm::store::init(app.path().app_config_dir().ok()));
             prealign::init(app.handle());
             updater::start(app.handle());
@@ -74,107 +74,39 @@ pub fn run() {
                     Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
                 };
 
-                // Define shortcuts
-                let ctrl_shift_d =
-                    Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyD);
-                let ctrl_shift_m =
-                    Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyM);
-
-                // Get state for the handlers
-                let click_through_state = app.state::<ClickThroughState>().inner().clone();
-
-                // Initialize global shortcut plugin with handler
+                let lock = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyD);
+                let visibility = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyM);
                 app.handle().plugin(
                     tauri_plugin_global_shortcut::Builder::new()
                         .with_handler(move |app, shortcut, event| {
-                            if event.state() == ShortcutState::Pressed {
-                                if shortcut == &ctrl_shift_d {
-                                    info!("Global shortcut Ctrl+Shift+D triggered - toggling click-through");
-                                    let app_handle = app.clone();
-                                    let click_through_state = click_through_state.clone();
-
-                                    tauri::async_runtime::spawn(async move {
-                                        // Get window
-                                        if let Some(window) = app_handle.get_webview_window("main") {
-                                            // Toggle click-through state
-                                            let current_state = {
-                                                let mut state = click_through_state.lock().await;
-                                                *state = !*state; // Toggle the state
-                                                *state
-                                            };
-
-                                            // Apply the new state to the window
-                                            if let Err(e) = window.set_ignore_cursor_events(current_state) {
-                                                error!("Failed to set click-through to {}: {}", current_state, e);
-                                                return;
-                                            }
-
-                                            // Shadow visible when selectable (click-through OFF), hidden when pass-through (click-through ON)
-                                            if let Err(e) = window.set_shadow(!current_state) {
-                                                error!("Failed to set shadow to {}: {}", !current_state, e);
-                                            }
-
-                                            // Emit event to frontend with new state
-                                            let event_name = if current_state { "click-through-enabled" } else { "click-through-disabled" };
-                                            if let Err(e) = app_handle.emit(event_name, current_state) {
-                                                error!("Failed to emit {} event: {}", event_name, e);
-                                                return;
-                                            }
-
-                                            info!("Click-through toggled to: {} ({})",
-                                                  if current_state { "enabled" } else { "disabled" },
-                                                  if current_state { "click-through active" } else { "draggable/interactive" });
-                                        } else {
-                                            error!("Main window not found for global shortcut handler");
-                                        }
-                                    });
-                                } else if shortcut == &ctrl_shift_m {
-                                    info!("Global shortcut Ctrl+Shift+M triggered - toggling window visibility");
-                                    let app_handle = app.clone();
-
-                                    tauri::async_runtime::spawn(async move {
-                                        if let Err(e) = toggle_window_visibility(app_handle).await {
-                                            error!("Failed to toggle window visibility: {}", e);
-                                        }
-                                    });
-                                }
+                            if event.state() != ShortcutState::Pressed {
+                                return;
                             }
+                            if shortcut == &lock {
+                                placement::toggle_locked(app);
+                                return;
+                            }
+                            let app = app.clone();
+                            tauri::async_runtime::spawn(async move {
+                                if let Err(e) = toggle_window_visibility(app).await {
+                                    error!("Global shortcut: {}", e);
+                                }
+                            });
                         })
                         .build(),
                 )?;
+                app.global_shortcut().register(lock)?;
+                app.global_shortcut().register(visibility)?;
+                info!("Global shortcuts registered: Ctrl+Shift+D (lock / move), Ctrl+Shift+M (show/hide)");
 
-                // Register the shortcuts
-                app.global_shortcut().register(ctrl_shift_d)?;
-                app.global_shortcut().register(ctrl_shift_m)?;
-
-                info!("Global shortcuts registered: Ctrl+Shift+D (toggle click-through), Ctrl+Shift+M (minimize/restore)");
-
-                // Setup system tray
-                let _tray = TrayIconBuilder::with_id("lyryc-tray")
-                    .tooltip("Lyryc - Clean Lyric Viewer")
-                    .icon(app.default_window_icon().unwrap().clone())
-                    .on_tray_icon_event(|tray, event| match event {
-                        TrayIconEvent::Click { .. } => {
-                            info!("Tray icon clicked - toggling window visibility");
-                            let app_handle = tray.app_handle().clone();
-                            tauri::async_runtime::spawn(async move {
-                                if let Err(e) = toggle_window_visibility(app_handle).await {
-                                    error!("Failed to toggle window from tray click: {}", e);
-                                }
-                            });
-                        }
-                        _ => {}
-                    })
-                    .build(app)?;
-
-                info!("System tray initialized in backend");
+                tray::init(app)?;
             }
             Ok(())
         })
         .manage(TrackState::new(Mutex::new(None)))
         .manage(WebSocketState::new(Mutex::new(None)))
         .manage(UpdaterState::default())
-        .manage(ClickThroughState::new(Mutex::new(true))) // Start with click-through enabled
+        .on_window_event(placement::on_window_event)
         .invoke_handler(tauri::generate_handler![
             get_current_track,
             set_current_track,
@@ -193,16 +125,23 @@ pub fn run() {
             debug_websocket_server,
             control_playback,
             send_playback_command,
-            initialize_window_sizing,
-            adjust_window_height,
+            strip_state,
+            strip_set_frame,
+            strip_drag,
+            strip_set_width,
+            strip_set_locked,
+            strip_hits,
+            strip_reset,
+            tray::tray_menu_state,
+            tray::tray_menu_act,
             open_settings_window,
             close_settings_window,
             minimize_to_tray,
             restore_from_tray,
             toggle_window_visibility,
             quit_app,
-            enable_drag_mode,
             generate_furigana_command,
+            logging::log_frontend,
             llm_list_presets,
             llm_get_settings,
             llm_upsert_provider,

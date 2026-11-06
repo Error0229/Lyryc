@@ -2958,6 +2958,7 @@ dependencies = [
  "autoruby",
  "base64 0.22.1",
  "csv",
+ "dirs",
  "dotenv",
  "env_logger 0.11.8",
  "flate2",
@@ -2989,6 +2990,7 @@ dependencies = [
  "unicode-normalization",
  "urlencoding",
  "uuid",
+ "windows-sys 0.59.0",
  "zip 0.6.6",
 ]
 

@@ -45,6 +45,12 @@ pub fn is_japanese<'a>(lines: impl IntoIterator<Item = &'a str>) -> bool {
     lines.into_iter().any(|l| l.chars().any(|c| matches!(c, '\u{3041}'..='\u{30FA}')))
 }
 
+/// A name's sound in Latin letters, for matching credits: kana by Hepburn,
+/// other CJK by single-character readings. No tokenizer, so cheap.
+pub(crate) fn name_roman(name: &str) -> String {
+    pieces_with(name, true, None).into_iter().map(|p| p.rom).collect()
+}
+
 /// Pieces for every line of a song. The UniDic tokenizer (~550 MB resident) is
 /// built only if some line needs Japanese readings, and dropped on return.
 pub fn plan(lines: &[String]) -> Vec<Vec<Piece>> {

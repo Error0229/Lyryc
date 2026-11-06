@@ -23,7 +23,7 @@ use std::fmt;
 
 pub use presets::Preset;
 pub use store::{resolve, LlmState, Task};
-pub use transport::{complete, complete_with, list_models};
+pub use transport::{complete, complete_with, list_models, Lane};
 
 /// One chat turn: optional system prompt plus a single user message.
 pub struct ChatRequest<'a> {

@@ -8,9 +8,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex, OnceLock};
+use std::time::Instant;
 
 use super::{
-    complete_with, resolve, ChatRequest, Completion, JsonSchema, LlmError, Target, Task, Tools,
+    complete_with, resolve, ChatRequest, Completion, JsonSchema, Lane, LlmError, Target, Task, Tools,
 };
 
 /// Below this the model is guessing, and a wrong name means wrong lyrics.
@@ -208,7 +209,7 @@ pub async fn identify_with(
     web_search: bool,
 ) -> Result<Option<SongIdentity>, LlmError> {
     let user = prompt(raw_title, raw_artist, duration);
-    let reply = complete_with(target, &request(&user), tools(web_search)).await?;
+    let reply = complete_with(target, &request(&user), tools(web_search), Lane::Quick).await?;
     parse(&reply).map_err(|message| LlmError {
         provider: target.label.clone(),
         model: target.model.clone(),
@@ -229,13 +230,37 @@ const WEB_SEARCH_LIMIT: std::time::Duration = std::time::Duration::from_secs(60)
 type Answers = HashMap<(String, String, bool), Option<SongIdentity>>;
 static ANSWERS: LazyLock<Mutex<Answers>> = LazyLock::new(Default::default);
 
+/// A failed call is not asked again for a while: a song looked up repeatedly
+/// (a reloading overlay, the lookahead re-checking) would otherwise send a
+/// request each time into a provider that is refusing (429) or overloaded
+/// (503), and spend the quota that's left.
+const RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
+static FAILED: LazyLock<Mutex<HashMap<(String, String, bool), Instant>>> = LazyLock::new(Default::default);
+
 /// Drop the remembered answers for a song: the lyrics they led to were wrong.
-pub fn forget(raw_title: &str, raw_artist: &str) {
-    ANSWERS.lock().unwrap().retain(|(title, artist, _), _| title != raw_title || artist != raw_artist);
+/// "Search again" also skips a failure's cool-down: the user asked now.
+/// Remember a failed call (and forget expired ones, so the map stays small).
+fn note_failure(key: (String, String, bool)) {
+    let mut failed = lock(&FAILED);
+    failed.retain(|_, at| at.elapsed() < RETRY_AFTER);
+    failed.insert(key, Instant::now());
 }
 
-/// Canonical names for a raw player title, using the cleaning route. `None`
-/// when no provider is set up, the call failed, or the model is unsure.
+/// A plain map behind a mutex: if a holder ever panicked, the map is still
+/// fine to use, so a poisoned lock doesn't take every later lookup down.
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+pub fn forget(raw_title: &str, raw_artist: &str) {
+    lock(&ANSWERS).retain(|(title, artist, _), _| title != raw_title || artist != raw_artist);
+    lock(&FAILED).retain(|(title, artist, _), _| title != raw_title || artist != raw_artist);
+}
+
+/// Canonical names for a raw player title, using the cleaning route.
+/// `Ok(None)` when no provider is set up or the model is unsure (an answer);
+/// `Err` when the call failed (network, quota, overload, timeout), which says
+/// nothing about the song.
 ///
 /// The lookup calls this with `web_search: false`: the study measured 25/26
 /// LRCLIB hits that way, and free-tier keys get 429 on every grounded call.
@@ -244,29 +269,36 @@ pub async fn identify_song(
     raw_artist: &str,
     duration: Option<f64>,
     web_search: bool,
-) -> Option<SongIdentity> {
+) -> Result<Option<SongIdentity>, String> {
     let key = (raw_title.to_string(), raw_artist.to_string(), web_search);
-    if let Some(answer) = ANSWERS.lock().unwrap().get(&key) {
-        return answer.clone();
+    if let Some(answer) = lock(&ANSWERS).get(&key) {
+        return Ok(answer.clone());
     }
-    let target = resolve(Task::Cleaning, &[])?;
+    if let Some(at) = lock(&FAILED).get(&key).filter(|at| at.elapsed() < RETRY_AFTER) {
+        return Err(format!("failed {}s ago; retrying after {}s", at.elapsed().as_secs(), RETRY_AFTER.as_secs()));
+    }
+    let Some(target) = resolve(Task::Cleaning, &[]) else {
+        return Ok(None);
+    };
     // A song is waiting on this: a provider that takes longer is better skipped.
     let limit = if web_search { WEB_SEARCH_LIMIT } else { LIMIT };
     let call = identify_with(&target, raw_title, raw_artist, duration, web_search);
     let answer = match tokio::time::timeout(limit, call).await {
         Ok(Ok(found)) => found,
         Ok(Err(e)) => {
-            // Not remembered: a network or quota failure may pass.
+            // Not remembered as an answer: a network or quota failure may pass.
             warn!("Song identification failed: {e}");
-            return None;
+            note_failure(key);
+            return Err(e.to_string());
         }
         Err(_) => {
             warn!("Song identification took over {}s; going on without it", limit.as_secs());
-            return None;
+            note_failure(key);
+            return Err("timed out".into());
         }
     };
-    ANSWERS.lock().unwrap().insert(key, answer.clone());
-    answer
+    lock(&ANSWERS).insert(key, answer.clone());
+    Ok(answer)
 }
 
 #[cfg(test)]

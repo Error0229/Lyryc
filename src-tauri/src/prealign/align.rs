@@ -2,8 +2,10 @@
 //! `bench/align.py` in Rust: a `<star>` wildcard before every line (and at the
 //! end) soaks up intros and ad-libs, every piece's span comes straight off the
 //! CTC path, and a line's confidence is the mean posterior of its tokens.
+//! Lines may also be left out, at a price, for recordings that sing only some
+//! of them (short versions, TV sizes, covers that cut a verse): see `SKIP`.
 
-use super::ctc::{self, Emissions};
+use super::ctc::{self, Emissions, SkipCost, Span};
 use super::romanize::Piece;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -15,6 +17,17 @@ const HOP: usize = 320;
 /// The shortest input the model's conv stack accepts.
 const MIN_SAMPLES: usize = 400;
 const BLANK: usize = 0;
+/// A token whose span has at least this mean posterior was heard.
+const HEARD: f32 = 0.05;
+/// What leaving lines out costs (log-probability): `open` per run of lines
+/// left out, `each` per letter in them. A cut is a run (a verse, the last
+/// chorus); one faint line among sung ones is not, and opening a run for it
+/// costs more than forcing it in. Calibrated with `bench::skips` on 84 cached
+/// full songs and a short version: every setting from 400:4 to 200:5 leaves
+/// no line of a full song out (each alone, 0:6, still drops 18 faint lines);
+/// this one sits away from the range's edges. Uru's エイリアンズ (short ver.)
+/// keeps its first 21 of 53 lines instead of being rejected.
+pub const SKIP: SkipCost = SkipCost { open: 400.0, each: 4.5 };
 
 /// The MMS forced-aligner's character vocabulary (`vocab.json`); `<star>` is appended after it.
 pub const VOCAB: [&str; 31] = [
@@ -61,13 +74,17 @@ pub struct AlignedWord {
 }
 
 /// One lyric line as aligned. `start`/`end` are None for lines with nothing
-/// to align (symbols only).
+/// to align (symbols only) and for lines the recording does not sing.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AlignedLine {
     pub start: Option<f64>,
     pub end: Option<f64>,
     pub conf: f64,
     pub words: Vec<AlignedWord>,
+    /// The recording does not sing this line: the best path went around it.
+    /// (Absent in alignments cached before lines could be left out.)
+    #[serde(default)]
+    pub skipped: bool,
 }
 
 /// Log-posteriors for the whole track plus the `<star>` column (log p = 0).
@@ -130,14 +147,24 @@ fn log_softmax_rows(data: &mut [f32], v: usize) {
 }
 
 /// Force-align `lines` (cut into `plan`, see `romanize::plan`) to the
-/// emissions of a track `samples` long.
-pub fn align_lines(em: &Emissions, lines: &[String], plan: &[Vec<Piece>], samples: usize) -> Result<Vec<AlignedLine>, AlignError> {
+/// emissions of a track `samples` long. Leaving lines out costs `skip`
+/// (`SKIP`; `SkipCost::NEVER`: every line is sung).
+pub fn align_lines(
+    em: &Emissions,
+    lines: &[String],
+    plan: &[Vec<Piece>],
+    samples: usize,
+    skip: SkipCost,
+) -> Result<Vec<AlignedLine>, AlignError> {
     let dict: HashMap<char, usize> = VOCAB.iter().enumerate().filter_map(|(i, s)| Some((single(s)?, i))).collect();
     let star = VOCAB.len();
 
     let mut targets = Vec::new();
     let mut owner: Vec<Option<(usize, usize)>> = Vec::new();
+    // Where each line's star is, and the closing one.
+    let mut stars = Vec::new();
     for (li, ps) in plan.iter().enumerate() {
+        stars.push(targets.len());
         targets.push(star);
         owner.push(None);
         for (pi, p) in ps.iter().enumerate() {
@@ -149,19 +176,19 @@ pub fn align_lines(em: &Emissions, lines: &[String], plan: &[Vec<Piece>], sample
             }
         }
     }
+    stars.push(targets.len());
     targets.push(star);
     owner.push(None);
 
-    let spans = ctc::align(em, &targets, BLANK).ok_or(AlignError::TooShort)?;
+    // Lines are left out by going from a star straight to a later one.
+    let spans = ctc::align(em, &targets, &stars, skip, BLANK).ok_or(AlignError::TooShort)?;
     let sec_per_frame = samples as f64 / em.frames as f64 / SAMPLE_RATE as f64;
 
-    // (line, piece) -> first frame, end frame, token scores
-    let mut by_piece: HashMap<(usize, usize), (usize, usize, Vec<f32>)> = HashMap::new();
-    for (k, sp) in spans.iter().enumerate() {
-        if let Some(key) = owner[k] {
-            let e = by_piece.entry(key).or_insert((sp.start, sp.end, Vec::new()));
-            e.1 = sp.end;
-            e.2.push(sp.score);
+    // (line, piece) -> its tokens' spans, in order
+    let mut by_piece: HashMap<(usize, usize), Vec<Span>> = HashMap::new();
+    for (sp, key) in spans.iter().zip(&owner) {
+        if let (Some(sp), Some(key)) = (sp, key) {
+            by_piece.entry(*key).or_default().push(*sp);
         }
     }
 
@@ -175,18 +202,26 @@ pub fn align_lines(em: &Emissions, lines: &[String], plan: &[Vec<Piece>], sample
                 .iter()
                 .enumerate()
                 .map(|(pi, p)| {
-                    let at = by_piece.get(&(li, pi)).map(|s| (s.0 as f64 * sec_per_frame, s.1 as f64 * sec_per_frame));
+                    let at = by_piece.get(&(li, pi)).map(|s| (onset(s) as f64 * sec_per_frame, s[s.len() - 1].end as f64 * sec_per_frame));
                     (at, chars[p.pos..p.pos + p.len].iter().collect())
                 })
                 .collect();
             fill(&mut words);
-            let scores: Vec<f32> = (0..ps.len()).flat_map(|pi| by_piece.get(&(li, pi)).map(|s| s.2.clone()).unwrap_or_default()).collect();
+            let scores: Vec<f32> = (0..ps.len()).flat_map(|pi| by_piece.get(&(li, pi)).into_iter().flatten().map(|s| s.score)).collect();
             let conf = if scores.is_empty() { 0.0 } else { scores.iter().map(|&s| s as f64).sum::<f64>() / scores.len() as f64 };
             let words: Vec<AlignedWord> =
                 words.into_iter().filter_map(|(at, text)| at.map(|(start, end)| AlignedWord { start, end, text })).collect();
-            AlignedLine { start: words.first().map(|w| w.start), end: words.last().map(|w| w.end), conf, words }
+            let skipped = (stars[li] + 1..stars[li + 1]).any(|k| spans[k].is_none());
+            AlignedLine { start: words.first().map(|w| w.start), end: words.last().map(|w| w.end), conf, words, skipped }
         })
         .collect())
+}
+
+/// A piece starts at its first token the model actually heard, not where the
+/// path happened to enter it: a word's first span can stretch back over
+/// silence. A piece with no heard token keeps its first span's start.
+fn onset(spans: &[Span]) -> usize {
+    spans.iter().find(|s| s.score >= HEARD).unwrap_or(&spans[0]).start
 }
 
 fn single(s: &str) -> Option<char> {
@@ -237,13 +272,14 @@ mod tests {
         assert!(matches!(r, Err(AlignError::Cancelled)));
     }
 
-    /// Emissions that spell `text` one letter per `per` frames, with blanks between.
+    /// Emissions that spell `text` one letter per `per` frames, with blanks between
+    /// (spaces are blanks too). Any other letter is near impossible, as in real posteriors.
     fn spelled(text: &str, per: usize) -> Emissions {
         let v = 32;
         let mut data = Vec::new();
         let mut frames = 0;
         let mut row = |id: usize| {
-            let mut r = vec![(0.01f32).ln(); v];
+            let mut r = vec![(0.001f32).ln(); v];
             r[id] = (0.9f32).ln();
             r[31] = 0.0;
             data.extend(r);
@@ -264,7 +300,7 @@ mod tests {
         let em = spelled("hey you", 2);
         let samples = em.frames * HOP;
         let lines = ["hey you".to_string()];
-        let out = align_lines(&em, &lines, &super::super::romanize::plan(&lines), samples).unwrap();
+        let out = align_lines(&em, &lines, &super::super::romanize::plan(&lines), samples, SKIP).unwrap();
         let w = &out[0].words;
         assert_eq!(w.len(), 2);
         assert_eq!(w[0].text, "hey");
@@ -272,6 +308,90 @@ mod tests {
         // "you" starts after "hey " (4 symbols × 3 frames, 20 ms each), give or take the star.
         assert!((w[1].start - 0.24).abs() <= 0.06, "{}", w[1].start);
         assert!(out[0].conf > 0.5);
+    }
+
+    /// 53 different made-up lines ("kamito resuno haryu"), and the plan for them.
+    fn song() -> (Vec<String>, Vec<Vec<Piece>>) {
+        const SYL: [&str; 16] = ["ka", "mi", "to", "re", "su", "no", "ha", "yu", "se", "ri", "po", "de", "ga", "bu", "ne", "zo"];
+        let mut x: u32 = 7;
+        let mut syl = || {
+            x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            SYL[(x >> 16) as usize % SYL.len()]
+        };
+        let lines: Vec<String> = (0..53).map(|_| (0..3).map(|_| format!("{}{}{}", syl(), syl(), syl())).collect::<Vec<_>>().join(" ")).collect();
+        let plan = super::super::romanize::plan(&lines);
+        (lines, plan)
+    }
+
+    /// A recording that sings `which` of `lines`, in order, with pauses
+    /// between lines and some music after.
+    fn recording(lines: &[String], which: impl Iterator<Item = usize>) -> Emissions {
+        let pause = " ".repeat(4);
+        let sung: Vec<&str> = which.map(|i| lines[i].as_str()).collect();
+        spelled(&format!("{pause}{}{}", sung.join(&pause), pause.repeat(20)), 2)
+    }
+
+    fn sung_lines(out: &[AlignedLine]) -> Vec<usize> {
+        (0..out.len()).filter(|&i| !out[i].skipped).collect()
+    }
+
+    #[test]
+    fn a_short_version_aligns_the_lines_it_sings_and_leaves_out_the_rest() {
+        let (lines, plan) = song();
+        let em = recording(&lines, 0..15);
+        let out = align_lines(&em, &lines, &plan, em.frames * HOP, SKIP).unwrap();
+        assert_eq!(sung_lines(&out), (0..15).collect::<Vec<_>>());
+        assert!(out[..15].iter().all(|l| l.conf > 0.5 && l.start.is_some()));
+        assert!(out[..15].windows(2).all(|w| w[0].end <= w[1].start), "in order");
+        assert!(out[15..].iter().all(|l| l.start.is_none() && l.words.is_empty()));
+        // Forced through every line instead, the track is lost.
+        let forced = align_lines(&em, &lines, &plan, em.frames * HOP, SkipCost::NEVER).unwrap();
+        assert!(forced.iter().all(|l| !l.skipped));
+        assert!(super::super::reject::track_rejected(&forced));
+        assert!(!super::super::reject::track_rejected(&out));
+    }
+
+    #[test]
+    fn a_full_song_is_aligned_as_before() {
+        let (lines, plan) = song();
+        let em = recording(&lines, 0..53);
+        let out = align_lines(&em, &lines, &plan, em.frames * HOP, SKIP).unwrap();
+        assert_eq!(out, align_lines(&em, &lines, &plan, em.frames * HOP, SkipCost::NEVER).unwrap());
+        assert_eq!(sung_lines(&out).len(), 53);
+    }
+
+    #[test]
+    fn a_cut_verse_is_left_out() {
+        let (lines, plan) = song();
+        let em = recording(&lines, (0..20).chain(30..53));
+        let out = align_lines(&em, &lines, &plan, em.frames * HOP, SKIP).unwrap();
+        assert_eq!(sung_lines(&out), (0..20).chain(30..53).collect::<Vec<_>>());
+        assert!(out[19].end <= out[30].start);
+    }
+
+    #[test]
+    fn a_symbol_only_line_is_never_left_out() {
+        // Nothing to hear, nothing to leave out: it stays a line with no timing.
+        let lines: Vec<String> = ["hey you", "♪", "hey me"].map(String::from).to_vec();
+        let em = spelled("    hey you    hey me    ", 2);
+        let out = align_lines(&em, &lines, &super::super::romanize::plan(&lines), em.frames * HOP, SKIP).unwrap();
+        assert_eq!(out.iter().map(|l| l.skipped).collect::<Vec<_>>(), [false, false, false]);
+        assert_eq!(out[1].start, None);
+    }
+
+    #[test]
+    fn alignments_cached_before_skipping_still_load() {
+        let old: AlignedLine = serde_json::from_str(r#"{"start": 1.0, "end": 2.0, "conf": 0.5, "words": []}"#).unwrap();
+        assert!(!old.skipped);
+    }
+
+    #[test]
+    fn a_word_starts_at_its_first_heard_letter() {
+        // A first letter stretched over near-silence (score 0.01) does not start
+        // the word; the first heard one (0.2) does.
+        let span = |start, score| Span { start, end: start + 1, score };
+        assert_eq!(onset(&[span(3, 0.01), span(5, 0.2)]), 5);
+        assert_eq!(onset(&[span(3, 0.01), span(5, 0.02)]), 3, "nothing heard: the first span");
     }
 
     #[test]

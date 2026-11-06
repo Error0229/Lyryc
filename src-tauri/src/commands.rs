@@ -1,6 +1,7 @@
+use log::info;
 use crate::cleaning::{clean_track_name, clean_track_name_with_keys};
 use crate::llm::{self, Task, NOT_CONFIGURED};
-use crate::translation::{translate_lyrics, LyricLine, TranslationConfig, TranslationResult};
+use crate::translation::{self, translate_lyrics, LyricLine, TranslationConfig, TranslationResult};
 use crate::types::{TrackInfo, TrackState};
 use tauri::State;
 
@@ -44,7 +45,14 @@ pub async fn translate_lyrics_command(
     let target = llm::resolve(Task::Translation, &config.legacy_keys()).ok_or_else(|| {
         format!("{NOT_CONFIGURED} no provider is set up for translation. Add one in Settings.")
     })?;
-    translate_lyrics(lyrics, config, &target).await
+    let key = translation::cache::key(&lyrics, &config, &target);
+    if let Some(hit) = translation::cache::get(&key, &lyrics) {
+        info!("Translation for {} lines from the cache", lyrics.len());
+        return Ok(hit);
+    }
+    let result = translate_lyrics(lyrics, config, &target).await?;
+    translation::cache::put(&key, &result);
+    Ok(result)
 }
 
 #[tauri::command]

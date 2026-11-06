@@ -165,6 +165,9 @@ export function AppearancePage() {
         <Row label="Colour">
           <ColorField label="Background" value={style.background} onChange={(background) => set({ background })} />
         </Row>
+        <Row label="Soft backdrop" hint="A feathered shadow behind the words, so they stay readable on light or busy screens.">
+          <Slider label="Soft backdrop" value={style.scrim} min={0} max={1} step={0.05} format={(v) => `${Math.round(v * 100)}%`} onChange={(scrim) => set({ scrim })} />
+        </Row>
         <Row label="Opacity" hint="0% leaves only the text on screen.">
           <Slider label="Background opacity" value={style.backgroundOpacity} min={0} max={100} step={1} format={(v) => `${Math.round(v)}%`} onChange={(backgroundOpacity) => set({ backgroundOpacity })} />
         </Row>

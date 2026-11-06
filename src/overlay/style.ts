@@ -5,29 +5,26 @@
 import type { CSSProperties } from "react";
 import type { FuriganaPrefs, LyricStyle, TranslationPrefs } from "../state/schema";
 import { withAlpha } from "../lib/color";
+import { rowsEm, type Rows } from "./rows";
 
 export interface StageOptions {
   lyric: LyricStyle;
   translation: TranslationPrefs;
   furigana: FuriganaPrefs;
-  /** Translation line is currently shown. */
-  showTranslation: boolean;
+  /** The rows the song reserves (see rows.ts): the stage is always this tall. */
+  rows: Rows;
 }
 
 const ORIGIN = { left: "left", center: "center", right: "right" } as const;
 
 export function textShadow(on: boolean, color: string, blur: number): string {
   if (!on || blur <= 0) return "none";
-  return `0 1px ${Math.round(blur / 4)}px ${withAlpha(color, 0.55)}, 0 0 ${blur}px ${withAlpha(color, 0.45)}`;
+  // Centred, no offset copy: an offset shadow reads as a second, ghost glyph.
+  return `0 0 ${Math.max(1, Math.round(blur / 4))}px ${withAlpha(color, 0.35)}, 0 0 ${blur}px ${withAlpha(color, 0.4)}`;
 }
 
-export function stageVars({ lyric, translation, furigana, showTranslation }: StageOptions): CSSProperties {
-  const ruby = furigana.enabled && furigana.mode !== "replace";
-  const stacked = showTranslation && translation.display === "bilingual";
+export function stageVars({ lyric, translation, furigana, rows }: StageOptions): CSSProperties {
   const lh = lyric.lineHeight;
-  // Reserve room so the window height does not change line to line.
-  const rtReserve = ruby ? furigana.scale * 1.1 : 0;
-  const trReserve = stacked ? translation.scale * 1.3 + 0.15 : 0;
 
   return {
     "--lyric-font": lyric.fontFamily,
@@ -44,12 +41,13 @@ export function stageVars({ lyric, translation, furigana, showTranslation }: Sta
     "--lyric-shadow": textShadow(lyric.shadow, lyric.shadowColor, lyric.shadowBlur),
     "--lyric-glow": lyric.glow ? `0 0 ${Math.max(6, lyric.shadowBlur)}px ${withAlpha(lyric.glowColor, 0.7)}` : "none",
     "--strip-bg": withAlpha(lyric.background, lyric.backgroundOpacity / 100),
+    "--scrim": lyric.scrim,
     "--tr-scale": translation.scale,
     "--tr-color": translation.color,
     "--tr-opacity": translation.opacity,
     "--rt-scale": `${furigana.scale}em`,
     "--rt-color": furigana.color,
     "--rt-opacity": furigana.opacity,
-    "--stage-min": `${lh + rtReserve + trReserve}em`,
+    "--stage-min": `${rowsEm(rows, lh, furigana.scale, translation.scale)}em`,
   } as CSSProperties;
 }

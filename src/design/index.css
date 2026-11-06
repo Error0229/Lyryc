@@ -29,10 +29,17 @@
   --color-focus: var(--c-focus);
   --color-scrim: var(--c-scrim);
   --color-glass: var(--c-glass);
+  --color-glass-strong: var(--c-glass-strong);
   --color-glass-line: var(--c-glass-line);
   --color-glass-fg: var(--c-glass-fg);
   --color-glass-fg-muted: var(--c-glass-fg-muted);
   --color-glass-hover: var(--c-glass-hover);
+  --color-brand: var(--c-brand);
+  --color-brand-hover: var(--c-brand-hover);
+  --color-brand-pressed: var(--c-brand-pressed);
+  --color-brand-fg: var(--c-brand-fg);
+  --color-brand-bright: var(--c-brand-bright);
+  --color-brand-tint: var(--c-brand-tint);
 
   --shadow-*: initial;
   --shadow-0: var(--elev-0);
@@ -143,6 +150,30 @@
   }
   ::selection {
     background: var(--c-accent-soft);
+  }
+  /* Our scrollbar, not Windows': a thin rounded thumb, no arrows, no track.
+     (Setting scrollbar-color / scrollbar-width anywhere would switch these off.) */
+  ::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+  }
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-button {
+    display: none;
+  }
+  ::-webkit-scrollbar-thumb {
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background: color-mix(in oklab, var(--c-fg-subtle) 45%, transparent) padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: color-mix(in oklab, var(--c-fg-subtle) 75%, transparent);
+  }
+  ::-webkit-scrollbar-thumb:active {
+    background-color: var(--c-accent);
   }
 }
 

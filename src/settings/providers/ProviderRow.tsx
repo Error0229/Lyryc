@@ -6,6 +6,7 @@ import type { LlmPreset, LlmProvider, LlmTestResult } from "../../services/ipc/l
 import { friendlyError, llm } from "../../services/ipc/llmClient";
 import { Button } from "../../ui/Button";
 import { IconButton } from "../../ui/IconButton";
+import { Tooltip } from "../../ui/Tooltip";
 import { hostOf } from "./useLlm";
 
 type TestState = { state: "idle" } | { state: "running" } | { state: "ok"; result: LlmTestResult } | { state: "failed"; message: string };
@@ -14,16 +15,21 @@ function TestResult({ test }: { test: TestState }) {
   if (test.state === "ok") {
     const r = test.result;
     return (
-      <p className="flex items-center gap-1.5 text-xs text-success [&_svg]:size-3.5">
-        <CircleCheck /> Connected · {r.model} · {r.latencyMs} ms
-        <span className="truncate text-fg-muted">— “{r.sample}”</span>
+      // min-w-0 everywhere: a long model id or reply truncates instead of widening the page.
+      <p className="flex min-w-0 items-center gap-1.5 text-xs text-success [&_svg]:size-3.5 [&_svg]:shrink-0">
+        <CircleCheck />
+        <span className="min-w-0 shrink truncate">
+          Connected · {r.model} · {r.latencyMs} ms
+        </span>
+        <span className="min-w-0 flex-1 truncate text-fg-muted">— “{r.sample}”</span>
       </p>
     );
   }
   if (test.state === "failed") {
     return (
       <p className="flex items-start gap-1.5 text-xs text-danger [&_svg]:mt-px [&_svg]:size-3.5 [&_svg]:shrink-0">
-        <CircleAlert /> {test.message}
+        <CircleAlert />
+        <span className="min-w-0 [overflow-wrap:anywhere]">{test.message}</span>
       </p>
     );
   }
@@ -74,10 +80,15 @@ export function ProviderRow({ provider, preset, testModel, onEdit, onRemove }: P
             )}
           </p>
         </div>
-        <Button size="sm" disabled={test.state === "running" || !testModel} onClick={run} title={testModel ? `Test with ${testModel}` : "Pick a model first"}>
-          {test.state === "running" ? <LoaderCircle className="animate-spin" /> : null}
-          {test.state === "running" ? "Testing" : "Test"}
-        </Button>
+        {/* The span carries the tip: a disabled button gets no pointer events. */}
+        <Tooltip content={testModel ? `Test with ${testModel}` : "Pick a model first"}>
+          <span className="inline-flex">
+            <Button size="sm" disabled={test.state === "running" || !testModel} onClick={run}>
+              {test.state === "running" ? <LoaderCircle className="animate-spin" /> : null}
+              {test.state === "running" ? "Testing" : "Test"}
+            </Button>
+          </span>
+        </Tooltip>
         <IconButton label="Edit provider" icon={<Pencil />} onClick={onEdit} />
         <IconButton label="Remove provider" icon={<Trash2 />} onClick={onRemove} />
       </div>
@@ -88,7 +99,7 @@ export function ProviderRow({ provider, preset, testModel, onEdit, onRemove }: P
             initial={{ opacity: 0, y: -4 }}
             animate={{ opacity: 1, y: 0, transition: spring.gentle }}
             exit={{ opacity: 0, transition: fade("fast") }}
-            className="pl-11"
+            className="min-w-0 pl-11"
           >
             <TestResult test={test} />
           </motion.div>

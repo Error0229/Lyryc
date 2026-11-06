@@ -3,20 +3,31 @@
 //!
 //! 1. More than 60% of a track's lines below confidence 0.15: drop the whole
 //!    alignment (the model knows it is lost).
-//! 2. Otherwise a line loses its words if the median confidence of it and its
-//!    neighbours is below 0.10, or, when the lyrics came with real line timing,
-//!    if its onset is more than 0.7 s off that timing (after removing the
-//!    track's median offset, as the study measured it).
+//! 2. Otherwise a line loses its aligned words if the median confidence of it
+//!    and its neighbours is below 0.10, or, when the lyrics came with real line
+//!    timing, if its onset is more than 0.7 s off that timing (after removing
+//!    the track's median offset, as the study measured it). A line the model
+//!    heard clearly (confidence 0.4+) is believed over the source either way,
+//!    unless it sits nearer a neighbouring line's time than its own (the wrong
+//!    phrase): sources stamp when a line should show, not when it is sung.
 //! 3. A rejected line keeps the source's line time if it had real timing, else
-//!    the aligner's line start. It only loses its words.
+//!    the aligner's line start, and gets estimated words from that time on, at
+//!    the song's own pace, so it sweeps like its neighbours.
+//!
+//! Lines the aligner left out (the recording does not sing them: a short
+//! version, a cut verse) are not shown at all; the rules apply to the rest as
+//! if they were the whole song.
 
-use super::align::AlignedLine;
+use super::align::{AlignedLine, AlignedWord};
+use crate::timing::syllables;
 use crate::types::{LyricLine, LyricWord};
 
 const TRACK_LOW_CONF: f64 = 0.15;
 const TRACK_LOW_SHARE: f64 = 0.6;
 const LINE_MIN_CONF: f64 = 0.10;
 const MAX_OFF_SOURCE: f64 = 0.7;
+/// A line heard at least this clearly outvotes the source's timing.
+const SURE_CONF: f64 = 0.4;
 /// Same as `parse_lrc_format`: the last line's length when nothing says otherwise.
 const LAST_LINE_SECS: f64 = 3.0;
 
@@ -45,25 +56,56 @@ fn keep(aligned: &[AlignedLine], source: &[LyricLine], real_timing: bool) -> Vec
         .collect();
 
     let off: Vec<f64> = timed.iter().map(|&i| aligned[i].start.unwrap_or(0.0) - source[i].time).collect();
-    let centre = if off.is_empty() { 0.0 } else { median(&mut off.clone()) };
+    let centre = offset(aligned, source);
 
     let mut keep = vec![false; aligned.len()];
     for (k, &i) in timed.iter().enumerate() {
         let confident = smoothed[k] >= LINE_MIN_CONF;
-        let agrees = !real_timing || (off[k] - centre).abs() <= MAX_OFF_SOURCE;
+        let at = aligned[i].start.unwrap_or(0.0) - centre;
+        let sure = confs[k] >= SURE_CONF && own_phrase(source, i, at);
+        let agrees = !real_timing || (off[k] - centre).abs() <= MAX_OFF_SOURCE || sure;
         keep[i] = confident && agrees;
     }
     keep
 }
 
-/// The lookup's lines re-timed by the alignment. `real_timing`: the lines'
-/// times are a real source's (LRCLIB synced, QQ, ...), not an estimate.
-/// None if the alignment does not fit these lines or is rejected as a whole.
+/// How far the singing runs from the source's stamps, typically: the median of
+/// aligned start minus source time. Sources stamp when a line should appear,
+/// often a beat before it is sung.
+fn offset(aligned: &[AlignedLine], source: &[LyricLine]) -> f64 {
+    let mut off: Vec<f64> = aligned.iter().zip(source).filter_map(|(al, line)| Some(al.start? - line.time)).collect();
+    if off.is_empty() {
+        0.0
+    } else {
+        median(&mut off)
+    }
+}
+
+/// Is `at` nearer line `i`'s source time than either neighbour's?
+fn own_phrase(source: &[LyricLine], i: usize, at: f64) -> bool {
+    let own = (at - source[i].time).abs();
+    [i.wrapping_sub(1), i + 1].iter().filter_map(|&j| source.get(j)).all(|n| own < (at - n.time).abs())
+}
+
+/// The lookup's lines re-timed by the alignment, without the lines it left
+/// out. `real_timing`: the lines' times are a real source's (LRCLIB synced,
+/// QQ, ...), not an estimate. None if the alignment does not fit these lines
+/// or is rejected as a whole.
 pub fn apply(source: &[LyricLine], real_timing: bool, aligned: &[AlignedLine]) -> Option<Vec<LyricLine>> {
-    if aligned.len() != source.len() || track_rejected(aligned) {
+    if aligned.len() != source.len() {
+        return None;
+    }
+    let (source, aligned): (Vec<LyricLine>, Vec<AlignedLine>) =
+        source.iter().zip(aligned).filter(|(_, al)| !al.skipped).map(|(l, al)| (l.clone(), al.clone())).unzip();
+    let (source, aligned) = (&source[..], &aligned[..]);
+    if track_rejected(aligned) {
         return None;
     }
     let keep = keep(aligned, source, real_timing);
+    let pace = pace(aligned, &keep);
+    // A line whose words are not kept starts where its neighbours do relative
+    // to the source, so its estimated sweep keeps in step with theirs.
+    let shift = if real_timing { offset(aligned, source) } else { 0.0 };
     let mut out: Vec<LyricLine> = source
         .iter()
         .zip(aligned)
@@ -71,10 +113,9 @@ pub fn apply(source: &[LyricLine], real_timing: bool, aligned: &[AlignedLine]) -
         .map(|((line, al), &kept)| {
             let time = match al.start {
                 Some(start) if kept || !real_timing => start,
-                _ => line.time,
+                _ => line.time + shift,
             };
-            let words = kept.then(|| words(al));
-            LyricLine { time, text: line.text.clone(), duration: None, words }
+            LyricLine { time, text: line.text.clone(), duration: None, words: None }
         })
         .collect();
 
@@ -90,7 +131,52 @@ pub fn apply(source: &[LyricLine], real_timing: bool, aligned: &[AlignedLine]) -
             None => aligned[i].end.zip(aligned[i].start).map_or(LAST_LINE_SECS, |(e, s)| (e - s).max(LAST_LINE_SECS)),
         });
     }
+    for ((line, al), &kept) in out.iter_mut().zip(aligned).zip(&keep) {
+        let words = if kept { words(al) } else { estimate(al, line.time, line.duration.unwrap_or(0.0), pace) };
+        line.words = (!words.is_empty()).then_some(words);
+    }
     Some(out)
+}
+
+/// A word's share of a line's singing.
+fn weight(words: &[AlignedWord]) -> f64 {
+    words.iter().map(|w| syllables(&w.text) as f64).sum()
+}
+
+/// The song's singing pace, seconds per syllable, over its kept lines.
+/// Unknown (infinite) when no line was kept.
+fn pace(aligned: &[AlignedLine], keep: &[bool]) -> f64 {
+    let mut v: Vec<f64> = aligned
+        .iter()
+        .zip(keep)
+        .filter(|(_, &kept)| kept)
+        .filter_map(|(al, _)| Some((al.end? - al.start?) / weight(&al.words)))
+        .collect();
+    if v.is_empty() {
+        f64::INFINITY
+    } else {
+        median(&mut v)
+    }
+}
+
+/// Words for a line whose aligned ones were not kept: the aligner's pieces
+/// (so the text splits the same way), sung from `start` at the song's pace but
+/// never past the line's `duration`, each as long as its syllables.
+fn estimate(al: &AlignedLine, start: f64, duration: f64, pace: f64) -> Vec<LyricWord> {
+    let total = weight(&al.words);
+    let sung = (pace * total).min(duration);
+    let mut t = start;
+    let n = al.words.len();
+    al.words
+        .iter()
+        .enumerate()
+        .map(|(i, w)| {
+            let len = sung * syllables(&w.text) as f64 / total;
+            let word = LyricWord { time: t, text: w.text.clone(), duration: (i + 1 == n).then_some(len) };
+            t += len;
+            word
+        })
+        .collect()
 }
 
 /// Onsets only: the study found reference word ends are fill, so a word runs
@@ -107,7 +193,6 @@ fn words(al: &AlignedLine) -> Vec<LyricWord> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::prealign::align::AlignedWord;
 
     fn al(start: f64, conf: f64) -> AlignedLine {
         AlignedLine {
@@ -116,8 +201,9 @@ mod tests {
             conf,
             words: vec![
                 AlignedWord { start, end: start + 0.4, text: "a".into() },
-                AlignedWord { start: start + 0.5, end: start + 1.0, text: "b".into() },
+                AlignedWord { start: start + 0.3, end: start + 1.0, text: "b".into() },
             ],
+            skipped: false,
         }
     }
 
@@ -136,6 +222,12 @@ mod tests {
         assert!(!track_rejected(&aligned));
     }
 
+    /// Per line: are its words the aligner's (true) or estimated (false)?
+    fn aligned_words(out: &[LyricLine], aligned: &[AlignedLine]) -> Vec<bool> {
+        let times = |w: &[LyricWord]| w.iter().map(|w| w.time).collect::<Vec<_>>();
+        out.iter().zip(aligned).map(|(l, al)| times(l.words.as_ref().unwrap()) == al.words.iter().map(|w| w.start).collect::<Vec<_>>()).collect()
+    }
+
     #[test]
     fn low_smoothed_confidence_drops_words_but_keeps_the_line() {
         // Lines 3-4 sit in a low neighbourhood (median 0.05): rejected. Line 0 is
@@ -144,7 +236,7 @@ mod tests {
         let aligned: Vec<_> = confs.iter().enumerate().map(|(i, &c)| al(i as f64 * 5.0 + 0.2, c)).collect();
         let estimate = src(&[0.0, 5.0, 10.0, 15.0, 20.0, 25.0]);
         let out = apply(&estimate, false, &aligned).unwrap();
-        assert_eq!(out.iter().map(|l| l.words.is_some()).collect::<Vec<_>>(), [true, true, true, false, false, true]);
+        assert_eq!(aligned_words(&out, &aligned), [true, true, true, false, false, true]);
         // No real timing: the rejected line still takes the aligner's start.
         assert_eq!(out[3].time, 15.2);
         assert_eq!(out[1].words.as_ref().unwrap()[0].time, 5.2);
@@ -153,15 +245,85 @@ mod tests {
     #[test]
     fn lines_far_from_the_source_timing_lose_their_words() {
         // The aligner runs a constant 0.3 s late (removed as the track's offset);
-        // line 3 is a further 1 s off.
+        // line 3, heard unsurely, is a further 1 s early.
         let lrclib = [0.0, 5.0, 10.0, 15.0, 20.0];
-        let aligned: Vec<_> = lrclib.iter().enumerate().map(|(i, &t)| al(t + 0.3 + if i == 3 { 1.0 } else { 0.0 }, 0.5)).collect();
+        let aligned: Vec<_> =
+            lrclib.iter().enumerate().map(|(i, &t)| if i == 3 { al(t + 0.3 - 1.0, 0.3) } else { al(t + 0.3, 0.5) }).collect();
         let out = apply(&src(&lrclib), true, &aligned).unwrap();
-        assert_eq!(out.iter().map(|l| l.words.is_some()).collect::<Vec<_>>(), [true, true, true, false, true]);
-        assert_eq!(out[3].time, 15.0, "keeps LRCLIB's line time");
+        assert_eq!(aligned_words(&out, &aligned), [true, true, true, false, true]);
+        assert_eq!(out[3].time, 15.3, "LRCLIB's time, moved by the track's 0.3 s offset like its neighbours");
         assert_eq!(out[1].time, 5.3, "kept lines take the aligned onset");
         // Without real timing there is nothing to cross-check.
-        assert!(apply(&src(&lrclib), false, &aligned).unwrap()[3].words.is_some());
+        assert!(aligned_words(&apply(&src(&lrclib), false, &aligned).unwrap(), &aligned)[3]);
+    }
+
+    #[test]
+    fn a_clearly_heard_line_outvotes_the_source() {
+        // Line 2 is `shift` s off the source. Heard clearly (0.544, The Third
+        // Planet's "ピアノみたい"), the aligner wins either way; heard faintly (Stay
+        // at Your House 50-54: 0.08-0.19, 1.6-3 s early), the source does.
+        let lrclib = [0.0, 5.0, 10.0, 15.0, 20.0];
+        let run = |shift: f64, conf: f64| {
+            let aligned: Vec<_> = lrclib.iter().enumerate().map(|(i, &t)| al(t + if i == 2 { shift } else { 0.0 }, if i == 2 { conf } else { 0.5 })).collect();
+            aligned_words(&apply(&src(&lrclib), true, &aligned).unwrap(), &aligned)[2]
+        };
+        assert!(run(1.4, 0.544));
+        assert!(run(-1.6, 0.544));
+        assert!(!run(1.4, 0.3));
+        assert!(!run(-1.6, 0.19));
+        assert!(!run(-3.0, 0.08));
+        // Nearer the next line's time than its own: the wrong phrase, however clear.
+        assert!(run(2.4, 0.9));
+        assert!(!run(2.6, 0.9));
+        assert!(!run(-2.6, 0.9));
+    }
+
+    #[test]
+    fn a_dropped_line_sweeps_at_the_songs_pace() {
+        // Kept lines sing 2 syllables in 1 s. Line 1 comes 2 s early, unsure, and
+        // is dropped; the next line is 15 s after its source time.
+        let lrclib = [0.0, 5.0, 20.0, 25.0];
+        let mut aligned: Vec<_> = lrclib.iter().map(|&t| al(t, 0.5)).collect();
+        aligned[1] = al(3.0, 0.3);
+        aligned[1].words.push(AlignedWord { start: 3.6, end: 3.9, text: "together".into() });
+        let mut lines = src(&lrclib);
+        lines[1].text = "a b, together!".into();
+        let out = apply(&lines, true, &aligned).unwrap();
+        let w = out[1].words.as_ref().unwrap();
+        assert_eq!(w.iter().map(|w| w.text.as_str()).collect::<Vec<_>>(), ["a", "b", "together"], "the aligner's pieces");
+        assert_eq!(w[0].time, 5.0, "starts at the line time");
+        assert!(w.windows(2).all(|p| p[0].time < p[1].time));
+        // a + b + to-ge-ther = 5 syllables at 0.5 s: sung by 7.5 s, not stretched to 20.
+        let end = w[2].time + w[2].duration.unwrap();
+        assert!((end - 7.5).abs() < 1e-9, "{end}");
+        assert!((w[1].time - 5.5).abs() < 1e-9 && (w[2].time - 6.0).abs() < 1e-9);
+        assert!(w[..2].iter().all(|w| w.duration.is_none()), "like aligned words, they run to the next one");
+    }
+
+    #[test]
+    fn estimated_words_never_run_into_the_next_line() {
+        // Lines 1.2 s apart; line 1 is dropped (early) and has 2 syllables: at 0.5 s
+        // per syllable that would be 1 s, but no faster pace fits than the line's own.
+        let lrclib = [0.0, 1.2, 1.8, 4.0, 8.0];
+        let mut aligned: Vec<_> = lrclib.iter().map(|&t| al(t, 0.5)).collect();
+        aligned[2] = al(0.9, 0.3);
+        let out = apply(&src(&lrclib), true, &aligned).unwrap();
+        assert!(!aligned_words(&out, &aligned)[2]);
+        let w = out[2].words.as_ref().unwrap();
+        let end = w[1].time + w[1].duration.unwrap();
+        assert_eq!(w[0].time, out[2].time);
+        assert!(end <= out[3].time + 1e-9, "{end} > {}", out[3].time);
+    }
+
+    #[test]
+    fn with_no_line_kept_a_dropped_line_spans_its_whole_time() {
+        let lrclib = [0.0, 5.0, 10.0, 15.0];
+        // Each aligned line 3 s from its source, early or late and unsure: all dropped.
+        let aligned = vec![al(-3.0, 0.3), al(8.0, 0.2), al(7.0, 0.3), al(18.0, 0.2)];
+        let out = apply(&src(&lrclib), true, &aligned).unwrap();
+        assert_eq!(aligned_words(&out, &aligned), [false, false, false, false]);
+        let w = out[1].words.as_ref().unwrap();
+        assert_eq!((w[0].time, w[1].time, w[1].duration), (5.0, 7.5, Some(2.5)));
     }
 
     #[test]
@@ -169,16 +331,54 @@ mod tests {
         let aligned = vec![al(0.0, 0.5), al(5.0, 0.5), al(9.0, 0.5)];
         let out = apply(&src(&[0.0, 5.0, 9.0]), false, &aligned).unwrap();
         let w = out[0].words.as_ref().unwrap();
-        assert_eq!((w[0].duration, w[1].duration), (None, Some(0.5)));
+        assert_eq!(w[0].duration, None);
+        assert!((w[1].duration.unwrap() - 0.7).abs() < 1e-9);
         assert_eq!(out[0].duration, Some(5.0));
 
         // A rejected line whose source time is earlier than the previous aligned line.
-        let aligned = vec![al(10.0, 0.5), al(20.0, 0.5), al(30.0, 0.5), al(40.0, 0.5)];
+        let aligned = vec![al(10.0, 0.5), al(20.0, 0.5), al(30.0, 0.3), al(40.0, 0.5)];
         let mut lrclib = src(&[10.0, 20.0, 30.0, 40.0]);
         lrclib[2].time = 18.0; // 12 s off: rejected, keeps 18.0, clamped to 20.0
         let out = apply(&lrclib, true, &aligned).unwrap();
         assert_eq!(out[2].time, 20.0);
         assert!(out.windows(2).all(|w| w[0].time <= w[1].time));
+    }
+
+    /// A line the aligner left out.
+    fn gone() -> AlignedLine {
+        AlignedLine { start: None, end: None, conf: 0.0, words: vec![], skipped: true }
+    }
+
+    #[test]
+    fn a_short_version_shows_only_the_lines_it_sings() {
+        // Lines 0-14 of 53 sung, the rest left out. The estimate spread all 53
+        // over the track; the sung lines take the aligner's times.
+        let estimate = src(&(0..53).map(|i| i as f64 * 2.7).collect::<Vec<_>>());
+        let aligned: Vec<_> = (0..53).map(|i| if i < 15 { al(10.0 + i as f64 * 8.0, 0.5) } else { gone() }).collect();
+        let out = apply(&estimate, false, &aligned).unwrap();
+        assert_eq!(out.len(), 15);
+        assert_eq!(aligned_words(&out, &aligned[..15]), [true; 15]);
+        assert_eq!(out[14].duration, Some(3.0), "the last sung line ends the lyrics");
+        // Had the left-out lines been forced in, unheard, the track would be lost.
+        let forced: Vec<_> = (0..53).map(|i| if i < 15 { al(10.0 + i as f64 * 8.0, 0.5) } else { al(130.0 + i as f64 * 0.1, 0.02) }).collect();
+        assert!(apply(&estimate, false, &forced).is_none());
+    }
+
+    #[test]
+    fn a_cut_verse_is_not_shown_and_the_rest_keep_their_words() {
+        let lrclib: Vec<f64> = (0..12).map(|i| i as f64 * 5.0).collect();
+        let aligned: Vec<_> = lrclib.iter().enumerate().map(|(i, &t)| if (4..8).contains(&i) { gone() } else { al(t + 0.2, 0.5) }).collect();
+        let out = apply(&src(&lrclib), true, &aligned).unwrap();
+        let sung: Vec<_> = aligned.iter().filter(|a| !a.skipped).cloned().collect();
+        assert_eq!(out.len(), 8);
+        assert_eq!(aligned_words(&out, &sung), [true; 8]);
+        assert!((out[3].time - 15.2).abs() < 1e-9 && (out[4].time - 40.2).abs() < 1e-9);
+        assert!((out[3].duration.unwrap() - 25.0).abs() < 1e-9, "up to the next sung line");
+    }
+
+    #[test]
+    fn nothing_sung_is_rejected() {
+        assert!(apply(&src(&[0.0, 5.0, 10.0]), false, &[gone(), gone(), gone()]).is_none());
     }
 
     #[test]
