@@ -665,9 +665,12 @@ fn put_back(app: &AppHandle) {
     let (Ok(pos), Ok(size)) = (w.inner_position(), w.inner_size()) else { return };
     let now = Rect { x: pos.x as f64, y: pos.y as f64, w: size.width as f64, h: size.height as f64 };
     let (list, primary) = displays(app);
+    if list.is_empty() {
+        return; // nowhere to put it
+    }
     let moved = with(app, |s| {
         let verdict = put_back_verdict(now, s.bounds, &mut s.put_back_from);
-        if verdict != PutBack::Move || list.is_empty() {
+        if verdict != PutBack::Move {
             return (verdict, None);
         }
         if !list.contains(&s.display) {
@@ -976,7 +979,7 @@ mod tests {
         assert_eq!(put_back_verdict(ours, ours, &mut tried), PutBack::InPlace);
         assert_eq!(put_back_verdict(pulled, ours, &mut tried), PutBack::Move);
         // It didn't come back (the system holds it there): stop, don't loop.
-        assert_eq!(put_back_verdict(pulled, Rect::default(), &mut tried), PutBack::GiveUp);
+        assert_eq!(put_back_verdict(pulled, ours, &mut tried), PutBack::GiveUp);
         // Somewhere new is a new move.
         let elsewhere = Rect { y: 20.0, ..pulled };
         assert_eq!(put_back_verdict(elsewhere, ours, &mut tried), PutBack::Move);
