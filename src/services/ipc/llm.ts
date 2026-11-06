@@ -15,7 +15,8 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export type LlmDialect = "openai" | "anthropic" | "gemini";
-export type LlmTask = "translation" | "cleaning";
+/** `backup` translates a song the translation route declined or failed on. */
+export type LlmTask = "translation" | "cleaning" | "backup";
 
 export interface LlmPreset {
   id: string; // e.g. "openai", "anthropic", "gemini", "openrouter", "groq", "deepseek", "github", "ollama", "custom"

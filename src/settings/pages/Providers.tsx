@@ -16,6 +16,11 @@ import { presetOf, useLlm } from "../providers/useLlm";
 const tasks: Array<{ task: LlmTask; label: string; hint: string }> = [
   { task: "translation", label: "Translation", hint: "Translates lyrics line by line." },
   { task: "cleaning", label: "Track name cleanup", hint: "Strips “(Official Video)” and the like before searching lyrics." },
+  {
+    task: "backup",
+    label: "Translation backup",
+    hint: "Translates a song when the translation model declines it or fails. Some models won't translate copyrighted lyrics.",
+  },
 ];
 
 function EmptyState({ onAdd }: { onAdd: () => void }) {
@@ -39,10 +44,10 @@ export function ProvidersPage() {
   const providers = settings?.providers ?? [];
   const routes = settings?.routes ?? {};
 
-  /** A first provider is routed to every task that has none, so it just works. */
+  /** A first provider is routed to every task that has none, so it just works. A backup is only ever chosen by hand. */
   async function onSaved(p: LlmProvider, created: boolean) {
     const model = presetOf(presets, p.presetId)?.suggestedModels[0];
-    const unrouted = created && model ? tasks.filter((t) => !routes[t.task]) : [];
+    const unrouted = created && model ? tasks.filter((t) => t.task !== "backup" && !routes[t.task]) : [];
     try {
       await Promise.all(unrouted.map((t) => llm.setRoute(t.task, { providerId: p.id, model: model! })));
     } catch (e) {

@@ -50,7 +50,11 @@ pub async fn translate_lyrics_command(
         info!("Translation for {} lines from the cache", lyrics.len());
         return Ok(hit);
     }
-    let result = translate_lyrics(lyrics, config, &target).await?;
+    // The routed provider, then the backup route if the user set one. The
+    // result is cached under the routed provider's key either way: that key
+    // is what the next request for this song asks for.
+    let targets: Vec<_> = std::iter::once(target).chain(llm::translation_backup()).collect();
+    let result = translate_lyrics(lyrics, config, &targets).await?;
     translation::cache::put(&key, &result);
     Ok(result)
 }

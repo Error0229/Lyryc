@@ -1,226 +1,114 @@
-//! Translation prompt engineering
+//! The translation prompt.
+//!
+//! The lyrics go in numbered and only the translations come back, numbered
+//! the same way. The model never writes the original out again: asking for
+//! "original<sep>translation" pairs read to some models as reproducing the
+//! whole lyrics, which they refuse (Sonnet answered with a summary instead),
+//! and it doubled the output for nothing, since the app already has the
+//! original. Numbers also make the reply easy to line up.
+//!
+//! The rules favour fidelity: an earlier prompt that asked for "light
+//! paraphrase" got embellished translations (imagery and emotion the line
+//! didn't have) from small models.
 
 use super::language::get_language_name;
 
-/// The separator used to pair original and translated lines (parser supports legacy format).
-pub const TRANSLATION_SEPARATOR: &str = "<sep>";
-
-/// System prompt for translation LLMs
-pub const SYSTEM_PROMPT: &str = r#"You are a professional context-aware lyrics translator specializing in music and poetry.
-
-## Core Philosophy
-Approach each song as a complete artistic work with unified themes, emotions, and narrative. Your goal is producing natural, coherent translations that capture the essence of the original while sounding native in the target language.
-
-## Translation Approach
-- **Holistic Analysis**: Consider the entire song's context before translating any individual line
-- **Inter-line Fluency**: Ensure smooth transitions between consecutive lyrics lines - avoid abrupt tone changes or grammatical inconsistencies
-- **Natural Flow**: Prioritize idiomatic expressions over literal word-for-word translation
-- **Progressive Coherence**: Build meaning gradually across lines, maintaining consistent pronouns, tenses, and narrative perspective
-- **Cultural Sensitivity**: Adapt cultural references appropriately while preserving meaning
-- **Musical Awareness**: Consider how consecutive lines will sound when sung together
-
-## Line-by-Line Fluency Guidelines
-- Each line should flow naturally into the next
-- Maintain consistent grammatical structure across related lines (verses/choruses)
-- Preserve parallel structures and repetitive patterns
-- Ensure pronoun consistency throughout (I/you/we/they)
-- Keep verb tenses coherent across the song's timeline
-- Create smooth semantic bridges between ideas
-
-## CRITICAL OUTPUT FORMAT
-You MUST output BOTH the original line AND its translation on the SAME line, separated by "<sep>".
-
-Format: [Original Text]<sep>[Translated Text]
-
-Example:
-こんにちは世界<sep>Hello world
-今日はいい天気ですね<sep>It's nice weather today
-
-## ABSOLUTE REQUIREMENTS
-- EVERY line must contain EXACTLY ONE "<sep>" separator
-- LEFT side: copy original text EXACTLY as provided
-- RIGHT side: your translation of that line
-- Output EXACTLY the same number of lines as input
-- NO line numbers, timestamps, explanations, or commentary
-- NO additional formatting or markdown
-
-## LINE COUNT VERIFICATION
-- Before sending response, COUNT YOUR OUTPUT LINES
-- Compare with input line count - THEY MUST BE IDENTICAL
-- Each output line MUST have format: [original]<sep>[translation]
-
-## Quality Standards
-- Sound natural and idiomatic in the target language
-- Maintain emotional impact and artistic intent
-- Preserve names, emojis, and special markers
-- Create smooth, singable translations with seamless line-to-line transitions"#;
-
-/// Build the translation prompt for LLM
-pub fn build_translation_prompt(
-    lyrics: &str,
-    source_lang: &str,
-    target_lang: &str,
-    style: &str,
-    custom_prompt: Option<&str>,
-) -> String {
-    let target_lang_name = get_language_name(target_lang);
-    let source_lang_name = get_language_name(source_lang);
-
-    // If custom prompt is provided, use it as-is
-    if let Some(custom) = custom_prompt {
-        return format!(
-            r#"{}
-
-Original lyrics ({}):
-{}
-
-Translate to {}:"#,
-            custom, source_lang_name, lyrics, target_lang_name
-        );
-    }
-
-    let style_instruction = build_style_instruction(style, target_lang_name);
-    let chinese_instruction = build_chinese_instruction(target_lang, target_lang_name);
-
+/// Instructions for one song: what the job is, the style, the output format.
+pub fn system_prompt(target_lang: &str, style: &str, custom_prompt: Option<&str>) -> String {
+    let tl = get_language_name(target_lang);
+    let style = match custom_prompt.map(str::trim).filter(|c| !c.is_empty()) {
+        Some(custom) => custom.to_string(),
+        None => style_rules(style, tl),
+    };
+    let script = script_rule(target_lang);
     format!(
-        r#"## TRANSLATION TASK
-Translate the following lyrics from {} to {}.{}
+        "You translate song lyrics for a lyrics app. The listener is playing the song, and the \
+app already shows its original lyrics line by line; you supply only the {tl} translation shown \
+under each line.
 
-{}
+- Read the whole song first; keep one speaker, one set of pronouns and consistent tense throughout.
+- A phrase the song repeats gets the same translation each time it repeats.
+- Keep names, symbols and wordplay as they are meant (a price tag stays a price tag).
+- Keep the original's quotation marks; add none of your own.
+- A line already in {tl}, or a pure vocalization (la la, oh), is repeated unchanged.{script}
 
-Original lyrics ({}):
-{}
+{style}
 
-## OUTPUT FORMAT
-Provide BOTH original and translated lyrics together using this EXACT format:
-[Original Line]<sep>[Translated Line]
-
-Each line MUST contain the separator "<sep>" with original on left, translation on right.
-No line numbers, timestamps, explanations, or commentary.
-
-Output ({}):"#,
-        source_lang_name,
-        target_lang_name,
-        chinese_instruction,
-        style_instruction,
-        source_lang_name,
-        lyrics,
-        target_lang_name
+The lines are numbered. Answer with one line per input line, in order, each starting with its number:
+1. translation of line 1
+2. translation of line 2
+Nothing else: no notes, headings or blank lines."
     )
 }
 
-fn build_style_instruction(style: &str, target_lang_name: &str) -> String {
+/// The lyrics, numbered from 1.
+pub fn user_prompt(lines: &[&str], source_lang: &str, target_lang: &str) -> String {
+    let numbered: Vec<String> = lines.iter().enumerate().map(|(i, l)| format!("{}. {}", i + 1, l.trim())).collect();
+    format!(
+        "Translate each numbered {} line into {}:\n\n{}",
+        get_language_name(source_lang),
+        get_language_name(target_lang),
+        numbered.join("\n")
+    )
+}
+
+fn style_rules(style: &str, tl: &str) -> String {
     match style {
         "literal" => format!(
-            "You are a precise lyrics translator to {}.
-Priorities: (1) word-for-word accuracy, (2) grammatical correctness, (3) meaning preservation.
-
-Process:
-1) Maintain exact line structure and word order where grammatically possible
-2) Translate each line independently with minimal interpretation
-3) Keep all names/emojis/special markers unchanged
-4) Preserve original tense, pronouns, and specific terms
-5) Only adjust for basic grammar requirements of {}
-
-Constraints:
-• No commentary/footnotes
-• Output exactly the same number of lines
-• Minimal cultural adaptation - stay close to source",
-            target_lang_name, target_lang_name
+            "Style: close. Stay with the original's words and word order as far as {tl} grammar \
+allows. Add nothing, leave nothing out."
         ),
         "rhyming" => format!(
-            "You are a context-aware lyrics translator/adaptor to {}.
-Priorities: (1) rhyme scheme preservation, (2) line-to-line musical flow, (3) overall rhythm consistency, (4) meaning fidelity.
-
-Process:
-1) Read all lyrics first; identify rhyme patterns, meter, and musical structure
-2) Translate by verse/chorus sections, ensuring smooth transitions between rhyming lines
-3) Allow moderate paraphrase to achieve singable rhymes in {} while maintaining flow
-4) Keep names/emojis/special markers; balance rhyme with natural line progression
-5) Unify vocabulary across verses; prefer musical/rhythmic phrasing that connects lines seamlessly
-
-Special Focus - Rhyming Flow:
-• Ensure rhyming lines connect naturally, not just phonetically
-• Maintain consistent meter that allows smooth singing between lines
-• Create bridges between non-rhyming lines within verses
-• Preserve the song's rhythmic momentum throughout
-
-Constraints:
-• No commentary/footnotes
-• Output exactly in requested format
-• Maintain singability and rhyme structure with seamless transitions",
-            target_lang_name, target_lang_name
+            "Style: singable. Let lines rhyme in {tl} where the original's do, and keep a rhythm \
+that can be sung; rephrase as much as that needs, but keep each line's meaning."
         ),
         "poetic" => format!(
-            "You are a context-aware lyrics translator/adaptor to {}.
-Priorities: (1) artistic beauty, (2) line-to-line poetic flow, (3) emotional impact, (4) cultural resonance.
-
-Process:
-1) Read all lyrics first; infer artistic intent, imagery, and emotional arc
-2) Translate by stanza with focus on poetic devices and smooth metaphor transitions
-3) Allow creative adaptation to capture artistic essence in {} while maintaining poetic continuity
-4) Keep names/emojis/special markers; enhance poetic elements that bridge lines beautifully
-5) Unify tone and imagery; prefer evocative phrasing that creates seamless poetic progression
-
-Special Focus - Poetic Flow:
-• Ensure each line builds upon the previous one poetically
-• Maintain consistent poetic voice and imagery throughout
-• Create graceful transitions between metaphors and concepts
-• Preserve the emotional crescendo across consecutive lines
-
-Constraints:
-• No commentary/footnotes
-• Output exactly in requested format
-• Prioritize artistic impact with smooth line-to-line transitions",
-            target_lang_name, target_lang_name
+            "Style: poetic. Choose evocative {tl} phrasing and keep the song's imagery and \
+emotional arc; keep each line's meaning, and add nothing the original doesn't suggest."
         ),
-        "natural" | _ => format!(
-            "You are a context-aware lyrics translator/adaptor to {}.
-Priorities: (1) scenario fit & naturalness, (2) line-to-line fluency, (3) whole-song coherence, (4) meaning fidelity.
-
-Process:
-1) Read all lyrics first; infer roles, mood, setting, time, register, and recurring motifs
-2) Translate by stanza ensuring smooth line transitions. Allow light paraphrase/reordering to sound natural in {}
-3) Keep names/emojis/special markers; prioritize seamless line-to-line flow over strict literalness
-4) Unify pronouns/tense/terms across the whole song; prefer idiomatic {} with consistent voice
-5) Final fluency sweep: ensure each line flows naturally into the next, removing awkward transitions and contradictions
-
-Special Focus - Line Transitions:
-• Check that consecutive lines connect smoothly (grammatically and semantically)
-• Maintain consistent narrative voice and perspective throughout
-• Preserve the song's emotional arc with gradual builds and releases
-• Ensure parallel structures in repeated sections (chorus, bridge)
-
-Constraints:
-• No commentary/footnotes
-• Output exactly in requested format",
-            target_lang_name, target_lang_name, target_lang_name
+        _ => format!(
+            "Style: natural. Translate the meaning faithfully, in natural {tl} grammar and word \
+order; rephrase only where a literal version would read awkwardly, never to embellish. Add no \
+imagery, emphasis or emotion the original doesn't have, and leave nothing out. Consecutive lines \
+should read as one flowing text."
         ),
     }
 }
 
-fn build_chinese_instruction(target_lang: &str, target_lang_name: &str) -> String {
-    if target_lang.starts_with("zh") {
-        format!(
-            r#"
+/// Which Chinese script, said plainly: models drift into the other one.
+fn script_rule(target_lang: &str) -> &'static str {
+    match target_lang {
+        "zh-tw" => "\n- Write Traditional Chinese as used in Taiwan (學習, 電腦, 發生, 著), never Simplified, with full-width punctuation (，。？！：).",
+        "zh-hk" => "\n- Write Traditional Chinese as used in Hong Kong (學習, 電腦, 發生, 著), never Simplified, with full-width punctuation (，。？！：).",
+        "zh" | "zh-cn" => "\n- Write Simplified Chinese (学习, 电脑, 发生), never Traditional, with full-width punctuation (，。？！：).",
+        _ => "",
+    }
+}
 
-## CRITICAL CHINESE VARIANT REQUIREMENTS
-Target is {} - you MUST follow these rules:
-- If target is "zh" or "zh-cn": Use SIMPLIFIED Chinese characters (简体中文) from Mainland China
-- If target is "zh-tw": Use TRADITIONAL Chinese characters (繁體中文) from Taiwan/ROC
-- If target is "zh-hk": Use TRADITIONAL Chinese characters (繁體中文) from Hong Kong
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-WRONG: Converting zh-tw request to Simplified Chinese (简体中文)
-CORRECT: Converting zh-tw request to Traditional Chinese (繁體中文)
+    #[test]
+    fn the_lyrics_go_in_numbered_and_the_original_is_never_asked_back() {
+        let user = user_prompt(&["  一行目", "二行目"], "ja", "en");
+        assert!(user.ends_with("1. 一行目\n2. 二行目"), "{user}");
+        let system = system_prompt("en", "natural", None);
+        assert!(system.contains("starting with its number"));
+        assert!(!system.contains("<sep>") && !system.to_lowercase().contains("original line"));
+    }
 
-Character Examples:
-- Simplified: 学习, 电脑, 发生, 国家
-- Traditional: 學習, 電腦, 發生, 國家
+    #[test]
+    fn a_custom_prompt_replaces_the_style_but_not_the_format() {
+        let system = system_prompt("en", "natural", Some("Translate like a pirate."));
+        assert!(system.contains("Translate like a pirate.") && !system.contains("Style: natural"));
+        assert!(system.contains("starting with its number"));
+    }
 
-You MUST use the correct character set for {}!"#,
-            target_lang_name, target_lang_name
-        )
-    } else {
-        String::new()
+    #[test]
+    fn chinese_targets_name_their_script() {
+        assert!(system_prompt("zh-tw", "natural", None).contains("Traditional Chinese as used in Taiwan"));
+        assert!(system_prompt("zh-cn", "natural", None).contains("Simplified Chinese"));
+        assert!(!system_prompt("ja", "natural", None).contains("Chinese"));
     }
 }

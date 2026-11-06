@@ -20,6 +20,10 @@ const VERSION: u32 = 1;
 pub enum Task {
     Translation,
     Cleaning,
+    /// Translates a song the translation route declined (a refusal) or failed
+    /// on. Only ever the route the user set: lyrics go to no provider they
+    /// didn't choose for them.
+    Backup,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -35,6 +39,8 @@ pub struct Routes {
     pub translation: Option<Route>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cleaning: Option<Route>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup: Option<Route>,
 }
 
 impl Routes {
@@ -42,6 +48,7 @@ impl Routes {
         match task {
             Task::Translation => &mut self.translation,
             Task::Cleaning => &mut self.cleaning,
+            Task::Backup => &mut self.backup,
         }
     }
 }
@@ -197,6 +204,11 @@ pub fn resolve(task: Task, call_keys: &[AdhocKey]) -> Option<Target> {
     }
 }
 
+/// `Store::translation_backup` on the global store.
+pub fn translation_backup() -> Option<Target> {
+    GLOBAL.get().and_then(|state| lock(state).translation_backup())
+}
+
 /// Poisoning only means another thread panicked mid-update; the data is
 /// still a valid `Store`, so keep going rather than take the app down.
 pub fn lock(state: &LlmState) -> std::sync::MutexGuard<'_, Store> {
@@ -297,7 +309,7 @@ impl Store {
         let before = self.settings.providers.len();
         self.settings.providers.retain(|p| p.id != id);
         let routes = &mut self.settings.routes;
-        for task in [Task::Translation, Task::Cleaning] {
+        for task in [Task::Translation, Task::Cleaning, Task::Backup] {
             let slot = routes.slot(task);
             if slot.as_ref().is_some_and(|r| r.provider_id == id) {
                 *slot = None;
@@ -349,10 +361,11 @@ impl Store {
         let own = match task {
             Task::Translation => &routes.translation,
             Task::Cleaning => &routes.cleaning,
+            Task::Backup => &routes.backup,
         };
         own.as_ref().and_then(to_target).or_else(|| match task {
             Task::Cleaning => routes.translation.as_ref().and_then(to_target),
-            Task::Translation => None,
+            Task::Translation | Task::Backup => None,
         })
     }
 
@@ -368,6 +381,14 @@ impl Store {
                     None
                 }
             })
+    }
+
+    /// The backup route for translation, unless it is the translation route
+    /// itself (asking the same model again would only repeat the answer).
+    pub fn translation_backup(&self) -> Option<Target> {
+        let routes = &self.settings.routes;
+        let backup = routes.backup.as_ref().filter(|b| routes.translation.as_ref() != Some(*b))?;
+        self.target_for(&backup.provider_id, &backup.model).ok()
     }
 
     /// Create GitHub Models / Gemini instances from old frontend keys and
@@ -611,6 +632,32 @@ mod tests {
         assert_eq!(v.routes.cleaning, route(&b.id, "n"));
         assert!(s.set_route(Task::Translation, route(&a.id, "m")).is_err());
         assert!(s.set_route(Task::Translation, route(&b.id, "  ")).is_err());
+    }
+
+    #[test]
+    fn the_translation_backup_is_only_the_route_the_user_set() {
+        let mut s = Store::in_memory();
+        let a = s.upsert(input("anthropic", Some("k-anthropic"))).unwrap();
+        let g = s.upsert(input("gemini", Some("k-gemini"))).unwrap();
+        s.set_route(Task::Translation, route(&a.id, "claude-sonnet-5-5")).unwrap();
+        s.set_route(Task::Cleaning, route(&g.id, "gemini-3.5-flash-lite")).unwrap();
+        // Gemini is set up and routed for cleaning, but not as a backup: no backup.
+        assert!(s.translation_backup().is_none());
+        // Backup routes don't stand in for anything else.
+        assert!(s.resolve(Task::Backup, &[], &[]).is_none());
+
+        s.set_route(Task::Backup, route(&g.id, "gemini-3.5-pro")).unwrap();
+        let b = s.translation_backup().unwrap();
+        assert_eq!((b.preset.id, b.model.as_str()), (GEMINI, "gemini-3.5-pro"));
+
+        // The translation route itself as backup would only repeat it.
+        s.set_route(Task::Backup, route(&a.id, "claude-sonnet-5-5")).unwrap();
+        assert!(s.translation_backup().is_none());
+
+        // Removing its provider clears the backup route too.
+        s.set_route(Task::Backup, route(&g.id, "gemini-3.5-pro")).unwrap();
+        s.remove(&g.id).unwrap();
+        assert!(s.view().routes.backup.is_none());
     }
 
     #[test]

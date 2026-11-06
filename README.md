@@ -18,6 +18,8 @@ React) finds the lyrics and keeps them in time with the song.
 - **Translation with your own AI provider.** OpenAI, Anthropic, Google Gemini,
   OpenRouter, Groq, DeepSeek, Mistral, xAI, or a local Ollama or LM Studio. Show the
   translation under each line or on its own; choose a style, or write your own prompt.
+  If the provider declines a song (some models won't translate copyrighted lyrics)
+  or is down, the translation backup you pick in Settings → AI providers takes it.
 - **Furigana for Japanese,** over or under the kanji, or with the kanji replaced by kana.
 - **Word-by-word highlighting** when the lyrics have word timing. With word-level
   timing on (YouTube Music, experimental), Lyryc downloads a speech model and
