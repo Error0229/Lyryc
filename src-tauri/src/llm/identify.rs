@@ -239,9 +239,22 @@ static FAILED: LazyLock<Mutex<HashMap<(String, String, bool), Instant>>> = LazyL
 
 /// Drop the remembered answers for a song: the lyrics they led to were wrong.
 /// "Search again" also skips a failure's cool-down: the user asked now.
+/// Remember a failed call (and forget expired ones, so the map stays small).
+fn note_failure(key: (String, String, bool)) {
+    let mut failed = lock(&FAILED);
+    failed.retain(|_, at| at.elapsed() < RETRY_AFTER);
+    failed.insert(key, Instant::now());
+}
+
+/// A plain map behind a mutex: if a holder ever panicked, the map is still
+/// fine to use, so a poisoned lock doesn't take every later lookup down.
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 pub fn forget(raw_title: &str, raw_artist: &str) {
-    ANSWERS.lock().unwrap().retain(|(title, artist, _), _| title != raw_title || artist != raw_artist);
-    FAILED.lock().unwrap().retain(|(title, artist, _), _| title != raw_title || artist != raw_artist);
+    lock(&ANSWERS).retain(|(title, artist, _), _| title != raw_title || artist != raw_artist);
+    lock(&FAILED).retain(|(title, artist, _), _| title != raw_title || artist != raw_artist);
 }
 
 /// Canonical names for a raw player title, using the cleaning route.
@@ -258,10 +271,10 @@ pub async fn identify_song(
     web_search: bool,
 ) -> Result<Option<SongIdentity>, String> {
     let key = (raw_title.to_string(), raw_artist.to_string(), web_search);
-    if let Some(answer) = ANSWERS.lock().unwrap().get(&key) {
+    if let Some(answer) = lock(&ANSWERS).get(&key) {
         return Ok(answer.clone());
     }
-    if let Some(at) = FAILED.lock().unwrap().get(&key).filter(|at| at.elapsed() < RETRY_AFTER) {
+    if let Some(at) = lock(&FAILED).get(&key).filter(|at| at.elapsed() < RETRY_AFTER) {
         return Err(format!("failed {}s ago; retrying after {}s", at.elapsed().as_secs(), RETRY_AFTER.as_secs()));
     }
     let Some(target) = resolve(Task::Cleaning, &[]) else {
@@ -275,16 +288,16 @@ pub async fn identify_song(
         Ok(Err(e)) => {
             // Not remembered as an answer: a network or quota failure may pass.
             warn!("Song identification failed: {e}");
-            FAILED.lock().unwrap().insert(key, Instant::now());
+            note_failure(key);
             return Err(e.to_string());
         }
         Err(_) => {
             warn!("Song identification took over {}s; going on without it", limit.as_secs());
-            FAILED.lock().unwrap().insert(key, Instant::now());
+            note_failure(key);
             return Err("timed out".into());
         }
     };
-    ANSWERS.lock().unwrap().insert(key, answer.clone());
+    lock(&ANSWERS).insert(key, answer.clone());
     Ok(answer)
 }
 

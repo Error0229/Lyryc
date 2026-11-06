@@ -223,7 +223,8 @@ fn watch_outside(w: WebviewWindow) {
 #[cfg(not(windows))]
 fn watch_outside(_: WebviewWindow) {}
 
-/// (a mouse button is down, Esc is down, the cursor is over the menu).
+/// (a mouse button is down, Esc is down, the cursor is over the menu). Only
+/// those: no other key's state is read.
 #[cfg(windows)]
 fn input_now(w: &WebviewWindow) -> (bool, bool, bool) {
     use windows_sys::Win32::Foundation::{POINT, RECT};

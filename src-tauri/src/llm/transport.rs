@@ -33,7 +33,7 @@ pub enum Lane {
 fn slots(target: &Target, lane: Lane) -> Arc<Semaphore> {
     static SLOTS: LazyLock<Mutex<HashMap<String, Arc<Semaphore>>>> = LazyLock::new(Default::default);
     let key = format!("{}|{}|{:?}", target.label, target.base_url, lane);
-    SLOTS.lock().unwrap().entry(key).or_insert_with(|| Arc::new(Semaphore::new(MAX_IN_FLIGHT))).clone()
+    SLOTS.lock().unwrap_or_else(|e| e.into_inner()).entry(key).or_insert_with(|| Arc::new(Semaphore::new(MAX_IN_FLIGHT))).clone()
 }
 
 /// Bulk requests to one provider start at least this far apart. Free tiers
@@ -56,7 +56,7 @@ async fn pace(target: &Target, lane: Lane) {
     }
     static NEXT: LazyLock<Mutex<HashMap<String, Instant>>> = LazyLock::new(Default::default);
     let at = {
-        let mut next = NEXT.lock().unwrap();
+        let mut next = NEXT.lock().unwrap_or_else(|e| e.into_inner());
         let key = format!("{}|{}", target.label, target.base_url);
         let (at, after) = reserve(next.get(&key).copied(), Instant::now());
         next.insert(key, after);
