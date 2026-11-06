@@ -25,8 +25,8 @@ const params = new URLSearchParams(typeof location === "undefined" ? "" : locati
 export const mockScenario = params.get("scenario") ?? "playing";
 
 const songs = [englishSong, japaneseSong];
-/** The fake cache of lyrics, translations and timings. */
-let cacheBytes = 15_400_000;
+/** The fake cache of lyrics, translations and timings (empty still has a few KB). */
+let cache = { entries: 790, bytes: 11_600_000 };
 let songIndex = mockScenario === "furigana" ? 1 : 0;
 let playing = !params.has("paused");
 let base = Number(params.get("t") ?? 0);
@@ -226,10 +226,10 @@ export const mockBackend: Backend = {
     setPrealign({ enabled: false, state: "off", download: null, diskBytes: 0 });
     return prealign;
   },
-  cacheSize: async () => cacheBytes,
+  cacheSize: async () => cache,
   async cacheClear() {
-    cacheBytes = 0;
-    return cacheBytes;
+    cache = { entries: 0, bytes: 24_576 };
+    return cache;
   },
 
   updateStatus: async () => update,
