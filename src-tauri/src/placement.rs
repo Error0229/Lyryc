@@ -293,6 +293,8 @@ pub struct Strip {
     hover: Hover,
     /// Click-through is off right now because the cursor is on a clickable rect.
     hit_open: bool,
+    /// Where the system last had the window when `put_back` moved it.
+    put_back_from: Option<Rect>,
 }
 
 pub type StripState = Mutex<Strip>;
@@ -365,6 +367,7 @@ pub fn init(app: &AppHandle) {
         hits: Vec::new(),
         hover: Hover::default(),
         hit_open: false,
+        put_back_from: None,
     }));
     // No native shadow: it would box the transparent room, and it adds an
     // invisible frame (`set_bounds` measures one anyway). The overlay draws its own outline.
@@ -396,6 +399,8 @@ fn apply(app: &AppHandle) {
         let k = s.display.scale;
         s.strip = strip.scaled(k).round();
         let r = window_of(strip, s.room).scaled(k).round();
+        // Exact: both sides are whole physical pixels. A default `bounds`
+        // (`put_back`) never matches, so that forces the move.
         let changed = r != s.bounds;
         s.bounds = r;
         changed.then_some(r)
@@ -661,22 +666,53 @@ fn put_back(app: &AppHandle) {
     let now = Rect { x: pos.x as f64, y: pos.y as f64, w: size.width as f64, h: size.height as f64 };
     let (list, primary) = displays(app);
     let moved = with(app, |s| {
-        if now == s.bounds || list.is_empty() {
-            return None;
+        let verdict = put_back_verdict(now, s.bounds, &mut s.put_back_from);
+        if verdict != PutBack::Move || list.is_empty() {
+            return (verdict, None);
         }
         if !list.contains(&s.display) {
             let (i, placement) = s.store.choose(&list, primary);
+            debug_assert!(i < list.len(), "choose picked display {i} of {}", list.len());
             s.display = list[i.min(list.len() - 1)].clone();
             s.placement = placement;
         }
-        s.bounds = Rect::default(); // stale: make `apply` move it
-        Some((now, s.display.key.clone(), s.placement.anchor))
-    })
-    .flatten();
-    let Some((now, key, anchor)) = moved else { return };
+        s.bounds = Rect::default(); // stale: makes `apply` move it
+        (verdict, Some((s.display.key.clone(), s.placement.anchor)))
+    });
+    let Some((verdict, target)) = moved else { return };
+    if verdict == PutBack::GiveUp {
+        warn!("placement: the system keeps the window at {now:?}; leaving it there");
+    }
+    let Some((key, anchor)) = target else { return };
     info!("placement: the window was moved to {now:?} by the system; putting it back on {key}");
     apply(app);
     tell_anchor(app, anchor);
+}
+
+#[derive(Debug, PartialEq)]
+enum PutBack {
+    /// The window is where we put it.
+    InPlace,
+    Move,
+    /// It is where it was before our last put-back: the system won't let it
+    /// move (a clamp, say). Moving it again would fire another move event and
+    /// loop, so it stays; only the system moving it again asks again.
+    GiveUp,
+}
+
+/// What to do about a locked window at `now` that we put at `bounds`.
+/// `tried` remembers the spot the last put-back moved it from, until the
+/// window is seen in place again.
+fn put_back_verdict(now: Rect, bounds: Rect, tried: &mut Option<Rect>) -> PutBack {
+    if now == bounds {
+        *tried = None;
+        return PutBack::InPlace;
+    }
+    if tried.replace(now) == Some(now) {
+        PutBack::GiveUp
+    } else {
+        PutBack::Move
+    }
 }
 
 /// The display under a window (physical px) and the placement its strip would settle to.
@@ -927,6 +963,23 @@ mod tests {
     fn display(key: &str, x: f64) -> Display {
         let bounds = Rect { x, y: 0.0, w: 1920.0, h: 1080.0 };
         Display { key: key.into(), scale: 1.0, bounds, work: Rect { h: 1032.0, ..bounds } }
+    }
+
+    #[test]
+    fn a_locked_window_the_system_moved_goes_back_once() {
+        let ours = Rect { x: 216.0, y: -60.0, w: 1488.0, h: 164.0 };
+        let pulled = Rect { x: 216.0, y: 0.0, w: 1488.0, h: 190.0 };
+        let mut tried = None;
+        assert_eq!(put_back_verdict(ours, ours, &mut tried), PutBack::InPlace, "our own move");
+        assert_eq!(put_back_verdict(pulled, ours, &mut tried), PutBack::Move);
+        // It came back: the next system move is put back too.
+        assert_eq!(put_back_verdict(ours, ours, &mut tried), PutBack::InPlace);
+        assert_eq!(put_back_verdict(pulled, ours, &mut tried), PutBack::Move);
+        // It didn't come back (the system holds it there): stop, don't loop.
+        assert_eq!(put_back_verdict(pulled, Rect::default(), &mut tried), PutBack::GiveUp);
+        // Somewhere new is a new move.
+        let elsewhere = Rect { y: 20.0, ..pulled };
+        assert_eq!(put_back_verdict(elsewhere, ours, &mut tried), PutBack::Move);
     }
 
     #[test]
