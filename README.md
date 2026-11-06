@@ -35,7 +35,11 @@ SoundCloud it detects the track and shows lyrics. Builds are Windows only.
 2. Download and unzip `lyryc-extension.zip`. In `chrome://extensions` (or
    `edge://extensions`), turn on **Developer mode**, click **Load unpacked** and
    pick the folder.
-3. Reload the music tab.
+3. Reload the music tab. The extension only sees tabs opened or reloaded after
+   it's installed.
+
+The first time, the strip opens unlocked so you can place it. Lock it once it's
+where you want it.
 
 To translate, add a provider under **Settings → AI providers**, then turn on
 **Translation**.
@@ -57,8 +61,9 @@ The tray icon's menu does the same, and opens Settings.
 
 ## Privacy
 
-API keys stay in `%APPDATA%\com.lyryc.app\llm-settings.json` and go only to
-their own provider. Your AI provider gets song titles and the lyrics you
+API keys are kept in plain JSON in `%APPDATA%\com.lyryc.app\llm-settings.json`,
+readable by anything running as you, and go only to their own provider. A plain
+`http://` address (a local Ollama or LM Studio) sends the key unencrypted. Your AI provider gets song titles and the lyrics you
 translate. Lyrics lookups send the title, artist and length to the lyrics sites.
 Word timing downloads the song's audio, aligns it locally and deletes it. The
 extension talks only to the app, on `localhost:8765`.
