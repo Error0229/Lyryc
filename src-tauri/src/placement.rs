@@ -297,7 +297,7 @@ pub struct Strip {
 
 pub type StripState = Mutex<Strip>;
 
-/// Bumped by every user move or resize; a settle only runs for the latest one.
+/// Bumped by every move or resize of the window; only the latest one is acted on.
 static MOVES: AtomicU64 = AtomicU64::new(0);
 /// Our drag is running: the window's moves are its own.
 static DRAGGING: AtomicBool = AtomicBool::new(false);
@@ -605,20 +605,26 @@ pub fn reset(app: &AppHandle) {
     }
 }
 
-/// The user moved or resized the strip: once it has rested (and the mouse
-/// button is up), snap it, anchor it to the nearer edge and save.
+/// The window moved or resized. Unlocked, the user did it: once it has rested
+/// (and the mouse button is up), snap it, anchor it to the nearer edge and
+/// save. Locked, the user can't move it, so once it has rested it is either
+/// where we put it or the system moved it (`put_back`). Waiting out the rest
+/// also lets our own queued moves land before anything is compared.
 pub fn on_window_event(window: &Window, event: &WindowEvent) {
     if window.label() != "main" || !matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_)) {
         return;
     }
     let app = window.app_handle().clone();
-    if locked(&app) || DRAGGING.load(Ordering::SeqCst) {
-        return; // only our own moves: the user can't drag a locked strip, and our drag settles as it goes
+    if DRAGGING.load(Ordering::SeqCst) {
+        return; // our drag settles as it goes
     }
+    let moved_by_user = !locked(&app);
     // While it is still moving, the overlay follows: the toolbar swaps sides as
     // soon as the strip crosses the middle, not after the drop.
-    if let Some((_, (_, p))) = placement_now(&app) {
-        tell_anchor(&app, p.anchor);
+    if moved_by_user {
+        if let Some((_, (_, p))) = placement_now(&app) {
+            tell_anchor(&app, p.anchor);
+        }
     }
     let mine = MOVES.fetch_add(1, Ordering::SeqCst) + 1;
     tauri::async_runtime::spawn(async move {
@@ -629,10 +635,48 @@ pub fn on_window_event(window: &Window, event: &WindowEvent) {
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        if MOVES.load(Ordering::SeqCst) == mine {
+        if MOVES.load(Ordering::SeqCst) != mine {
+            return;
+        }
+        if moved_by_user {
             settle(&app);
+        } else if locked(&app) {
+            put_back(&app);
         }
     });
+}
+
+/// A locked window that isn't where we put it was moved by the system: after
+/// sleep, a lock or a display change, Windows pulls a window whose top hangs
+/// off-screen (the room above a top-anchored strip) back onto the screen. The
+/// cursor poll and the hit rects still go by `bounds`, so the strip would draw
+/// in one place and take hover and the Unlock click in another. Put it back,
+/// on its display if that display is still there.
+fn put_back(app: &AppHandle) {
+    let Some(w) = main_window(app) else { return };
+    if w.is_minimized().unwrap_or(false) {
+        return;
+    }
+    let (Ok(pos), Ok(size)) = (w.inner_position(), w.inner_size()) else { return };
+    let now = Rect { x: pos.x as f64, y: pos.y as f64, w: size.width as f64, h: size.height as f64 };
+    let (list, primary) = displays(app);
+    let moved = with(app, |s| {
+        if now == s.bounds || list.is_empty() {
+            return None;
+        }
+        if !list.contains(&s.display) {
+            let (i, placement) = s.store.choose(&list, primary);
+            s.display = list[i.min(list.len() - 1)].clone();
+            s.placement = placement;
+        }
+        s.bounds = Rect::default(); // stale: make `apply` move it
+        Some((now, s.display.key.clone(), s.placement.anchor))
+    })
+    .flatten();
+    let Some((now, key, anchor)) = moved else { return };
+    info!("placement: the window was moved to {now:?} by the system; putting it back on {key}");
+    apply(app);
+    tell_anchor(app, anchor);
 }
 
 /// The display under a window (physical px) and the placement its strip would settle to.
