@@ -6,7 +6,6 @@
 //! - One translation per lyric line, or a retry in smaller pieces
 //! - Progressive retry strategies
 
-
 pub mod cache;
 mod language;
 mod parser;

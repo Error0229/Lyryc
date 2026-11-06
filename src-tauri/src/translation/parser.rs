@@ -56,7 +56,8 @@ fn parse_paired_format(
 
     let mut used = vec![false; pairs.len()];
     let mut next = 0;
-    let mut misses = 0;
+    let mut misses = 0; // reworded echoes and missing lines
+    let mut missing = 0; // lines with no translation at all
     let mut out = Vec::with_capacity(original_lyrics.len());
     for (i, line) in original_lyrics.iter().enumerate() {
         let exact = (next..pairs.len()).chain(0..next).find(|&j| !used[j] && pairs[j].0 == keys[i]);
@@ -73,6 +74,7 @@ fn parse_paired_format(
             }
             None => {
                 misses += 1;
+                missing += 1;
                 warn!("[Parse Path: NEW_FORMAT_MISSING] Line {}: '{}' has no translation", i, line.text.trim());
                 (line.text.clone(), 0.0)
             }
@@ -90,8 +92,10 @@ fn parse_paired_format(
 
     if misses == 0 {
         info!("[Parse Path: NEW_FORMAT_SUCCESS] Paired format parsing successful: {} lines", out.len());
-    } else if misses * 2 > out.len() {
-        return Err(format!("the reply fits only {} of {} lines", out.len() - misses, out.len()));
+    } else if missing * 2 > out.len() {
+        // Most of the song untranslated: not an answer to keep. A reworded
+        // echo still carries its line's translation, so it doesn't count.
+        return Err(format!("the reply translates only {} of {} lines", out.len() - missing, out.len()));
     } else {
         warn!("[Parse Path: NEW_FORMAT_PARTIAL] Completed with {} mismatches out of {} lines", misses, out.len());
     }
@@ -188,15 +192,20 @@ mod tests {
 
     #[test]
     fn a_reply_that_is_not_a_translation_is_an_error_not_a_guess() {
+        let five = lines(&["a", "b", "c", "d", "e"]);
         // A refusal with a summary: 3 lines of prose for 5 lyric lines.
-        let refusal = "I can't reproduce these lyrics.
-Here is a summary:
-The song is about loneliness.";
-        assert!(parse_translation_response(refusal, &lines(&["a", "b", "c", "d", "e"]), "en").is_err());
-        // Paired, but most lines missing.
-        let partial = format!("a{s}A
-b{s}B", s = TRANSLATION_SEPARATOR);
-        assert!(parse_translation_response(&partial, &lines(&["a", "b", "c", "d", "e"]), "en").is_err());
+        let refusal = ["I can't reproduce these lyrics.", "Here is a summary:", "The song is about loneliness."].join("
+");
+        assert!(parse_translation_response(&refusal, &five, "en").is_err());
+        // Paired, but most lines missing (3 of 5): an error. Two missing is kept.
+        let paired = |pairs: &[&str]| pairs.iter().map(|p| p.replace('|', TRANSLATION_SEPARATOR)).collect::<Vec<_>>().join("
+");
+        assert!(parse_translation_response(&paired(&["a|A", "b|B"]), &five, "en").is_err());
+        assert!(parse_translation_response(&paired(&["a|A", "b|B", "c|C"]), &five, "en").is_ok());
+        // Every echo reworded: each line still has its translation.
+        let reworded = paired(&["a!|A", "b!|B", "c!|C", "d!|D", "e!|E"]);
+        let reworded = reworded.replace("a!", "a x").replace("b!", "b x").replace("c!", "c x").replace("d!", "d x").replace("e!", "e x");
+        assert!(parse_translation_response(&reworded, &five, "en").is_ok());
         // One line per original, without echoes: fine.
         let (out, _) = parse_translation_response("A
 B", &lines(&["a", "b"]), "en").unwrap();

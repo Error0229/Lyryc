@@ -185,9 +185,16 @@ async fn translate_line_by_line(
 
     for line in lyrics {
         let single_line = vec![line.clone()];
-        let line_result = translate_once(&single_line, config, target).await?;
+        // The last resort: a line whose reply doesn't fit stays untranslated
+        // instead of failing the song. A service failure still ends it.
+        let line_result = match translate_once(&single_line, config, target).await {
+            Ok(result) => Some(result),
+            Err(e) if e.retry_smaller() => None,
+            Err(e) => return Err(e),
+        };
+        let line_result = line_result.filter(|r| r.success && !r.translated_lines.is_empty());
 
-        if !line_result.success || line_result.translated_lines.is_empty() {
+        let Some(line_result) = line_result else {
             all_translated_lines.push(TranslatedLyricLine {
                 time: line.time,
                 text: line.text.clone(),
@@ -197,11 +204,11 @@ async fn translate_line_by_line(
                 translation_confidence: Some(0.0),
                 detected_language: detected_language.clone(),
             });
-        } else {
-            all_translated_lines.extend(line_result.translated_lines);
-            if detected_language.is_none() {
-                detected_language = line_result.detected_language;
-            }
+            continue;
+        };
+        all_translated_lines.extend(line_result.translated_lines);
+        if detected_language.is_none() {
+            detected_language = line_result.detected_language;
         }
     }
 
