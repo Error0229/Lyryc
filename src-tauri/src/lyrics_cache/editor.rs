@@ -118,6 +118,12 @@ fn words(lines: &[LyricLine]) -> String {
     lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n")
 }
 
+/// What the editor edits of each line. Not its word onsets: the editor
+/// doesn't send them, so they mustn't make an untouched line look edited.
+fn timed(lines: &[LyricLine]) -> Vec<(f64, &str, Option<f64>)> {
+    lines.iter().map(|l| (l.time, l.text.as_str(), l.duration)).collect()
+}
+
 /// Every saved translation: (key, the words it translates, its lines).
 fn all_translations(conn: &Connection) -> rusqlite::Result<Vec<(String, String, Vec<String>)>> {
     let mut q = conn.prepare("SELECT key, result_json FROM translation_cache")?;
@@ -252,7 +258,7 @@ fn apply(conn: &Connection, artist: &str, track: &str, change: Change) -> rusqli
             lines.sort_by(|a, b| a.time.total_cmp(&b.time));
             let index = Index::load(conn)?;
             let same_words = words(&lines) == words(&old);
-            if lines != old {
+            if timed(&lines) != timed(&old) {
                 if !same_words {
                     for t in index.translations(&old) {
                         conn.execute("DELETE FROM translation_cache WHERE key = ?1", params![t.key])?;
@@ -337,6 +343,7 @@ pub async fn saved_song_change(app: AppHandle, artist: String, track: String, ch
 mod tests {
     use super::super::{cache_aligned_in, cache_translation_in, create_aligned_table, create_lyrics_table, create_translation_table};
     use super::*;
+    use crate::types::LyricWord;
 
     fn line(time: f64, text: &str) -> LyricLine {
         LyricLine { time, text: text.into(), duration: None, words: None }
@@ -449,6 +456,19 @@ mod tests {
         assert!(change_in(&conn, "a", "t", save(vec![], vec![])).is_err());
         let d = detail(&conn);
         assert_eq!((d.song.kind, d.lines.len(), d.song.translations), ("lyrics", 2, 1));
+    }
+
+    #[test]
+    fn lines_sent_back_without_their_word_onsets_are_untouched() {
+        let (conn, mut lines) = cache();
+        lines[0].words = Some(vec![LyricWord { time: 1.0, text: "夜".into(), duration: None }]);
+        conn.execute("UPDATE lyrics_cache SET lyrics_json = ?1", params![serde_json::to_string(&lines).unwrap()]).unwrap();
+        let sent = lines.iter().map(|l| LyricLine { words: None, ..l.clone() }).collect();
+        let fixed = SavedTranslation { key: "k".into(), lines: vec!["Dawn's town".into(), "I walked with you".into()] };
+        assert!(change_in(&conn, "a", "t", save(sent, vec![fixed])).unwrap().is_empty());
+        let d = detail(&conn);
+        assert_eq!((d.song.source.as_deref(), d.song.timings, &d.lines), (Some("lrclib"), 1, &lines));
+        assert_eq!(d.translations[0].lines[0], "Dawn's town");
     }
 
     #[test]
