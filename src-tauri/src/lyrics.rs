@@ -517,6 +517,9 @@ pub enum TimingSource {
     /// to +11 s). Lines still light up, but word alignment of this recording
     /// wins wherever it disagrees.
     OriginalTiming,
+    /// Lyrics the user edited in Settings → Saved lyrics: taken as real
+    /// timing for this recording, and never looked up again.
+    Edited,
 }
 
 impl TimingSource {
@@ -535,6 +538,7 @@ impl TimingSource {
             TimingSource::CoverEstimate => "cover-estimate",
             TimingSource::SourcesEstimate => "sources-estimate",
             TimingSource::OriginalTiming => "original-timing",
+            TimingSource::Edited => "edited",
         }
     }
 
@@ -564,6 +568,7 @@ impl TimingSource {
             Some("cover-estimate") => TimingSource::CoverEstimate,
             Some("sources-estimate") => TimingSource::SourcesEstimate,
             Some("original-timing") => TimingSource::OriginalTiming,
+            Some("edited") => TimingSource::Edited,
             _ => TimingSource::Lrclib,
         }
     }

@@ -16,7 +16,7 @@
  * `estimate` serves LRCLIB-style plain lyrics: the right text, guessed timing.
  * `ytmusic` serves the lyrics as YouTube Music's own timed lyrics.
  */
-import type { Backend, BackendEvents } from "./backend";
+import type { Backend, BackendEvents, SavedChange, SavedSongDetail } from "./backend";
 import type { LookupStage, LyricLine, PrealignStatus, Span, UpdateStatus } from "../../lib/types";
 import { translationKey } from "../../lib/lyrics";
 import { englishSong, japaneseSong, readings, type MockSong } from "./mockData";
@@ -25,6 +25,50 @@ const params = new URLSearchParams(typeof location === "undefined" ? "" : locati
 export const mockScenario = params.get("scenario") ?? "playing";
 
 const songs = [englishSong, japaneseSong];
+/** The fake cache of lyrics, translations and timings (empty still has a few KB). */
+let cache = { entries: 790, bytes: 11_600_000 };
+
+/** The fake cache's songs, editable from Settings → Saved lyrics. */
+const DAY = 86_400;
+const now = () => Math.floor(Date.now() / 1000);
+function savedSong(s: MockSong, source: string, age: number, timing: boolean): SavedSongDetail {
+  const lines = s.lines.map(({ time, text, duration }) => ({ time, text, duration }));
+  const translated = lines.map((l) => s.translations[translationKey(l.text)] ?? "");
+  const translations = translated.some(Boolean) ? [{ key: `${s.track.title}-tr`, lines: translated }] : [];
+  const timings = timing ? [{ videoId: "dQw4w9WgXcQ", hash: "h", rejected: false }] : [];
+  return { song: summary(s.track.artist, s.track.title, "lyrics", source, now() - age * DAY, lines.length, translations.length, timings.length), lines, translations, timings };
+}
+function summary(artist: string, track: string, kind: "lyrics" | "missing" | "instrumental", source: string | null, cachedAt: number, lines = 0, translations = 0, timings = 0) {
+  return { artist: artist.toLowerCase(), track: track.toLowerCase(), kind, source, lines, cachedAt, expiresAt: source === "edited" ? null : cachedAt + 30 * DAY, translations, timings };
+}
+const saved: SavedSongDetail[] = [
+  savedSong(englishSong, "lrclib", 1, true),
+  savedSong(japaneseSong, "ytmusic", 3, false),
+  { song: summary("Nobody Knows", "Unreleased Demo", "missing", null, now() - 9 * DAY), lines: [], translations: [], timings: [] },
+  { song: summary("Rain Machine", "Interlude", "instrumental", "instrumental", now() - 20 * DAY), lines: [], translations: [], timings: [] },
+];
+function changeSaved(d: SavedSongDetail, c: SavedChange): SavedSongDetail | null {
+  const recount = (x: SavedSongDetail) => ({ ...x, song: { ...x.song, lines: x.lines.length, translations: x.translations.length, timings: x.timings.length } });
+  switch (c.op) {
+    case "forget":
+      return null;
+    case "mark":
+      return recount({ ...d, lines: [], translations: [], timings: [], song: { ...d.song, kind: c.instrumental ? "instrumental" : "missing", source: c.instrumental ? "instrumental" : null } });
+    case "forgetTranslation":
+      return recount({ ...d, translations: d.translations.filter((t) => t.key !== c.key) });
+    case "forgetTiming":
+      return recount({ ...d, timings: d.timings.filter((t) => t.videoId !== c.videoId) });
+    case "save": {
+      const lines = [...c.lines].sort((a, b) => a.time - b.time);
+      const words = (ls: LyricLine[]) => ls.map((l) => l.text).join("\n");
+      const sameWords = words(lines) === words(d.lines);
+      const changed = JSON.stringify(lines) !== JSON.stringify(d.lines);
+      const translations = sameWords ? d.translations.map((t) => c.translations.find((n) => n.key === t.key) ?? t) : [];
+      const song = changed ? { ...d.song, kind: "lyrics" as const, source: "edited", cachedAt: now(), expiresAt: null } : d.song;
+      return recount({ song, lines, translations, timings: changed ? [] : d.timings });
+    }
+  }
+}
 let songIndex = mockScenario === "furigana" ? 1 : 0;
 let playing = !params.has("paused");
 let base = Number(params.get("t") ?? 0);
@@ -223,6 +267,21 @@ export const mockBackend: Backend = {
   async prealignRemoveFiles() {
     setPrealign({ enabled: false, state: "off", download: null, diskBytes: 0 });
     return prealign;
+  },
+  cacheSize: async () => cache,
+  savedSongs: async () => saved.map((d) => d.song),
+  savedSong: async (artist, track) => saved.find((d) => d.song.artist === artist && d.song.track === track) ?? null,
+  async savedSongChange(artist, track, change) {
+    const i = saved.findIndex((d) => d.song.artist === artist && d.song.track === track);
+    if (i < 0) return null;
+    const next = changeSaved(saved[i], change);
+    if (next) saved[i] = next;
+    else saved.splice(i, 1);
+    return next;
+  },
+  async cacheClear() {
+    cache = { entries: 0, bytes: 24_576 };
+    return cache;
   },
 
   updateStatus: async () => update,

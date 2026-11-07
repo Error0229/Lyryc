@@ -5,7 +5,7 @@ import { textSignature, translationKey } from "../lib/lyrics";
 import { hasKanji, isJapaneseSong } from "../lib/japanese";
 import { useSession } from "../state/session";
 import { useSettings } from "../state/settings";
-import { applyLyrics, reportLlmError, setTrack } from "./actions";
+import { applyLyrics, reloadSaved, reportLlmError, setTrack } from "./actions";
 import { playhead } from "./playhead";
 import { ROOM_PX, ROOM_X_PX, songRows, stripHeight, wantsTranslation, type Rows } from "./rows";
 import { sameTrack } from "./upgrade";
@@ -64,6 +64,10 @@ export function useBackendEvents() {
       prealign: followAligner,
       llmSettings: () => useSession.setState((s) => ({ llmRevision: s.llmRevision + 1 })),
       ahead: pretranslate,
+      savedLyrics: (song) => {
+        recent.clear(); // an edited translation line, or a deleted translation
+        void reloadSaved(song);
+      },
     });
   }, []);
 }

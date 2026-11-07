@@ -13,6 +13,7 @@ import { Switch } from "../../ui/Switch";
 import { PageHeader } from "../Page";
 import { useCurrentTrack } from "../useTrack";
 import { presetOf, useLlm } from "../providers/useLlm";
+import { SavedLyrics } from "./SavedLyrics";
 import { WordTiming } from "./WordTiming";
 
 /**
@@ -111,6 +112,7 @@ export function LyricsPage() {
           <Switch label="Prepare lyrics for upcoming songs" checked={lookahead} onChange={settings.setLookahead} />
         </Row>
         <WordTiming />
+        <SavedLyrics />
       </Section>
 
       <Section title="Sync" description="Positive values show lyrics earlier. The overlay's ± buttons adjust the current track.">

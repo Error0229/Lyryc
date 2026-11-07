@@ -36,6 +36,8 @@ export interface BackendEvents {
   timingFinal: (track: Pick<Track, "title" | "artist">) => void;
   /** Word-level timing: download progress and state changes (`prealign-status`). */
   prealign: (s: PrealignStatus) => void;
+  /** A song's saved lyrics were edited in Settings (`saved-lyrics-changed`): names as the cache keys them. */
+  savedLyrics: (song: Pick<Track, "title" | "artist">) => void;
   /** The lookahead found an upcoming song's lyrics (`lyrics-ahead`): translate them before it plays. */
   ahead: (lines: LyricLine[]) => void;
   /** AI providers or routes changed, in any window (`llm-settings-changed`). */
@@ -84,6 +86,16 @@ export interface Backend {
   prealignStatus(): Promise<PrealignStatus>;
   /** "Prepare lyrics for upcoming songs", mirrored like `prealignConfigure`. */
   lookaheadConfigure(enabled: boolean, extraSources: boolean): Promise<void>;
+  /** The cache of lyrics, translations and word timings: how much is saved. */
+  cacheSize(): Promise<CacheSize>;
+  /** Empties that cache; resolves to what is left. */
+  cacheClear(): Promise<CacheSize>;
+  /** Every saved song, newest first. */
+  savedSongs(): Promise<SavedSong[]>;
+  /** One saved song with its lines, translations and word timings; null once it's gone. */
+  savedSong(artist: string, track: string): Promise<SavedSongDetail | null>;
+  /** Applies the user's change to a saved song and resolves to the song as it is now. */
+  savedSongChange(artist: string, track: string, change: SavedChange): Promise<SavedSongDetail | null>;
   /** Deletes the model, runtime and yt-dlp, and turns the feature off. */
   prealignRemoveFiles(): Promise<PrealignStatus>;
   /** The backend checks for updates by itself; `updateCheck` is "Check now". */
@@ -93,6 +105,58 @@ export interface Backend {
   updateInstall(): Promise<void>;
   subscribe(on: Partial<BackendEvents>): () => void;
 }
+
+/** `cache_size`: entries across lyrics, translations and timings, and bytes on disk. */
+export interface CacheSize {
+  entries: number;
+  bytes: number;
+}
+
+/** `saved_songs`: a song in the cache. `artist`/`track` are lowercase, as the cache keys them. */
+export interface SavedSong {
+  artist: string;
+  track: string;
+  /** "missing": nothing was found for it. */
+  kind: "lyrics" | "missing" | "instrumental";
+  source: string | null;
+  lines: number;
+  cachedAt: number;
+  /** Unix seconds when it's looked up again; null: kept (edited lyrics). */
+  expiresAt: number | null;
+  translations: number;
+  timings: number;
+}
+
+/** A saved translation: one line per lyric line. */
+export interface SavedTranslation {
+  key: string;
+  lines: string[];
+}
+
+/** Saved word timing for one YouTube video; `rejected`: aligned and thrown away. */
+export interface SavedTiming {
+  videoId: string;
+  hash: string;
+  rejected: boolean;
+}
+
+export interface SavedSongDetail {
+  song: SavedSong;
+  lines: LyricLine[];
+  translations: SavedTranslation[];
+  timings: SavedTiming[];
+}
+
+/**
+ * `saved_song_change`. A save drops the song's translations when the words
+ * change, and its word timing when the lines change at all.
+ */
+export type SavedChange =
+  | { op: "save"; lines: LyricLine[]; translations: SavedTranslation[] }
+  | { op: "forget" }
+  | { op: "mark"; instrumental: boolean }
+  | { op: "forgetTranslation"; key: string }
+  | { op: "forgetTiming"; videoId: string; hash: string };
 
 /** Wire shape of the `lyrics-timing-updated` payload. */
 interface TimingUpdate {
@@ -178,6 +242,11 @@ const tauriBackend: Backend = {
   prealignStatus: () => invoke<PrealignStatus>("prealign_status"),
   lookaheadConfigure: (enabled, extraSources) => invoke<void>("lookahead_configure", { enabled, extraSources }),
   prealignRemoveFiles: () => invoke<PrealignStatus>("prealign_remove_files"),
+  cacheSize: () => invoke<CacheSize>("cache_size"),
+  cacheClear: () => invoke<CacheSize>("cache_clear"),
+  savedSongs: () => invoke<SavedSong[]>("saved_songs"),
+  savedSong: (artist, track) => invoke<SavedSongDetail | null>("saved_song", { artist, track }),
+  savedSongChange: (artist, track, change) => invoke<SavedSongDetail | null>("saved_song_change", { artist, track, change }),
   updateStatus: () => invoke<UpdateStatus>("update_status"),
   updateCheck: () => invoke<UpdateStatus>("update_check"),
   updateInstall: () => invoke<void>("update_install"),
@@ -203,6 +272,7 @@ const tauriBackend: Backend = {
         listen<{ title: string; artist: string }>("lyrics-timing-final", ({ payload: p }) => on.timingFinal!({ title: p.title, artist: p.artist })),
       on.llmSettings && listen("llm-settings-changed", () => on.llmSettings!()),
       on.ahead && listen<LyricLine[]>("lyrics-ahead", (e) => on.ahead!(e.payload)),
+      on.savedLyrics && listen<{ title: string; artist: string }>("saved-lyrics-changed", (e) => on.savedLyrics!(e.payload)),
       on.update && listen<UpdateStatus>("update-status", (e) => on.update!(e.payload)),
     ].filter((p): p is Promise<() => void> => !!p);
     return () => pending.forEach((p) => void p.then((off) => off()));

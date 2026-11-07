@@ -1,7 +1,7 @@
 /** Overlay side effects that are not tied to a component. */
 import { backend } from "../services/ipc/backend";
 import { friendlyError, isNotConfigured } from "../services/ipc/llmClient";
-import { normalizeLines, textSignature } from "../lib/lyrics";
+import { normalizeLines, songCacheKey, textSignature } from "../lib/lyrics";
 import type { LyricLine, LyricsSource, Track } from "../lib/types";
 import { useSession } from "../state/session";
 import { useSettings } from "../state/settings";
@@ -71,6 +71,27 @@ export async function refetchLyrics() {
     else useSession.setState({ status: "missing", source: null });
   } finally {
     if (id === request) useSession.setState({ refetching: false });
+  }
+}
+
+const cacheKey = (t: Pick<Track, "title" | "artist">) => songCacheKey(t.artist, t.title);
+
+/**
+ * The user edited this song's saved lyrics in Settings: show what is saved
+ * now, whatever is showing (word timing included), and translate it again
+ * from the cache. Other songs' edits are for when they play.
+ */
+export async function reloadSaved(song: Pick<Track, "title" | "artist">) {
+  const { track } = useSession.getState();
+  if (!track || cacheKey(track) !== cacheKey(song)) return;
+  const id = ++request;
+  useSession.setState((s) => ({ translations: {}, llmRevision: s.llmRevision + 1 }));
+  try {
+    const { extraSources, identifyWithSearch } = useSettings.getState();
+    const r = await backend.fetchLyrics(track, extraSources, identifyWithSearch);
+    if (id === request) install(r.lines, r.source, r.pending);
+  } catch {
+    if (id === request) useSession.setState({ lyrics: [], source: null, status: "missing" });
   }
 }
 

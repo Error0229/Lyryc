@@ -3,6 +3,7 @@ import { Dialog as D } from "radix-ui";
 import { X } from "lucide-react";
 import { IconButton } from "./IconButton";
 import { Button } from "./Button";
+import { cx } from "../lib/cx";
 
 export interface DialogProps {
   open: boolean;
@@ -11,14 +12,22 @@ export interface DialogProps {
   description?: ReactNode;
   children?: ReactNode;
   footer?: ReactNode;
+  /** "lg": a fixed tall panel whose body scrolls under a fixed header and footer. */
+  size?: "md" | "lg";
 }
 
-export function Dialog({ open, onOpenChange, title, description, children, footer }: DialogProps) {
+export function Dialog({ open, onOpenChange, title, description, children, footer, size = "md" }: DialogProps) {
+  const lg = size === "lg";
   return (
     <D.Root open={open} onOpenChange={onOpenChange}>
       <D.Portal>
         <D.Overlay className="fixed inset-0 z-(--z-scrim) bg-scrim data-[state=closed]:animate-fade-out data-[state=open]:animate-fade-in" />
-        <D.Content className="fixed top-1/2 left-1/2 z-(--z-dialog) grid max-h-[85vh] w-[min(480px,calc(100vw-48px))] -translate-1/2 gap-5 overflow-y-auto rounded-xl bg-surface p-5 shadow-3 focus:outline-none data-[state=closed]:animate-dialog-out data-[state=open]:animate-dialog-in">
+        <D.Content
+          className={cx(
+            "fixed top-1/2 left-1/2 z-(--z-dialog) -translate-1/2 gap-5 rounded-xl bg-surface p-5 shadow-3 focus:outline-none data-[state=closed]:animate-dialog-out data-[state=open]:animate-dialog-in",
+            lg ? "flex h-[85vh] w-[min(880px,calc(100vw-48px))] flex-col" : "grid max-h-[85vh] w-[min(480px,calc(100vw-48px))] overflow-y-auto",
+          )}
+        >
           <header className="flex items-start justify-between gap-4">
             <div>
               <D.Title className="text-base font-semibold text-fg">{title}</D.Title>
@@ -32,7 +41,7 @@ export function Dialog({ open, onOpenChange, title, description, children, foote
               <IconButton label="Close" icon={<X />} />
             </D.Close>
           </header>
-          {children}
+          {lg ? <div className="-mx-5 min-h-0 flex-1 overflow-y-auto px-5">{children}</div> : children}
           {footer && <footer className="flex justify-end gap-2">{footer}</footer>}
         </D.Content>
       </D.Portal>
