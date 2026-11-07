@@ -61,8 +61,12 @@ The tray icon's menu does the same, and opens Settings.
 
 ## Privacy
 
-API keys are kept in plain JSON in `%APPDATA%\com.lyryc.app\llm-settings.json`,
-readable by anything running as you, and go only to their own provider. A plain
+API keys are kept in your system's credential store (Windows Credential Manager,
+macOS Keychain, or Secret Service on Linux), not in Lyryc's settings file, and go
+only to their own provider. That keeps them out of backups and synced folders,
+but a program already running as you can still read them; a key with a spending
+limit is safest. With no working keyring, Lyryc falls back to plain text in
+`llm-settings.json` and says so in Settings. A plain
 `http://` address (a local Ollama or LM Studio) sends the key unencrypted. Your AI provider gets song titles and the lyrics you
 translate. Lyrics lookups send the title, artist and length to the lyrics sites.
 Word timing downloads the song's audio, aligns it locally and deletes it. The

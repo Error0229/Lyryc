@@ -50,6 +50,9 @@ lindera-core = "0.24"
 sha2 = "0.10"
 num_cpus = "1"
 unicode-normalization = "0.1"
+# LLM API keys rest in the OS credential store (src/llm/vault.rs). Every store
+# is named: with none enabled, keyring 3 silently uses a mock that forgets.
+keyring = { version = "3.6", features = ["windows-native", "apple-native", "sync-secret-service", "crypto-rust", "vendored"] }
 
 [dev-dependencies]
 csv = "1"

@@ -1,6 +1,7 @@
-//! Backend-owned LLM settings: provider instances (with keys) and per-task
-//! routes, persisted as JSON in the app config dir. Keys never leave this
-//! module in full; the frontend sees `hasKey` and a masked `keyHint`.
+//! Backend-owned LLM settings: provider instances and per-task routes,
+//! persisted as JSON in the app config dir; their keys rest in the OS keyring
+//! (`vault.rs`). Keys never leave this module in full; the frontend sees
+//! `hasKey` and a masked `keyHint`.
 
 use log::warn;
 use serde::{Deserialize, Serialize};
@@ -10,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use super::presets::{self, Preset, GEMINI, GITHUB};
+use super::vault::{NoKeyring, OsKeyring, Vault};
 use super::Target;
 
 pub const FILE_NAME: &str = "llm-settings.json";
@@ -61,11 +63,23 @@ struct ProviderRecord {
     preset_id: String,
     label: String,
     base_url: String,
+    /// In memory, the key wherever it rests. On disk only when no keyring
+    /// would take it, and in files written before keys moved to the keyring.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     api_key: Option<String>,
+    /// The OS keyring holds this provider's key, under its id.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    in_keyring: bool,
 }
 
-#[derive(Default, Serialize, Deserialize)]
+impl ProviderRecord {
+    /// A key the keyring doesn't hold yet: it would go to disk as plain text.
+    fn key_outside_keyring(&self) -> bool {
+        self.api_key.is_some() && !self.in_keyring
+    }
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Settings {
     #[serde(default)]
@@ -93,6 +107,9 @@ pub struct LlmProvider {
 pub struct LlmSettings {
     pub providers: Vec<LlmProvider>,
     pub routes: Routes,
+    /// Some key sits in the settings file as plain text: this machine has no
+    /// working keyring.
+    pub keys_in_file: bool,
 }
 
 #[derive(Default, Deserialize)]
@@ -176,6 +193,7 @@ fn adhoc_target(keys: &[AdhocKey]) -> Option<Target> {
 pub struct Store {
     path: Option<PathBuf>,
     settings: Settings,
+    vault: Box<dyn Vault>,
 }
 
 pub type LlmState = Arc<Mutex<Store>>;
@@ -186,7 +204,11 @@ static GLOBAL: OnceLock<LlmState> = OnceLock::new();
 /// Tauri state (cleaning inside `fetch_lyrics`) see the same settings.
 pub fn init(dir: Option<PathBuf>) -> LlmState {
     let store = match dir {
-        Some(dir) => Store::load(dir.join(FILE_NAME)),
+        Some(dir) => {
+            let mut store = Store::load(dir.join(FILE_NAME));
+            store.secure_keys();
+            store
+        }
         None => {
             warn!("No app config dir; LLM settings will not persist");
             Store::in_memory()
@@ -220,11 +242,18 @@ impl Store {
         Store {
             path: None,
             settings: Settings::default(),
+            vault: Box::new(NoKeyring),
         }
     }
 
+    /// Read the file and fetch its keys from the OS keyring. Writes nothing:
+    /// a plaintext key stays put until `secure_keys` or the next save.
     pub fn load(path: PathBuf) -> Self {
-        let settings = match fs::read_to_string(&path) {
+        Self::load_with(path, Box::new(OsKeyring))
+    }
+
+    pub fn load_with(path: PathBuf, vault: Box<dyn Vault>) -> Self {
+        let mut settings: Settings = match fs::read_to_string(&path) {
             Ok(text) => serde_json::from_str(&text).unwrap_or_else(|e| {
                 let backup = path.with_extension("json.corrupt");
                 warn!(
@@ -236,26 +265,73 @@ impl Store {
             }),
             Err(_) => Settings::default(),
         };
+        for p in settings.providers.iter_mut().filter(|p| p.in_keyring) {
+            match vault.get(&p.id) {
+                Ok(Some(key)) => p.api_key = Some(key),
+                Ok(None) => warn!("{}: no key in the system keyring; enter it again", p.label),
+                // Keep the marker: the keyring may answer next launch, and a
+                // save must not mistake "unreadable" for "no key".
+                Err(e) => warn!("{}: system keyring unreadable ({e}); its key is unavailable", p.label),
+            }
+        }
         Store {
             path: Some(path),
             settings,
+            vault,
         }
     }
 
+    /// Move plaintext keys from the file into the keyring. One-way; a no-op
+    /// once done, and when there is no keyring to move them to.
+    pub fn secure_keys(&mut self) {
+        if !self.settings.providers.iter().any(ProviderRecord::key_outside_keyring) {
+            return;
+        }
+        if let Err(e) = self.save() {
+            warn!("Could not move LLM keys into the system keyring: {e}");
+        }
+    }
+
+    /// Hand new keys to the keyring, then write the file without them.
     fn save(&mut self) -> Result<(), String> {
         let Some(path) = &self.path else {
             return Ok(());
         };
-        self.settings.version = VERSION;
-        let json = serde_json::to_vec_pretty(&self.settings).map_err(|e| e.to_string())?;
+        for p in self.settings.providers.iter_mut().filter(|p| p.key_outside_keyring()) {
+            match self.vault.set(&p.id, p.api_key.as_deref().unwrap_or_default()) {
+                Ok(()) => p.in_keyring = true,
+                Err(e) => warn!("System keyring refused {}'s key ({e}); keeping it in {FILE_NAME}", p.label),
+            }
+        }
+        let mut disk = self.settings.clone();
+        disk.version = VERSION;
+        for p in disk.providers.iter_mut().filter(|p| p.in_keyring) {
+            p.api_key = None;
+        }
+        let json = serde_json::to_vec_pretty(&disk).map_err(|e| e.to_string())?;
         write_private_atomic(path, &json)
             .map_err(|e| format!("Could not save LLM settings to {}: {e}", path.display()))
     }
 
+    /// Delete `rec`'s key from the keyring. A failure leaves an orphan entry
+    /// that nothing points to any more, not a key in use.
+    fn forget_key(&self, rec: &mut ProviderRecord) {
+        if !rec.in_keyring {
+            return;
+        }
+        if let Err(e) = self.vault.delete(&rec.id) {
+            warn!("Could not delete {}'s key from the system keyring: {e}", rec.label);
+        }
+        rec.in_keyring = false;
+    }
+
     pub fn view(&self) -> LlmSettings {
+        let providers = &self.settings.providers;
         LlmSettings {
-            providers: self.settings.providers.iter().map(view_provider).collect(),
+            providers: providers.iter().map(view_provider).collect(),
             routes: self.settings.routes.clone(),
+            keys_in_file: self.path.is_some()
+                && providers.iter().any(ProviderRecord::key_outside_keyring),
         }
     }
 
@@ -286,14 +362,19 @@ impl Store {
             None if preset_changed => rec.base_url = preset.base_url.to_string(),
             None => {}
         }
-        if let Some(key) = input.api_key {
-            rec.api_key = clean_key(&key);
-        }
         if !(rec.base_url.starts_with("http://") || rec.base_url.starts_with("https://")) {
             return Err(format!(
                 "{} needs a base URL starting with http:// or https://",
                 rec.label
             ));
+        }
+        // Only once nothing but the save can fail: a rejected edit must not
+        // have deleted the stored key already.
+        if let Some(key) = input.api_key.map(|k| clean_key(&k)) {
+            if key != rec.api_key {
+                self.forget_key(&mut rec);
+                rec.api_key = key;
+            }
         }
 
         let view = view_provider(&rec);
@@ -306,6 +387,9 @@ impl Store {
     }
 
     pub fn remove(&mut self, id: &str) -> Result<(), String> {
+        if let Some(mut rec) = self.find(id).cloned() {
+            self.forget_key(&mut rec);
+        }
         let before = self.settings.providers.len();
         self.settings.providers.retain(|p| p.id != id);
         let routes = &mut self.settings.routes;
@@ -446,6 +530,7 @@ fn new_record(preset: &Preset) -> ProviderRecord {
         label: preset.name.to_string(),
         base_url: preset.base_url.to_string(),
         api_key: None,
+        in_keyring: false,
     }
 }
 
@@ -501,11 +586,17 @@ fn write_private_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::llm::vault::MemVault;
 
     fn temp_path() -> PathBuf {
         std::env::temp_dir()
             .join(format!("lyryc-llm-test-{}", uuid::Uuid::new_v4().simple()))
             .join(FILE_NAME)
+    }
+
+    /// Tests never touch the real OS keyring.
+    fn open(path: &Path, vault: &MemVault) -> Store {
+        Store::load_with(path.to_path_buf(), Box::new(vault.clone()))
     }
 
     fn input(preset: &str, key: Option<&str>) -> ProviderInput {
@@ -532,9 +623,10 @@ mod tests {
     }
 
     #[test]
-    fn round_trips_through_disk_without_leaking_keys_in_view() {
+    fn round_trips_with_the_key_in_the_keyring_not_the_file_or_view() {
         let path = temp_path();
-        let mut store = Store::load(path.clone());
+        let vault = MemVault::default();
+        let mut store = open(&path, &vault);
         let p = store
             .upsert(input("openai", Some(" sk-test-1234567890 ")))
             .unwrap();
@@ -544,8 +636,9 @@ mod tests {
             .set_route(Task::Translation, route(&p.id, "gpt-x"))
             .unwrap();
 
-        let reloaded = Store::load(path.clone());
+        let reloaded = open(&path, &vault);
         assert_eq!(reloaded.view(), store.view());
+        assert!(!reloaded.view().keys_in_file);
         let t = reloaded.target_for(&p.id, "gpt-x").unwrap();
         assert_eq!(t.api_key.as_deref(), Some("sk-test-1234567890"));
 
@@ -555,7 +648,10 @@ mod tests {
         assert!(view_json.contains("\"providerId\""));
 
         let on_disk = fs::read_to_string(&path).unwrap();
-        assert!(on_disk.contains("\"apiKey\""));
+        assert!(!on_disk.contains("sk-test-1234567890"));
+        assert!(!on_disk.contains("\"apiKey\""));
+        assert!(on_disk.contains("\"inKeyring\": true"));
+        assert!(vault.has(&p.id));
         assert!(!path.with_extension("json.tmp").exists());
         #[cfg(unix)]
         {
@@ -567,11 +663,100 @@ mod tests {
     }
 
     #[test]
+    fn plaintext_keys_from_older_files_move_into_the_keyring() {
+        let path = temp_path();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let legacy = r#"{"version":1,"providers":[{"id":"openai-old","presetId":"openai","label":"OpenAI","baseUrl":"https://api.openai.com/v1","apiKey":"sk-legacy-1234567890"}],"routes":{"translation":{"providerId":"openai-old","model":"gpt-x"}}}"#;
+        fs::write(&path, legacy).unwrap();
+        let vault = MemVault::default();
+
+        // Loading alone writes nothing.
+        let mut s = open(&path, &vault);
+        assert!(s.view().keys_in_file);
+        assert!(!vault.has("openai-old"));
+
+        s.secure_keys();
+        assert!(!s.view().keys_in_file);
+        assert!(vault.has("openai-old"));
+        let on_disk = fs::read_to_string(&path).unwrap();
+        assert!(!on_disk.contains("sk-legacy"));
+        assert!(on_disk.contains("\"translation\""));
+
+        let t = open(&path, &vault).resolve(Task::Translation, &[], &[]).unwrap();
+        assert_eq!(t.api_key.as_deref(), Some("sk-legacy-1234567890"));
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn without_a_keyring_keys_stay_in_the_file_and_say_so() {
+        let path = temp_path();
+        let mut s = Store::load_with(path.clone(), Box::new(NoKeyring));
+        let p = s.upsert(input("openai", Some("sk-nokeyring-12345"))).unwrap();
+        assert!(s.view().keys_in_file);
+        let reloaded = Store::load_with(path.clone(), Box::new(NoKeyring));
+        let t = reloaded.target_for(&p.id, "m").unwrap();
+        assert_eq!(t.api_key.as_deref(), Some("sk-nokeyring-12345"));
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn clearing_or_removing_deletes_the_keyring_entry() {
+        let path = temp_path();
+        let vault = MemVault::default();
+        let mut s = open(&path, &vault);
+        let a = s.upsert(input("openai", Some("sk-aaaaaaaaaa"))).unwrap();
+        let b = s.upsert(input("mistral", Some("sk-bbbbbbbbbb"))).unwrap();
+        assert!(vault.has(&a.id) && vault.has(&b.id));
+
+        let clear = ProviderInput { id: Some(a.id.clone()), ..input("openai", Some("")) };
+        assert!(!s.upsert(clear).unwrap().has_key);
+        assert!(!vault.has(&a.id));
+
+        s.remove(&b.id).unwrap();
+        assert!(!vault.has(&b.id));
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn a_rejected_edit_keeps_the_stored_key() {
+        let path = temp_path();
+        let vault = MemVault::default();
+        let mut s = open(&path, &vault);
+        let local = || Some("http://localhost:1234/v1".to_string());
+        let p = s
+            .upsert(ProviderInput { base_url: local(), ..input("custom", Some("sk-keepme-123")) })
+            .unwrap();
+        let bad = ProviderInput {
+            id: Some(p.id.clone()),
+            base_url: Some("ftp://nope".into()),
+            ..input("custom", Some("sk-other-456"))
+        };
+        assert!(s.upsert(bad).is_err());
+        assert!(vault.has(&p.id));
+        let t = open(&path, &vault).target_for(&p.id, "m").unwrap();
+        assert_eq!(t.api_key.as_deref(), Some("sk-keepme-123"));
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn a_key_missing_from_the_keyring_reads_as_no_key() {
+        let path = temp_path();
+        let vault = MemVault::default();
+        let p = open(&path, &vault).upsert(input("openai", Some("sk-gone-1234567"))).unwrap();
+        vault.0.lock().unwrap().clear();
+        let s = open(&path, &vault);
+        assert!(!s.view().providers[0].has_key);
+        assert!(!s.view().keys_in_file);
+        assert_eq!(s.target_for(&p.id, "m").unwrap().api_key, None);
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
     fn corrupt_file_is_moved_aside() {
         let path = temp_path();
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, "{not json").unwrap();
-        let store = Store::load(path.clone());
+        let store = Store::load_with(path.clone(), Box::new(NoKeyring));
         assert!(store.view().providers.is_empty());
         assert!(path.with_extension("json.corrupt").exists());
         let _ = fs::remove_dir_all(path.parent().unwrap());
@@ -730,7 +915,8 @@ mod tests {
     #[test]
     fn import_legacy_is_idempotent() {
         let path = temp_path();
-        let mut s = Store::load(path.clone());
+        let vault = MemVault::default();
+        let mut s = open(&path, &vault);
         let keys = LegacyKeys {
             github_api_key: Some("ghp_legacy_token".into()),
             gemini_api_key: Some("AIza_legacy_key".into()),
@@ -751,7 +937,7 @@ mod tests {
 
         let second = s.import_legacy(&keys).unwrap();
         assert_eq!(second, first);
-        assert_eq!(Store::load(path.clone()).view(), first);
+        assert_eq!(open(&path, &vault).view(), first);
 
         // A different key creates a new instance but leaves routes alone.
         let third = s

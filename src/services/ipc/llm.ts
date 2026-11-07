@@ -47,6 +47,8 @@ export interface LlmRoute {
 export interface LlmSettings {
   providers: LlmProvider[];
   routes: Partial<Record<LlmTask, LlmRoute>>;
+  /** Some key is in the settings file as plain text: no working system keyring. */
+  keysInFile?: boolean;
 }
 
 export interface LlmProviderInput {
