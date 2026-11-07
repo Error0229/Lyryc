@@ -39,6 +39,8 @@ def main():
     ap.add_argument("--stems", action="store_true")
     ap.add_argument("--ids", default=None)
     ap.add_argument("--name", default=None)
+    ap.add_argument("--repo", default=None, help="CTC model repo (default: MMS forced aligner)")
+    ap.add_argument("--sep", action="store_true", help="insert the model's word separator between pieces")
     a = ap.parse_args()
     name = a.name or f"{a.backend}_t{a.threads}_c{a.chunk}" + (f"x{a.ctx}" if a.ctx else "") + ("_vocals" if a.stems else "")
     tracks = json.loads((ROOT / "tracks.json").read_text(encoding="utf-8"))
@@ -46,7 +48,7 @@ def main():
     preds, speed = {}, {}
     with PeakRSS() as mem:
         t0 = time.perf_counter()
-        model = Model(a.backend, a.threads, a.onnx)
+        model = Model(a.backend, a.threads, a.onnx, **({"repo": a.repo} if a.repo else {}), sep=a.sep)
         load_s = time.perf_counter() - t0
         for t in tracks:
             if a.ids and str(t["id"]) not in a.ids.split(","):

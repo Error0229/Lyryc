@@ -1,0 +1,13 @@
+{
+ "backend": "echora-kara cli",
+ "fusion": "on",
+ "text_bonus": 0.4,
+ "tracks": {
+  "16": {
+   "audio_s": 182,
+   "emission_s": 207.17615419998765,
+   "viterbi_s": 0.0,
+   "rtf": 1.1383305175823497
+  }
+ }
+}
