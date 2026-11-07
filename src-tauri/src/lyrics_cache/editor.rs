@@ -13,6 +13,7 @@ use log::info;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 use tauri::{AppHandle, Emitter};
 
 /// Tells the overlay a song's saved lyrics changed, so it shows the new ones.
@@ -139,29 +140,31 @@ fn all_timings(conn: &Connection) -> rusqlite::Result<Vec<SavedTiming>> {
     Ok(timings)
 }
 
-/// The cache, joined: each song with its translations and timings.
+/// The cache, joined: translations by the words they translate, timings by
+/// the hash of the text they were aligned to.
 struct Index {
-    translations: Vec<(String, String, Vec<String>)>,
-    timings: Vec<SavedTiming>,
+    translations: HashMap<String, Vec<SavedTranslation>>,
+    timings: HashMap<String, Vec<SavedTiming>>,
 }
 
 impl Index {
     fn load(conn: &Connection) -> rusqlite::Result<Self> {
-        Ok(Index { translations: all_translations(conn)?, timings: all_timings(conn)? })
+        let mut index = Index { translations: HashMap::new(), timings: HashMap::new() };
+        for (key, original, lines) in all_translations(conn)? {
+            index.translations.entry(original).or_default().push(SavedTranslation { key, lines });
+        }
+        for t in all_timings(conn)? {
+            index.timings.entry(t.hash.clone()).or_default().push(t);
+        }
+        Ok(index)
     }
 
     fn translations(&self, lines: &[LyricLine]) -> Vec<SavedTranslation> {
-        let text = words(lines);
-        self.translations
-            .iter()
-            .filter(|(_, original, _)| !lines.is_empty() && *original == text)
-            .map(|(key, _, lines)| SavedTranslation { key: key.clone(), lines: lines.clone() })
-            .collect()
+        self.translations.get(&words(lines)).cloned().unwrap_or_default()
     }
 
     fn timings(&self, lines: &[LyricLine]) -> Vec<SavedTiming> {
-        let hash = text_key(lines);
-        self.timings.iter().filter(|t| !lines.is_empty() && t.hash == hash).cloned().collect()
+        self.timings.get(&text_key(lines)).cloned().unwrap_or_default()
     }
 
     fn song(&self, row: &Row) -> SavedSong {
@@ -202,14 +205,15 @@ fn detail_in(conn: &Connection, artist: &str, track: &str) -> rusqlite::Result<O
     Ok(Some(Index::load(conn)?.detail(row)))
 }
 
-/// Puts edited lines into a saved translation, if it is one of these words.
+/// Puts edited lines into a saved translation of these words.
 fn edit_translation(conn: &Connection, key: &str, words_now: &str, lines: &[String]) -> rusqlite::Result<()> {
+    let gone = || refuse("the translation changed since the song was opened; open it again");
     let json: Option<String> = conn.query_row("SELECT result_json FROM translation_cache WHERE key = ?1", params![key], |r| r.get(0)).optional()?;
-    let Some(mut v) = json.and_then(|j| serde_json::from_str::<Value>(&j).ok()) else { return Ok(()) };
-    let Some(saved) = v["translated_lines"].as_array_mut().filter(|s| s.len() == lines.len()) else { return Ok(()) };
+    let mut v = json.and_then(|j| serde_json::from_str::<Value>(&j).ok()).ok_or_else(gone)?;
+    let saved = v["translated_lines"].as_array_mut().filter(|s| s.len() == lines.len()).ok_or_else(gone)?;
     let original = saved.iter().map(|l| l["original_text"].as_str().unwrap_or_default()).collect::<Vec<_>>().join("\n");
     if original != words_now {
-        return Ok(());
+        return Err(gone());
     }
     for (l, text) in saved.iter_mut().zip(lines) {
         l["translated_text"] = Value::from(text.as_str());
@@ -445,6 +449,16 @@ mod tests {
         assert!(change_in(&conn, "a", "t", save(vec![], vec![])).is_err());
         let d = detail(&conn);
         assert_eq!((d.song.kind, d.lines.len(), d.song.translations), ("lyrics", 2, 1));
+    }
+
+    #[test]
+    fn an_edit_to_a_translation_that_is_gone_is_refused() {
+        let (conn, lines) = cache();
+        let stale = SavedTranslation { key: "k".into(), lines: vec!["only one line".into()] };
+        assert!(change_in(&conn, "a", "t", save(lines.clone(), vec![stale])).is_err());
+        let gone = SavedTranslation { key: "nope".into(), lines: vec!["a".into(), "b".into()] };
+        assert!(change_in(&conn, "a", "t", save(lines, vec![gone])).is_err());
+        assert_eq!(detail(&conn).translations[0].lines[0], "The town at dawn");
     }
 
     #[test]
