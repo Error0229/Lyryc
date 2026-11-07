@@ -223,13 +223,27 @@ fn delete_timing(conn: &Connection, t: &SavedTiming) -> rusqlite::Result<()> {
     Ok(())
 }
 
-/// Applies a change; returns the timings it deleted, whose videos get
-/// aligned again (`prealign::forget`).
+/// A change the cache won't make; the message reaches the user.
+fn refuse(why: &str) -> rusqlite::Error {
+    rusqlite::Error::ToSqlConversionFailure(why.into())
+}
+
+/// Applies a change, all of it or none; returns the timings it deleted,
+/// whose videos get aligned again (`prealign::forget`).
 fn change_in(conn: &Connection, artist: &str, track: &str, change: Change) -> rusqlite::Result<Vec<String>> {
+    let tx = conn.unchecked_transaction()?;
+    let realign = apply(&tx, artist, track, change)?;
+    tx.commit()?;
+    Ok(realign)
+}
+
+fn apply(conn: &Connection, artist: &str, track: &str, change: Change) -> rusqlite::Result<Vec<String>> {
     let (artist, track) = song_key(artist, track);
     let old = row(conn, &artist, &track)?.and_then(|r| r.lines).unwrap_or_default();
     let mut realign = Vec::new();
     match change {
+        Change::Save { lines, .. } if lines.is_empty() => return Err(refuse("there are no lines to save; delete the lyrics instead")),
+        Change::Mark { .. } if !old.is_empty() => return Err(refuse("this song has lyrics; delete them first")),
         Change::Save { mut lines, translations } => {
             lines.sort_by(|a, b| a.time.total_cmp(&b.time));
             let index = Index::load(conn)?;
@@ -403,6 +417,7 @@ mod tests {
     #[test]
     fn a_song_without_lyrics_can_be_marked_and_given_some() {
         let (conn, lines) = cache();
+        change_in(&conn, "a", "t", Change::Forget).unwrap();
         change_in(&conn, "a", "t", Change::Mark { instrumental: true }).unwrap();
         assert_eq!(detail(&conn).song.kind, "instrumental");
         change_in(&conn, "a", "t", Change::Mark { instrumental: false }).unwrap();
@@ -421,6 +436,25 @@ mod tests {
         assert_eq!((detail(&conn).song.translations, detail(&conn).song.timings), (0, 0));
         change_in(&conn, "a", "t", Change::Forget).unwrap();
         assert!(detail_in(&conn, "a", "t").unwrap().is_none());
+    }
+
+    #[test]
+    fn a_song_with_lyrics_isnt_marked_or_emptied() {
+        let (conn, _) = cache();
+        assert!(change_in(&conn, "a", "t", Change::Mark { instrumental: true }).is_err());
+        assert!(change_in(&conn, "a", "t", save(vec![], vec![])).is_err());
+        let d = detail(&conn);
+        assert_eq!((d.song.kind, d.lines.len(), d.song.translations), ("lyrics", 2, 1));
+    }
+
+    #[test]
+    fn a_save_that_fails_halfway_changes_nothing() {
+        let (conn, _) = cache();
+        // The lyrics can't be written, after the translation and timing were deleted.
+        conn.execute_batch("CREATE TRIGGER no_write BEFORE INSERT ON lyrics_cache BEGIN SELECT RAISE(ABORT, 'locked'); END").unwrap();
+        assert!(change_in(&conn, "a", "t", save(vec![line(1.0, "new words")], vec![])).is_err());
+        let d = detail(&conn);
+        assert_eq!((d.lines[0].text.as_str(), d.song.translations, d.song.timings), ("夜明けの街を", 1, 1));
     }
 
     #[test]

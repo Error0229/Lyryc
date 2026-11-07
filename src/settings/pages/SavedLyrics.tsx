@@ -61,7 +61,7 @@ export function SavedLyrics() {
         open={confirm}
         onOpenChange={setConfirm}
         title="Clear saved lyrics?"
-        description="Forgets every saved lyric, translation and word timing. Songs are looked up and translated again as they play, which uses your AI provider again."
+        description="Forgets all saved lyrics, including ones you edited, and every translation and word timing. Songs are looked up and translated again as they play, which uses your AI provider again."
         confirmLabel="Clear"
         onConfirm={clear}
       />
