@@ -292,14 +292,23 @@ impl Store {
         }
     }
 
-    /// Hand new keys to the keyring, then write the file without them.
+    /// Hand new keys to the keyring, then write the file without them. If the
+    /// write fails, the old file may still hold those keys as plain text, so
+    /// they count as outside the keyring again (and the warning shows).
     fn save(&mut self) -> Result<(), String> {
         let Some(path) = &self.path else {
             return Ok(());
         };
-        for p in self.settings.providers.iter_mut().filter(|p| p.key_outside_keyring()) {
-            match self.vault.set(&p.id, p.api_key.as_deref().unwrap_or_default()) {
-                Ok(()) => p.in_keyring = true,
+        let mut stashed = Vec::new();
+        for (i, p) in self.settings.providers.iter_mut().enumerate() {
+            let Some(key) = p.api_key.as_deref().filter(|_| !p.in_keyring) else {
+                continue;
+            };
+            match self.vault.set(&p.id, key) {
+                Ok(()) => {
+                    p.in_keyring = true;
+                    stashed.push(i);
+                }
                 Err(e) => warn!("System keyring refused {}'s key ({e}); keeping it in {FILE_NAME}", p.label),
             }
         }
@@ -308,21 +317,31 @@ impl Store {
         for p in disk.providers.iter_mut().filter(|p| p.in_keyring) {
             p.api_key = None;
         }
-        let json = serde_json::to_vec_pretty(&disk).map_err(|e| e.to_string())?;
-        write_private_atomic(path, &json)
-            .map_err(|e| format!("Could not save LLM settings to {}: {e}", path.display()))
+        let written = serde_json::to_vec_pretty(&disk)
+            .map_err(|e| e.to_string())
+            .and_then(|json| {
+                write_private_atomic(path, &json)
+                    .map_err(|e| format!("Could not save LLM settings to {}: {e}", path.display()))
+            });
+        if written.is_err() {
+            for i in stashed {
+                self.settings.providers[i].in_keyring = false;
+            }
+        }
+        written
     }
 
-    /// Delete `rec`'s key from the keyring. A failure leaves an orphan entry
-    /// that nothing points to any more, not a key in use.
-    fn forget_key(&self, rec: &mut ProviderRecord) {
-        if !rec.in_keyring {
-            return;
+    /// Save, then delete `gone`'s keyring entry. Never the other way round:
+    /// a failed save leaves a file that still points at that key. A failed
+    /// delete only leaves an orphan entry nothing points to.
+    fn save_forgetting(&mut self, gone: Option<String>) -> Result<(), String> {
+        self.save()?;
+        if let Some(id) = gone {
+            if let Err(e) = self.vault.delete(&id) {
+                warn!("Could not delete {id}'s key from the system keyring: {e}");
+            }
         }
-        if let Err(e) = self.vault.delete(&rec.id) {
-            warn!("Could not delete {}'s key from the system keyring: {e}", rec.label);
-        }
-        rec.in_keyring = false;
+        Ok(())
     }
 
     pub fn view(&self) -> LlmSettings {
@@ -368,12 +387,16 @@ impl Store {
                 rec.label
             ));
         }
-        // Only once nothing but the save can fail: a rejected edit must not
-        // have deleted the stored key already.
+        // A new key overwrites the same keyring entry on save; a cleared one
+        // is deleted only after the file stops pointing at it.
+        let mut gone = None;
         if let Some(key) = input.api_key.map(|k| clean_key(&k)) {
             if key != rec.api_key {
-                self.forget_key(&mut rec);
+                if key.is_none() && rec.in_keyring {
+                    gone = Some(rec.id.clone());
+                }
                 rec.api_key = key;
+                rec.in_keyring = false;
             }
         }
 
@@ -382,14 +405,12 @@ impl Store {
             Some(slot) => *slot = rec,
             None => self.settings.providers.push(rec),
         }
-        self.save()?;
+        self.save_forgetting(gone)?;
         Ok(view)
     }
 
     pub fn remove(&mut self, id: &str) -> Result<(), String> {
-        if let Some(mut rec) = self.find(id).cloned() {
-            self.forget_key(&mut rec);
-        }
+        let gone = self.find(id).filter(|p| p.in_keyring).map(|p| p.id.clone());
         let before = self.settings.providers.len();
         self.settings.providers.retain(|p| p.id != id);
         let routes = &mut self.settings.routes;
@@ -402,7 +423,7 @@ impl Store {
         if self.settings.providers.len() == before {
             return Ok(());
         }
-        self.save()
+        self.save_forgetting(gone)
     }
 
     pub fn set_route(&mut self, task: Task, route: Option<Route>) -> Result<(), String> {
@@ -748,6 +769,49 @@ mod tests {
         assert!(!s.view().providers[0].has_key);
         assert!(!s.view().keys_in_file);
         assert_eq!(s.target_for(&p.id, "m").unwrap().api_key, None);
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// A settings path whose parent is a file, so every write fails.
+    fn unwritable(path: &Path) -> PathBuf {
+        let blocker = path.parent().unwrap().join("blocker");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&blocker, "").unwrap();
+        blocker.join(FILE_NAME)
+    }
+
+    #[test]
+    fn a_failed_rewrite_keeps_the_plaintext_warning() {
+        let path = temp_path();
+        let vault = MemVault::default();
+        let mut s = open(&path, &vault);
+        s.path = None; // build a plaintext key in memory without saving it
+        s.upsert(input("openai", Some("sk-stuck-in-file-123"))).unwrap();
+        s.path = Some(unwritable(&path));
+        s.secure_keys();
+        assert!(s.view().keys_in_file);
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn a_failed_removal_keeps_the_key() {
+        let path = temp_path();
+        let vault = MemVault::default();
+        let mut s = open(&path, &vault);
+        let p = s.upsert(input("openai", Some("sk-survivor-12345"))).unwrap();
+        let blocked = unwritable(&path);
+
+        let mut s = open(&path, &vault);
+        s.path = Some(blocked.clone());
+        assert!(s.remove(&p.id).is_err());
+
+        let mut s = open(&path, &vault);
+        s.path = Some(blocked);
+        let clear = ProviderInput { id: Some(p.id.clone()), ..input("openai", Some("")) };
+        assert!(s.upsert(clear).is_err());
+
+        let t = open(&path, &vault).target_for(&p.id, "m").unwrap();
+        assert_eq!(t.api_key.as_deref(), Some("sk-survivor-12345"));
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
