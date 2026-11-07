@@ -17,6 +17,7 @@ pub mod presets;
 mod search_experiment;
 pub mod store;
 mod transport;
+mod vault;
 
 use serde_json::Value;
 use std::fmt;

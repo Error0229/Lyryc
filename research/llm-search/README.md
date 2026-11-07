@@ -9,7 +9,7 @@ Lyrics are not committed. `data/.http/` (the LRCLIB cache) and `results/raw/` (m
 
 ## Keys
 
-The runners use the Gemini key saved in Lyryc's `llm-settings.json`:
+The runners use the Gemini key saved in Lyryc (its provider in `llm-settings.json`, the key in Windows Credential Manager):
 - default location: `%APPDATA%\com.lyryc.app\`;
 - override with `LYRYC_LLM_SETTINGS=<path>`.
 

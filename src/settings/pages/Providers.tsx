@@ -79,7 +79,16 @@ export function ProvidersPage() {
 
   return (
     <div className="grid gap-8">
-      <PageHeader title="AI providers" description="Bring your own API key. Keys are stored by Lyryc on this computer and never shown again." />
+      <PageHeader
+        title="AI providers"
+        description="Bring your own API key. Keys are kept in your system's credential store and never shown again. A key with a spending limit is safest."
+      />
+
+      {settings?.keysInFile && (
+        <Callout tone="warning" title="Keys aren't encrypted on this computer">
+          No system keyring answered, so Lyryc keeps your API keys in its settings file as plain text. On Linux, start a keyring such as GNOME Keyring or KWallet and restart Lyryc.
+        </Callout>
+      )}
 
       {error && (
         <Callout tone="danger" title="Couldn't load providers">
