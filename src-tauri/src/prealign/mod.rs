@@ -6,8 +6,8 @@
 //! few that will play (`UPCOMING_TRACKS`). One background worker takes them in
 //! order: playing track first, then up to three ahead. For each song it gets
 //! the lyrics through the normal lookup, downloads that exact video's audio with
-//! yt-dlp, decodes it, deletes the file, force-aligns the lyric text with the
-//! MMS CTC model, and caches the timings by videoId + lyric-text hash.
+//! yt-dlp, decodes it, deletes the file, aligns the lyric text with
+//! echora-kara-300m, and caches the timings by videoId + lyric-text hash.
 //! `fetch_lyrics_timed` serves a cached alignment (after the reject rule) as
 //! source `"aligned"`; one that finishes while its track plays is pushed as
 //! `lyrics-timing-updated`. Any failure leaves today's timing in place.
@@ -17,7 +17,8 @@ mod assets;
 mod audio;
 #[cfg(test)]
 mod bench;
-mod ctc;
+mod decode;
+mod head;
 mod model;
 mod queue;
 mod reject;
@@ -147,6 +148,7 @@ pub fn init(app: &AppHandle) {
     let paths = Paths { dir: base.join("prealign") };
     // Audio is never kept: clear anything a crash left behind.
     let _ = std::fs::remove_dir_all(paths.tmp());
+    paths.remove_stale();
     let _ = P.paths.set(paths);
     let _ = P.app.set(app.clone());
     tauri::async_runtime::spawn(worker());
@@ -204,9 +206,14 @@ fn parse_length(s: &str) -> Option<f64> {
     s.trim().split(':').try_fold(0.0, |acc, part| part.trim().parse::<u32>().ok().map(|n| acc * 60.0 + f64::from(n)))
 }
 
-/// The lyric text an alignment belongs to.
+/// Which aligner made a cached alignment. Part of the cache key, so another
+/// model's alignments (MMS, before this one) are never served as its own.
+const ALIGNER: &str = "echora-kara-300m";
+
+/// The lyric text an alignment belongs to (and the aligner that made it).
 pub fn text_key(lines: &[LyricLine]) -> String {
     let mut h = Sha256::new();
+    h.update(ALIGNER.as_bytes());
     for l in lines {
         let text = l.text.trim();
         h.update((text.len() as u64).to_le_bytes());
@@ -405,7 +412,7 @@ async fn run(job: &Job, model: &mut Option<model::Model>, verified: &mut bool) -
 
     if !*verified {
         let p = paths.clone();
-        *verified = tokio::task::spawn_blocking(move || assets::verify_model(&p)).await.unwrap_or(false);
+        *verified = tokio::task::spawn_blocking(move || assets::verify_models(&p)).await.unwrap_or(false);
         if !*verified {
             shared().error = Some("The alignment model failed its checksum. Turn the feature off and on to download it again.".into());
             return Err(Failure::Skip("model checksum".into()));
@@ -414,8 +421,8 @@ async fn run(job: &Job, model: &mut Option<model::Model>, verified: &mut bool) -
     let m = match model.take() {
         Some(m) => m,
         None => {
-            let (rt, p) = (paths.runtime(), paths.model());
-            tokio::task::spawn_blocking(move || model::Model::load(&rt, &p, model::threads())).await.map_err(|e| e.to_string())??
+            let p = paths.clone();
+            tokio::task::spawn_blocking(move || model::Model::load(&p, model::threads())).await.map_err(|e| e.to_string())??
         }
     };
     let texts: Vec<String> = lyrics.lines.iter().map(|l| l.text.clone()).collect();

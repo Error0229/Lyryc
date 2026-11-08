@@ -19,6 +19,8 @@ import pykakasi
 import uroman
 
 REPO = "MahmoudAshraf/mms-300m-1130-forced-aligner"
+# Other CTC encoders with a romanized-letter vocab: repo -> (blank id, word separator token or None).
+MODELS = {REPO: (0, None), "hcxlabs/echora-kara-300m": (29, "|")}
 SR = 16000
 _kks = pykakasi.kakasi()
 _ur = uroman.Uroman()
@@ -65,10 +67,12 @@ def pieces(text, lang):
 
 
 class Model:
-    def __init__(self, backend="torch", threads=8, onnx_path=None):
+    def __init__(self, backend="torch", threads=8, onnx_path=None, repo=REPO, sep=False):
         from huggingface_hub import hf_hub_download
         torch.set_num_threads(threads)
-        self.dictionary = json.load(open(hf_hub_download(REPO, "vocab.json"), encoding="utf-8"))
+        self.dictionary = json.load(open(hf_hub_download(repo, "vocab.json"), encoding="utf-8"))
+        self.blank, sep_tok = MODELS[repo]
+        self.sep = self.dictionary[sep_tok] if sep and sep_tok else None
         self.backend = backend
         if backend == "onnx":
             import onnxruntime as ort
@@ -78,7 +82,7 @@ class Model:
             self.sess = ort.InferenceSession(str(onnx_path), so, providers=["CPUExecutionProvider"])
         else:
             from transformers import Wav2Vec2ForCTC
-            self.net = Wav2Vec2ForCTC.from_pretrained(REPO).eval()
+            self.net = Wav2Vec2ForCTC.from_pretrained(repo).eval()
             if backend == "torch-int8":
                 self.net = torch.ao.quantization.quantize_dynamic(self.net, {torch.nn.Linear}, dtype=torch.qint8)
 
@@ -108,8 +112,8 @@ class Model:
         return torch.cat([em, torch.zeros(1, em.shape[1], 1)], dim=-1)
 
 
-def align(em, dictionary, lines, lang, sec_per_frame):
-    star = len(dictionary)
+def align(em, dictionary, lines, lang, sec_per_frame, blank=0, sep=None):
+    star = em.shape[-1] - 1
     targets, owner = [], []           # owner[k] = (line, piece) of target k, or None for <star>
     plan = []
     for li, text in enumerate(lines):
@@ -118,14 +122,17 @@ def align(em, dictionary, lines, lang, sec_per_frame):
         targets.append(star)
         owner.append(None)
         for pi, (_, _, rom) in enumerate(ps):
+            if sep is not None and pi > 0 and rom:
+                targets.append(sep)
+                owner.append(None)
             for c in rom:
                 if c in dictionary:
                     targets.append(dictionary[c])
                     owner.append((li, pi))
     targets.append(star)
     owner.append(None)
-    ali, scores = F.forced_align(em, torch.tensor([targets], dtype=torch.int32), blank=0)
-    spans = F.merge_tokens(ali[0], scores[0].exp())
+    ali, scores = F.forced_align(em, torch.tensor([targets], dtype=torch.int32), blank=blank)
+    spans = F.merge_tokens(ali[0], scores[0].exp(), blank=blank)
     span = {}                          # (line, piece) -> [start_frame, end_frame, [probs]]
     for k, sp in enumerate(spans):
         if owner[k] is None:
@@ -162,5 +169,5 @@ def run(model, wav, lines, lang, chunk_s=30, ctx_s=0):
     t0 = time.perf_counter()
     em = model.emissions(wav, chunk_s, ctx_s)
     t1 = time.perf_counter()
-    out = align(em, model.dictionary, lines, lang, wav.shape[1] / em.shape[1] / SR)
+    out = align(em, model.dictionary, lines, lang, wav.shape[1] / em.shape[1] / SR, model.blank, model.sep)
     return out, t1 - t0, time.perf_counter() - t1

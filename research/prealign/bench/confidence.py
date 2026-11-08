@@ -10,7 +10,8 @@ Line features (all from the alignment itself, no reference):
 Track features: median line conf, share of lines with conf below the line threshold.
 
 Prints precision / recall of "reject" for a sweep of thresholds, and the accuracy of
-what is kept. Usage: uv run python -X utf8 bench/confidence.py fp32
+what is kept. Usage: uv run python -X utf8 bench/confidence.py fp32 [conf key, default conf]
+Writes results/confidence_<name>.json (results/confidence_<name>_<key>.json for another key).
 """
 import difflib, json, pathlib, statistics, sys
 from evaluate import load, usable
@@ -20,7 +21,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 ORDER = ["qq", "kugou", "netease", "lrclib"]
 
 
-def rows(name):
+def rows(name, key="conf"):
     tracks, refs, fetch = load()
     preds = json.loads((ROOT / f"data/pred/{name}.json").read_text(encoding="utf-8"))
     out = []
@@ -46,7 +47,7 @@ def rows(name):
                 continue
             ntok = sum(len(w["text"]) for w in l["words"])
             span = max(0.02, (l["end"] or l["start"]) - l["start"])
-            out.append({"track": t["id"], "lang": t["lang"], "conf": l["conf"], "cps": ntok / span,
+            out.append({"track": t["id"], "lang": t["lang"], "conf": l[key], "cps": ntok / span,
                         "err": abs(line_err[pi]), "src": src, "lrc_dis": dis.get(pi)})
     return out
 
@@ -73,7 +74,8 @@ def sweep(xs, key, bad, ths, lower_is_bad=True):
 
 def main():
     name = sys.argv[1] if len(sys.argv) > 1 else "fp32"
-    xs = rows(name)
+    key = sys.argv[2] if len(sys.argv) > 2 else "conf"
+    xs = rows(name, key)
     bad = lambda x: x["err"] > 1.0
     print(f"lines: {len(xs)}, bad (>1 s): {sum(map(bad, xs))} ({sum(map(bad, xs)) / len(xs):.0%})")
     sweep(xs, "conf", bad, [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4])
@@ -92,7 +94,7 @@ def main():
     print("|---|---|---|---|---|---|")
     for x in sorted(tr, key=lambda x: x["med_conf"]):
         print(f"| {x['track']} | {x['lang']} | {x['med_conf']:.2f} | {x['low_share']:.0%} | {x['med_err']:.2f} | {x['bad_share']:.0%} |")
-    (ROOT / f"results/confidence_{name}.json").write_text(json.dumps({"lines": xs, "tracks": tr}, indent=1), encoding="utf-8")
+    (ROOT / f"results/confidence_{name}{'' if key == 'conf' else '_' + key}.json").write_text(json.dumps({"lines": xs, "tracks": tr}, indent=1), encoding="utf-8")
 
 
 if __name__ == "__main__":

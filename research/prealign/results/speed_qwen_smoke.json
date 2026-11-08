@@ -1,0 +1,15 @@
+{
+ "backend": "qwen3-fa",
+ "threads": 8,
+ "dtype": "float32",
+ "load_s": 57.2518243000377,
+ "peak_rss_mb": 3828,
+ "tracks": {
+  "0": {
+   "audio_s": 233.7126875,
+   "emission_s": 53.45294530002866,
+   "viterbi_s": 0.0,
+   "rtf": 0.22871221015773335
+  }
+ }
+}

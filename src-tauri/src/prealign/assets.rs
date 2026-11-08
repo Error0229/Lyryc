@@ -1,16 +1,13 @@
 //! The downloads the feature needs, fetched on first enable into the app's
-//! local data dir and checked by SHA-256: the int8 MMS aligner, ONNX Runtime
-//! (Microsoft's release build, loaded at run time so the app itself carries
-//! none of it), and yt-dlp. Windows only for now: that is where the runtime
-//! download is wired up.
+//! local data dir and checked by SHA-256: the three int8 ONNX files of
+//! echora-kara-300m (encoder, text head, frame head), ONNX Runtime (Microsoft's
+//! release build, loaded at run time so the app itself carries none of it), and
+//! yt-dlp. Windows only for now: that is where the runtime download is wired up.
 //!
-//! Model source: no official int8 export runs at the study's speed (the
-//! onnx-community `model_int8.onnx` quantizes the conv layers to ConvInteger
-//! and is 3.6× slower on CPU), so the default is a public export with the
-//! study's recipe (MatMul-only dynamic int8, float Conv), pinned by hash.
-//! `LYRYC_PREALIGN_MODEL_URL` + `LYRYC_PREALIGN_MODEL_SHA256` point it elsewhere,
-//! e.g. at a file made with `research/prealign/bench/export_onnx.py`
-//! (see docs/prealign.md).
+//! The model files are our own exports (`research/prealign/bench/export_onnx.py
+//! echora` and `echo_head.py`), pinned by URL, SHA-256 and size. Each can be
+//! pointed elsewhere with `LYRYC_PREALIGN_<ENCODER|TEXT_HEAD|FRAME_HEAD>_URL` +
+//! `_SHA256`, or put in the prealign dir by hand (see docs/prealign.md).
 
 use log::{debug, info, warn};
 use reqwest::Client;
@@ -19,10 +16,50 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-pub const MODEL_URL: &str =
-    "https://huggingface.co/romara-labs/mms-300m-1130-forced-aligner-ONNX/resolve/f515b917cf1f4f14d12a4768940cd8b4eb3e2119/model.q8.onnx";
-pub const MODEL_SHA256: &str = "bef3271b8f4496fd173da1d2392c4bc7d496e0245cf1e8700481f812795b4abe";
-pub const MODEL_BYTES: u64 = 356_289_622;
+// Lyryc's ONNX int8 conversion of hcxlabs/echora-kara-300m (CC BY-NC 4.0), pinned
+// to a commit of huggingface.co/error0229/echora-kara-300m-onnx.
+pub const ENCODER_URL: &str = "https://huggingface.co/error0229/echora-kara-300m-onnx/resolve/5880efe260a8d8b456da7ac305c2228e672dc937/echora_enc.int8.onnx";
+pub const TEXT_HEAD_URL: &str = "https://huggingface.co/error0229/echora-kara-300m-onnx/resolve/5880efe260a8d8b456da7ac305c2228e672dc937/echo_text.int8.onnx";
+pub const FRAME_HEAD_URL: &str = "https://huggingface.co/error0229/echora-kara-300m-onnx/resolve/5880efe260a8d8b456da7ac305c2228e672dc937/echo_frame.int8.onnx";
+
+/// One pinned file of the model.
+pub struct ModelFile {
+    /// Its name in the prealign dir.
+    pub name: &'static str,
+    /// `LYRYC_PREALIGN_<env>_URL` / `_SHA256` override it.
+    env: &'static str,
+    url: &'static str,
+    sha256: &'static str,
+    bytes: u64,
+}
+
+/// Encoder, text head, frame head: the order `Paths::models` gives them in.
+pub const MODELS: [ModelFile; 3] = [
+    ModelFile {
+        name: "echora_enc.int8.onnx",
+        env: "ENCODER",
+        url: ENCODER_URL,
+        sha256: "a8b9a9591bc4ffaab7e981a132a87c697dc14d090fdcc73b7a4f1ad9bfca2fbe",
+        bytes: 356_168_399,
+    },
+    ModelFile {
+        name: "echo_text.int8.onnx",
+        env: "TEXT_HEAD",
+        url: TEXT_HEAD_URL,
+        sha256: "908e7a0beaa15281023bbdd55f8a10676b504e6e5d0c2be507c2bc038203dee1",
+        bytes: 23_471_631,
+    },
+    ModelFile {
+        name: "echo_frame.int8.onnx",
+        env: "FRAME_HEAD",
+        url: FRAME_HEAD_URL,
+        sha256: "b33c7c9062edcd86ffb31aec2c72e1ae2de10789a31a4b49a5fff13e6d412897",
+        bytes: 18_104_239,
+    },
+];
+
+/// Model files of earlier versions, deleted on start.
+const STALE: [&str; 1] = ["mms_fa.int8.onnx"];
 
 /// ONNX Runtime 1.22 (what `ort` 2.0.0-rc.10 speaks), CPU build, from Microsoft's GitHub release.
 const ORT_ZIP_URL: &str = "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-win-x64-1.22.0.zip";
@@ -41,8 +78,9 @@ pub struct Paths {
 }
 
 impl Paths {
-    pub fn model(&self) -> PathBuf {
-        self.dir.join("mms_fa.int8.onnx")
+    /// Encoder, text head, frame head.
+    pub fn models(&self) -> [PathBuf; 3] {
+        MODELS.each_ref().map(|m| self.dir.join(m.name))
     }
     pub fn runtime(&self) -> PathBuf {
         self.dir.join("onnxruntime.dll")
@@ -57,17 +95,25 @@ impl Paths {
     fn ytdlp_stamp(&self) -> PathBuf {
         self.dir.join("yt-dlp.updated")
     }
-    /// Both files are in place (the model's hash is checked before first use).
+    /// Every file is in place (the models' hashes are checked before first use).
     pub fn ready(&self) -> bool {
-        let model_ok = match (file_len(&self.model()), model_source().bytes) {
+        let model_ok = |m: &ModelFile| match (file_len(&self.dir.join(m.name)), m.source().bytes) {
             (Some(n), Some(want)) => n == want,
             (Some(n), None) => n > 0,
             (None, _) => false,
         };
-        model_ok && [self.runtime(), self.ytdlp()].iter().all(|p| file_len(p).is_some_and(|n| n > 0))
+        MODELS.iter().all(model_ok) && [self.runtime(), self.ytdlp()].iter().all(|p| file_len(p).is_some_and(|n| n > 0))
     }
     pub fn disk_bytes(&self) -> u64 {
-        [self.model(), self.runtime(), self.ytdlp()].iter().filter_map(|p| file_len(p)).sum()
+        self.models().iter().chain([&self.runtime(), &self.ytdlp()]).filter_map(|p| file_len(p)).sum()
+    }
+    /// Drop what an earlier version downloaded.
+    pub fn remove_stale(&self) {
+        for name in STALE {
+            if std::fs::remove_file(self.dir.join(name)).is_ok() {
+                info!("Pre-align: removed the old model {}", name);
+            }
+        }
     }
 }
 
@@ -81,13 +127,14 @@ pub struct ModelSource {
     pub bytes: Option<u64>,
 }
 
-/// The pinned default, or the user's override (both variables, or neither).
-pub fn model_source() -> ModelSource {
-    match (std::env::var("LYRYC_PREALIGN_MODEL_URL"), std::env::var("LYRYC_PREALIGN_MODEL_SHA256")) {
-        (Ok(url), Ok(sha)) if !url.trim().is_empty() && sha.trim().len() == 64 => {
-            ModelSource { url: url.trim().into(), sha256: sha.trim().to_lowercase(), bytes: None }
+impl ModelFile {
+    /// The pinned default, or the user's override (both variables, or neither).
+    pub fn source(&self) -> ModelSource {
+        let var = |suffix: &str| std::env::var(format!("LYRYC_PREALIGN_{}_{suffix}", self.env)).map(|v| v.trim().to_string());
+        match (var("URL"), var("SHA256")) {
+            (Ok(url), Ok(sha)) if !url.is_empty() && sha.len() == 64 => ModelSource { url, sha256: sha.to_lowercase(), bytes: None },
+            _ => ModelSource { url: self.url.into(), sha256: self.sha256.into(), bytes: Some(self.bytes) },
         }
-        _ => ModelSource { url: MODEL_URL.into(), sha256: MODEL_SHA256.into(), bytes: Some(MODEL_BYTES) },
     }
 }
 
@@ -114,10 +161,17 @@ pub async fn ensure(paths: &Paths, progress: impl Fn(Progress) + Send + Sync) ->
     }
     std::fs::create_dir_all(&paths.dir).map_err(|e| e.to_string())?;
     let client = client();
-    let src = model_source();
-    if !paths.model().exists() {
-        info!("Downloading the alignment model from {}", src.url);
-        download(&client, &src.url, &paths.model(), &src.sha256, "model", &progress).await?;
+    // One progress bar over the three files, when their sizes are known.
+    let total: Option<u64> = MODELS.iter().map(|m| m.source().bytes).sum();
+    let mut before = 0;
+    for (m, path) in MODELS.iter().zip(paths.models()) {
+        let src = m.source();
+        if !path.exists() {
+            info!("Downloading {} from {}", m.name, src.url);
+            let report = |p: Progress| progress(Progress { file: "model", done: before + p.done, total: total.or(p.total) });
+            download(&client, &src.url, &path, &src.sha256, m.name, &report).await?;
+        }
+        before += src.bytes.unwrap_or(0);
     }
     if !paths.runtime().exists() {
         info!("Downloading ONNX Runtime");
@@ -216,22 +270,24 @@ pub fn hex(bytes: &[u8]) -> String {
     })
 }
 
-/// Full-file check of the model, once per session before first use.
-pub fn verify_model(paths: &Paths) -> bool {
-    let src = model_source();
-    let Ok(mut f) = std::fs::File::open(paths.model()) else {
-        return false;
-    };
+/// Full-file check of the model files, once per session before first use.
+/// A file that fails is removed, so the next enable downloads it again.
+pub fn verify_models(paths: &Paths) -> bool {
+    MODELS.iter().zip(paths.models()).all(|(m, path)| {
+        let ok = sha256_of(&path).is_some_and(|h| h == m.source().sha256);
+        if !ok {
+            warn!("Alignment model file {} failed its checksum; removing it", m.name);
+            let _ = std::fs::remove_file(&path);
+        }
+        ok
+    })
+}
+
+fn sha256_of(path: &Path) -> Option<String> {
+    let mut f = std::fs::File::open(path).ok()?;
     let mut hasher = Sha256::new();
-    if std::io::copy(&mut f, &mut hasher).is_err() {
-        return false;
-    }
-    let ok = hex(&hasher.finalize()) == src.sha256;
-    if !ok {
-        warn!("Alignment model failed its checksum; removing it");
-        let _ = std::fs::remove_file(paths.model());
-    }
-    ok
+    std::io::copy(&mut f, &mut hasher).ok()?;
+    Some(hex(&hasher.finalize()))
 }
 
 /// `yt-dlp -U` if the last update is a day old. YouTube changes break it often.
