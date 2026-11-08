@@ -36,12 +36,6 @@ impl Tokens {
 }
 
 pub struct Decoded {
-    /// Pass 1 letter spans; with `floors`, read only by the vector test.
-    #[allow(dead_code)]
-    pub plain: Vec<Span>,
-    /// Per-letter frame floors of pass 2.
-    #[allow(dead_code)]
-    pub floors: Vec<usize>,
     /// Pass 2 letter spans.
     pub letters: Vec<Span>,
     /// Token spans after the blank hold (display times).
@@ -51,6 +45,9 @@ pub struct Decoded {
 /// §4.1: per-frame vocal activity in [0, 1], from the loudness of 400-sample
 /// frames at hop 320 of the full mix, scaled between its 10th and 90th percentile.
 pub fn activity(x: &[f32], frames: usize) -> Vec<f32> {
+    if frames == 0 {
+        return Vec::new(); // no quantiles of nothing
+    }
     let ldb: Vec<f64> = (0..frames)
         .map(|t| {
             let sum: f64 = (320 * t..320 * t + 400).map(|i| x.get(i).map_or(0.0, |&v| (v as f64).powi(2))).sum();
@@ -271,6 +268,13 @@ fn hold(acoustic: &[Span], tokens: &Tokens, hold: usize) -> Vec<Span> {
 /// `share`: `[T, K]` the text head's log P(token | singing), `delta`: seconds
 /// per frame (audio length / T). None if the letters do not fit in T frames.
 pub fn decode(logp: &[f32], activity: &[f32], share: &[f32], tokens: &Tokens, delta: f64) -> Option<Decoded> {
+    let (_, _, letters) = passes(logp, activity, share, tokens, delta)?;
+    let tokens_out = hold(&token_spans(&letters, tokens), tokens, caps(delta).3);
+    Some(Decoded { letters, tokens: tokens_out })
+}
+
+/// Both passes: pass 1 letter spans, pass 2 floors, pass 2 letter spans.
+fn passes(logp: &[f32], activity: &[f32], share: &[f32], tokens: &Tokens, delta: f64) -> Option<(Vec<Span>, Vec<usize>, Vec<Span>)> {
     let frames = activity.len();
     let k_len = tokens.ids.len();
     let ids: Vec<usize> = tokens.letters().map(usize::from).collect();
@@ -288,8 +292,7 @@ pub fn decode(logp: &[f32], activity: &[f32], share: &[f32], tokens: &Tokens, de
     let plain = viterbi(frames, tokens, &ones, plain_emit)?;
     let floors = paced_floors(&token_spans(&plain, tokens), tokens, caps);
     let letters = viterbi(frames, tokens, &floors, bonus).or_else(|| viterbi(frames, tokens, &ones, bonus))?;
-    let tokens_out = hold(&token_spans(&letters, tokens), tokens, caps.3);
-    Some(Decoded { plain, floors, letters, tokens: tokens_out })
+    Some((plain, floors, letters))
 }
 
 /// §5.6: frame index → seconds. Past the last frame, extrapolate by `delta`.
@@ -379,6 +382,7 @@ mod tests {
         x[320 * 50..320 * 100].iter_mut().for_each(|v| *v = 0.5);
         let a = activity(&x, 100);
         assert_eq!((a[0], a[90]), (0.0, 1.0));
+        assert!(activity(&x, 0).is_empty());
     }
 
     #[test]
@@ -403,11 +407,13 @@ mod tests {
             let tokens = Tokens { ids, lines };
             let delta = j["frame_shift"].as_f64().unwrap();
             let frame_times = npz.f64("frame_times");
-            let out = decode(&npz.f32("log_probs"), &npz.f32("activity"), &npz.f32("text_share"), &tokens, delta).unwrap();
+            let (lp, act, share) = (npz.f32("log_probs"), npz.f32("activity"), npz.f32("text_share"));
+            let (plain, floors, letters) = passes(&lp, &act, &share, &tokens, delta).unwrap();
             let want = |k: &str| -> Vec<Span> { serde_json::from_value(j[k].clone()).unwrap() };
-            assert_eq!(out.plain, want("plain_pass_letter_spans"), "track {id}: pass 1");
-            assert_eq!(out.floors, serde_json::from_value::<Vec<usize>>(j["min_frames_per_letter"].clone()).unwrap(), "track {id}: floors");
-            assert_eq!(out.letters, want("final_letter_spans"), "track {id}: pass 2");
+            assert_eq!(plain, want("plain_pass_letter_spans"), "track {id}: pass 1");
+            assert_eq!(floors, serde_json::from_value::<Vec<usize>>(j["min_frames_per_letter"].clone()).unwrap(), "track {id}: floors");
+            assert_eq!(letters, want("final_letter_spans"), "track {id}: pass 2");
+            let out = decode(&lp, &act, &share, &tokens, delta).unwrap();
             let ms = |f: usize| (1000.0 * seconds(f, &frame_times, delta)).round_ties_even() as i64;
             let reference: Vec<(i64, i64)> = serde_json::from_value(j["token_times_ms"].clone()).unwrap();
             let bad = out.tokens.iter().zip(&reference).filter(|(&(s, e), &r)| (ms(s), ms(e)) != r).count();
