@@ -46,6 +46,16 @@ jobs:
 
       - run: npm ci
 
+      # autoruby's build script downloads this dictionary through GitHub's
+      # browser-download redirect, which has returned 504s; the API does not.
+      - name: Furigana dictionary for autoruby
+        shell: bash
+        run: |
+          dir="$RUNNER_TEMP/autoruby"
+          mkdir -p "$dir"
+          gh release download --repo Doublevil/JmdictFurigana --pattern JmdictFurigana.txt --output "$dir/furigana.txt" --clobber
+          echo "AUTORUBY_CACHE_DIR=$dir" >> "$GITHUB_ENV"
+
       - run: npm test
 
       - name: Build, sign and draft the release
