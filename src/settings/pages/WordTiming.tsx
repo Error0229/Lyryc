@@ -77,7 +77,8 @@ export function WordTiming() {
             Times each word by listening to the song. For every YouTube Music track that plays or is up next, it downloads the
             audio with yt-dlp, which YouTube's terms of service don't permit. The audio is deleted right after alignment and
             only the timings are kept; nothing leaves your computer. Needs a one-time download of about 415 MB (a 380 MB
-            model, ONNX Runtime and yt-dlp) and uses several CPU cores for about a minute per song.
+            model, ONNX Runtime and yt-dlp) and uses several CPU cores for about a minute per song. The model is
+            echora-kara-300m by hcxlabs, licensed CC BY-NC 4.0: non-commercial use only.
           </>
         }
       >

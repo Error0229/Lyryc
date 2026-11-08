@@ -112,7 +112,7 @@ LYRYC_PREALIGN_FRAME_HEAD_URL=https://…/echo_frame.int8.onnx
 LYRYC_PREALIGN_FRAME_HEAD_SHA256=<sha256>
 ```
 
-A file whose two variables are set uses them (and its size is not checked);
+This is a developer setting, not a supported one. A file whose two variables are set uses them (its SHA-256 is still checked, its size is not);
 the others keep the pinned defaults. The URL is only fetched when the file is
 missing, so for a hand-placed file of your own build, set its two variables
 with any https URL and its real hash.
