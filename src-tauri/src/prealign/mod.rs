@@ -314,6 +314,15 @@ impl From<String> for Failure {
     }
 }
 
+impl From<AlignError> for Failure {
+    fn from(e: AlignError) -> Self {
+        match e {
+            AlignError::Cancelled => Failure::Cancelled,
+            e => Failure::Skip(e.to_string()),
+        }
+    }
+}
+
 impl From<&str> for Failure {
     fn from(e: &str) -> Self {
         Failure::Skip(e.to_string())
@@ -393,6 +402,9 @@ async fn run(job: &Job, model: &mut Option<model::Model>, verified: &mut bool) -
     }
     check_cancel()?;
 
+    if song.duration.is_some_and(|d| d > align::MAX_SECONDS as f64) {
+        return Err(AlignError::TooLong.into()); // before downloading it
+    }
     assets::update_ytdlp_if_due(&paths).await;
     let fetched = ytdlp::fetch(&paths.ytdlp(), &paths.tmp(), &song.video_id).await?;
     let (path, listed) = (fetched.path.clone(), fetched.duration);
@@ -408,6 +420,7 @@ async fn run(job: &Job, model: &mut Option<model::Model>, verified: &mut bool) -
             return Err(Failure::Skip(format!("audio is {secs:.0}s, the player says {want:.0}s")));
         }
     }
+    align::check_size(wav.len(), 0)?; // the player may not have known the length
     check_cancel()?;
 
     if !*verified {
@@ -434,11 +447,7 @@ async fn run(job: &Job, model: &mut Option<model::Model>, verified: &mut bool) -
     .await
     .map_err(|e| e.to_string())?;
     *model = Some(m);
-    let aligned = match result {
-        Ok(a) => a,
-        Err(AlignError::Cancelled) => return Err(Failure::Cancelled),
-        Err(e) => return Err(Failure::Skip(e.to_string())),
-    };
+    let aligned = result?;
     if reject::track_rejected(&aligned) {
         cache_aligned(&song.video_id, &hash, None);
         return Ok("rejected (low confidence)");
@@ -604,6 +613,13 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_cancelled_alignment_stays_cancelled_and_the_rest_are_skips() {
+        // A skip marks the song done for the session; a cancel lets it run again.
+        assert!(matches!(Failure::from(AlignError::Cancelled), Failure::Cancelled));
+        assert!(matches!(Failure::from(AlignError::TooLong), Failure::Skip(why) if why == "track too long to align"));
+    }
 
     fn line(text: &str) -> LyricLine {
         LyricLine { time: 0.0, text: text.into(), duration: None, words: None }

@@ -54,10 +54,11 @@ impl std::fmt::Display for AlignError {
 }
 
 /// Longest audio aligned: the encoder's hidden state alone is 4 KB a frame (~180 MB at 15 min).
-const MAX_SECONDS: usize = 15 * 60;
-/// Frames × tokens. The text head's `[T, K]` f32 output and the decoder's
-/// two path bits per (frame, state) both grow with it: at the cap, ~0.3 GB
-/// on top of the ~1 GB baseline. A 4-minute song is ~6M.
+pub const MAX_SECONDS: usize = 15 * 60;
+/// Frames × tokens. Per cell: the text head's `[T, K]` output is 4 bytes; the
+/// decoder keeps 2 path bits per (frame, state), with ~10 states a token
+/// (~4 letters at floors of 2–3, plus a blank), so ~2.5 bytes. At the cap that
+/// is ~160 + ~100 MB on top of the ~1 GB baseline. A 4-minute song is ~6M.
 const MAX_CELLS: usize = 40_000_000;
 
 /// Refuse, before any model work, a job whose memory would run away.
