@@ -24,9 +24,11 @@ pub struct Model {
     frames: Session,
 }
 
-/// No CPU arena: for MMS on a 213 s track, peak RSS 1074 MB instead of 1688 MB
-/// (the arena also holds the prepacked weights) for RTF 0.24 instead of 0.17.
-/// A background job should be the light one.
+/// No CPU arena. On echora the arena is the whole Rust-vs-Python speed gap:
+/// with it, RTF 0.24 against 0.28-0.34 without, but peak RSS 1.7-2.2 GB against
+/// 1.0-1.3 GB (encoder-only arena: 1.5-1.9 GB). Keeping the weights out of it
+/// saves only ~80 MB, so it is the activation buffers. A background job that
+/// already runs ahead of playback should be the light one.
 fn session(path: &Path, threads: usize) -> Result<Session, String> {
     let cpu = CPUExecutionProvider::default().with_arena_allocator(false).build();
     Session::builder()
@@ -116,7 +118,9 @@ impl Model {
         if labels.tokens.ids.is_empty() {
             return Err(AlignError::NoText);
         }
+        let t0 = std::time::Instant::now();
         let mut lat = self.lattice(wav, cancel)?;
+        let t1 = std::time::Instant::now();
         let text = self.text(&head::pack(&labels.tokens.ids, &labels.line_of)).map_err(AlignError::Model)?;
         let share = head::text_share(&lat.hidden, &lat.logp, labels.tokens.ids.len(), |h, lp| {
             if cancel.load(Ordering::Relaxed) {
@@ -125,6 +129,14 @@ impl Model {
             self.share(h, lp, &text).map_err(AlignError::Model)
         })?;
         lat.hidden = Vec::new(); // the decoder needs only the log-probabilities
-        align::align_lines(&lat, &share, wav, lines, &plan, &labels)
+        let t2 = std::time::Instant::now();
+        let out = align::align_lines(&lat, &share, wav, lines, &plan, &labels);
+        log::debug!(
+            "Pre-align: encoder {:.1}s, head {:.1}s, decode {:.1}s",
+            (t1 - t0).as_secs_f64(),
+            (t2 - t1).as_secs_f64(),
+            t2.elapsed().as_secs_f64()
+        );
+        out
     }
 }

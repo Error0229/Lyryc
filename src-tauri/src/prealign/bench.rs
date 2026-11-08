@@ -53,6 +53,7 @@ fn rss_mb() -> (f64, f64) {
 #[tokio::test]
 #[ignore = "bench: network / study audio, minutes of CPU"]
 async fn parity() {
+    let _ = env_logger::builder().is_test(true).filter_module("lyryc_lib::prealign", log::LevelFilter::Debug).try_init();
     let env = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("set {k}"));
     let paths = Paths { dir: PathBuf::from(env("PREALIGN_DIR")) };
     let inputs: Value = serde_json::from_str(&std::fs::read_to_string(env("PREALIGN_INPUTS")).unwrap()).unwrap();

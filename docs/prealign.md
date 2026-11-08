@@ -157,8 +157,21 @@ Speed and memory, per track (release build, 8 threads):
 | resident between jobs | ~0.45 GB, ~0.72 GB after a Japanese song; all three sessions are dropped when the queue is idle |
 
 MMS, for comparison, ran at RTF 0.23–0.25 with peak RSS 0.80 / 1.07 GB. The
-arena would buy 15% speed for 0.7–0.9 GB more memory; a background job should
+arena would buy 15–20% speed for 0.7–0.9 GB more memory; a background job should
 be the light one, so it stays off.
+
+The arena accounts for the whole gap to the Python study (RTF 0.23). The study
+ran ONNX Runtime with its default arena, and the Rust encoder with the arena on
+matches it (42.5 s vs 40.5 s on a 181 s track). Other options measured
+(`Pre-align: encoder …, head …, decode …` in the debug log gives the split):
+
+| change | effect |
+|---|---|
+| ONNX Runtime 1.31 instead of 1.22 | none (encoder 45.6 s vs 44.2 s, arena on) |
+| `onnxruntime.dll` from the PyPI wheel instead of the release zip (both 1.22.0) | encoder ~8% faster; within run-to-run noise of ±10% |
+| arena on the encoder only | RTF 0.24–0.27, peak 1.53 GB (en), 1.88 GB (ja); +0.3 GB already at load |
+| arena with `session.use_device_allocator_for_initializers` | saves ~80 MB; the arena's memory is activations, not weights |
+| arena on, prepacking off | loses the speed, saves ~70 MB |
 
 ## Parity bench
 
