@@ -61,10 +61,10 @@ today's timing in place and logs at debug level (`RUST_LOG=lyryc_lib=debug`).
 | `onnxruntime.dll` | Microsoft's `onnxruntime-win-x64-1.22.0.zip` (GitHub release) | 72 MB download, 12 MB kept | SHA-256 of the zip pinned |
 | `yt-dlp.exe` | `github.com/yt-dlp/yt-dlp/releases/latest` | ~18 MB | release `SHA2-256SUMS` |
 
-**The three model URLs are placeholders** (`https://example.invalid/…`) until
-the files are hosted: fill in `ENCODER_URL`, `TEXT_HEAD_URL` and
-`FRAME_HEAD_URL`. The hashes and sizes next to them are already those of the
-files as built. Until then, use your own files (below).
+The three model files are hosted at
+[`error0229/echora-kara-300m-onnx`](https://huggingface.co/error0229/echora-kara-300m-onnx)
+(CC BY-NC 4.0, credit hcxlabs), pinned to commit `5880efe`. They are built by
+`bench/export_onnx.py echora` and `bench/echo_head.py` in `research/prealign/`.
 
 - `yt-dlp -U` runs at most once a day, before a download.
 - "Remove downloaded files" in Settings deletes the folder and turns the

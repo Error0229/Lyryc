@@ -16,12 +16,11 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-// TODO(owner): hosting is not decided yet. Replace these three placeholders
-// (`.invalid` never resolves, so a download fails loudly) with the pinned URLs
-// of the uploaded files. The hashes and sizes below are of the files as built.
-pub const ENCODER_URL: &str = "https://example.invalid/lyryc-prealign/echora_enc.int8.onnx";
-pub const TEXT_HEAD_URL: &str = "https://example.invalid/lyryc-prealign/echo_text.int8.onnx";
-pub const FRAME_HEAD_URL: &str = "https://example.invalid/lyryc-prealign/echo_frame.int8.onnx";
+// Lyryc's ONNX int8 conversion of hcxlabs/echora-kara-300m (CC BY-NC 4.0), pinned
+// to a commit of huggingface.co/error0229/echora-kara-300m-onnx.
+pub const ENCODER_URL: &str = "https://huggingface.co/error0229/echora-kara-300m-onnx/resolve/5880efe260a8d8b456da7ac305c2228e672dc937/echora_enc.int8.onnx";
+pub const TEXT_HEAD_URL: &str = "https://huggingface.co/error0229/echora-kara-300m-onnx/resolve/5880efe260a8d8b456da7ac305c2228e672dc937/echo_text.int8.onnx";
+pub const FRAME_HEAD_URL: &str = "https://huggingface.co/error0229/echora-kara-300m-onnx/resolve/5880efe260a8d8b456da7ac305c2228e672dc937/echo_frame.int8.onnx";
 
 /// One pinned file of the model.
 pub struct ModelFile {
