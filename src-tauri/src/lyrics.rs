@@ -198,13 +198,19 @@ fn synced_from_record(record: &Value) -> Option<Vec<LyricLine>> {
     (lyrics.len() >= MIN_RECORD_LINES && timing::singable(&lyrics)).then_some(lyrics)
 }
 
-fn plain_from_record(record: &Value) -> Option<&str> {
-    let plain = record["plainLyrics"].as_str()?;
-    (plain.lines().filter(|l| !l.trim().is_empty()).count() >= MIN_RECORD_LINES).then_some(plain)
+/// A record's words: its plain lyrics, else its synced lines' text, which
+/// stays right even when `synced_from_record` refuses the timing.
+fn plain_from_record(record: &Value) -> Option<String> {
+    let enough = |text: &str| text.lines().filter(|l| !l.trim().is_empty()).count() >= MIN_RECORD_LINES;
+    let plain = record["plainLyrics"].as_str().filter(|p| enough(p)).map(String::from);
+    plain.or_else(|| {
+        let sung: Vec<String> = parse_lrc_format(record["syncedLyrics"].as_str()?).into_iter().map(|l| l.text).collect();
+        Some(sung.join("\n")).filter(|s| enough(s))
+    })
 }
 
 fn has_lyrics(record: &Value) -> bool {
-    synced_from_record(record).is_some() || plain_from_record(record).is_some()
+    plain_from_record(record).is_some()
 }
 
 /// The LRCLIB entry an estimated result came from.
@@ -429,8 +435,8 @@ impl<'a, E: Effects> Lookup<'a, E> {
             }
         }
         info!("No synced timing for '{}'; returning estimated timing", src.track);
-        let plain = plain_from_record(&record).unwrap_or("");
-        Lrclib::Plain { estimate: timing::estimate_plain(plain, src.duration), src }
+        let plain = plain_from_record(&record).unwrap_or_default();
+        Lrclib::Plain { estimate: timing::estimate_plain(&plain, src.duration), src }
     }
 
     /// Steps 2-3 with the player's names and the regex-cleaned title.
@@ -1518,6 +1524,12 @@ mod tests {
         });
         assert!(synced_from_record(&crammed).is_none());
         assert!(has_lyrics(&crammed));
+
+        // With no plain lyrics, the refused timing's own lines are the words.
+        let crammed_only = json!({"syncedLyrics": include_str!("timing/fixtures/lrclib_5500700.lrc"), "plainLyrics": null});
+        let words = plain_from_record(&crammed_only).unwrap();
+        assert_eq!(words.lines().next(), Some("If you wanna take me"));
+        assert_eq!(words.lines().count(), 44);
 
         let instrumental = json!({"instrumental": true, "syncedLyrics": null, "plainLyrics": null});
         assert!(!has_lyrics(&instrumental));
