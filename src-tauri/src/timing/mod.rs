@@ -66,13 +66,29 @@ pub fn estimate_plain(plain: &str, track_secs: f64) -> Vec<LyricLine> {
         .collect()
 }
 
-/// From LRCLIB search results, pick the synced entry closest in length to
-/// `track_secs`, if one is within `SAME_RECORDING_SECS`.
+/// Faster than anyone sings: a line this dense was stamped wrong.
+const MAX_SYLLABLES_PER_SEC: f64 = 15.0;
+/// Share of lines allowed that pace: duets and echoes stamp lines together.
+/// Sound records stay under 5%; broken LRCLIB entries run 16-35%.
+const MAX_RUSHED_SHARE: f64 = 0.1;
+
+/// Can these timed lines be sung? Some LRCLIB synced entries cram half the
+/// song into a few seconds; their stamps are not timing, whatever the length.
+pub(crate) fn singable(lines: &[LyricLine]) -> bool {
+    let rushed = lines
+        .windows(2)
+        .filter(|w| syllables(&w[0].text) as f64 > MAX_SYLLABLES_PER_SEC * (w[1].time - w[0].time))
+        .count();
+    rushed as f64 <= MAX_RUSHED_SHARE * lines.len() as f64
+}
+
+/// From LRCLIB search results, pick the singable synced entry closest in
+/// length to `track_secs`, if one is within `SAME_RECORDING_SECS`.
 pub fn pick_synced_alternative(results: &[serde_json::Value], track_secs: f64) -> Option<String> {
     results
         .iter()
         .filter_map(|r| {
-            let synced = r["syncedLyrics"].as_str().filter(|s| !s.trim().is_empty())?;
+            let synced = r["syncedLyrics"].as_str().filter(|s| !s.trim().is_empty() && singable(&crate::lyrics::parse_lrc_format(s)))?;
             let gap = (r["duration"].as_f64()? - track_secs).abs();
             (gap <= SAME_RECORDING_SECS).then_some((gap, synced))
         })
@@ -120,5 +136,32 @@ mod tests {
         ];
         assert_eq!(pick_synced_alternative(&results, 200.0).as_deref(), Some("[00:01.00]studio"));
         assert_eq!(pick_synced_alternative(&results, 250.0), None);
+    }
+
+    const CRAMMED: &str = include_str!("fixtures/lrclib_5500700.lrc");
+    const SOUND: &str = include_str!("fixtures/lrclib_27544956.lrc");
+
+    #[test]
+    fn a_record_that_crams_lines_is_not_singable() {
+        // LRCLIB 5500700: beabadoobee's "If You Want To" at the MV's 247 s,
+        // with its last 28 lines squeezed into 92-132 s.
+        assert!(!singable(&crate::lyrics::parse_lrc_format(CRAMMED)));
+        assert!(singable(&crate::lyrics::parse_lrc_format(SOUND)));
+    }
+
+    #[test]
+    fn an_unsingable_alternative_is_passed_over() {
+        let results = vec![
+            json!({"duration": 247.0, "syncedLyrics": CRAMMED}),
+            json!({"duration": 247.168, "syncedLyrics": SOUND}),
+        ];
+        assert_eq!(pick_synced_alternative(&results, 247.0).as_deref(), Some(SOUND));
+    }
+
+    #[test]
+    fn lines_sung_together_are_tolerated() {
+        let lrc = "[00:10.00]one two three\n[00:10.00]one two three\n[00:14.00]four five\n[00:18.00]six\n\
+                   [00:22.00]seven\n[00:26.00]eight\n[00:30.00]nine\n[00:34.00]ten\n[00:38.00]eleven\n[00:42.00]twelve";
+        assert!(singable(&crate::lyrics::parse_lrc_format(lrc)));
     }
 }

@@ -195,7 +195,7 @@ enum Reply {
 fn synced_from_record(record: &Value) -> Option<Vec<LyricLine>> {
     let synced = record["syncedLyrics"].as_str().filter(|s| !s.trim().is_empty())?;
     let lyrics = parse_lrc_format(synced);
-    (lyrics.len() >= MIN_RECORD_LINES).then_some(lyrics)
+    (lyrics.len() >= MIN_RECORD_LINES && timing::singable(&lyrics)).then_some(lyrics)
 }
 
 fn plain_from_record(record: &Value) -> Option<&str> {
@@ -1510,6 +1510,14 @@ mod tests {
         let junk = json!({"syncedLyrics": "[00:00.00]probe", "plainLyrics": "probe"});
         assert!(synced_from_record(&junk).is_none());
         assert!(!has_lyrics(&junk));
+
+        // Stamps no one could sing to: its words still count, as plain lyrics.
+        let crammed = json!({
+            "syncedLyrics": include_str!("timing/fixtures/lrclib_5500700.lrc"),
+            "plainLyrics": "If you wanna take me\nGo ahead and try my head\nExperience is nothing compared to"
+        });
+        assert!(synced_from_record(&crammed).is_none());
+        assert!(has_lyrics(&crammed));
 
         let instrumental = json!({"instrumental": true, "syncedLyrics": null, "plainLyrics": null});
         assert!(!has_lyrics(&instrumental));
