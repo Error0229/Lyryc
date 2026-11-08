@@ -37,6 +37,7 @@ pub enum AlignError {
     Cancelled,
     TooShort,
     NoText,
+    TooLong,
     Model(String),
 }
 
@@ -46,9 +47,26 @@ impl std::fmt::Display for AlignError {
             AlignError::Cancelled => write!(f, "cancelled"),
             AlignError::TooShort => write!(f, "audio too short for the lyrics"),
             AlignError::NoText => write!(f, "nothing in the lyrics to align"),
+            AlignError::TooLong => write!(f, "track too long to align"),
             AlignError::Model(e) => write!(f, "model: {e}"),
         }
     }
+}
+
+/// Longest audio aligned: the encoder's hidden state alone is 4 KB a frame (~180 MB at 15 min).
+const MAX_SECONDS: usize = 15 * 60;
+/// Frames × tokens. The text head's `[T, K]` f32 output and the decoder's
+/// two path bits per (frame, state) both grow with it: at the cap, ~0.3 GB
+/// on top of the ~1 GB baseline. A 4-minute song is ~6M.
+const MAX_CELLS: usize = 40_000_000;
+
+/// Refuse, before any model work, a job whose memory would run away.
+pub fn check_size(samples: usize, tokens: usize) -> Result<(), AlignError> {
+    let frames = samples / HOP;
+    if samples > MAX_SECONDS * SAMPLE_RATE || frames.saturating_mul(tokens) > MAX_CELLS {
+        return Err(AlignError::TooLong);
+    }
+    Ok(())
 }
 
 /// A word (Latin word or one CJK character) and its onset/offset in seconds.
@@ -241,6 +259,15 @@ fn fill(words: &mut [(Option<(f64, f64)>, String)]) {
 mod tests {
     use super::super::romanize;
     use super::*;
+
+    #[test]
+    fn size_guard_takes_songs_and_refuses_runaways() {
+        let secs = |s: usize| s * SAMPLE_RATE;
+        assert!(check_size(secs(240), 600).is_ok()); // a dense 4-minute song
+        assert!(check_size(secs(14 * 60), 800).is_ok()); // a long one
+        assert!(matches!(check_size(secs(60 * 60), 50), Err(AlignError::TooLong))); // an hour-long mix
+        assert!(matches!(check_size(secs(10 * 60), 3000), Err(AlignError::TooLong))); // wrong, huge lyrics
+    }
 
     #[test]
     fn chunks_keep_only_their_own_frames() {
