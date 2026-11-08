@@ -37,8 +37,10 @@ export const playhead = {
     const before = clockTime(anchor, now);
     anchor = reconcile(anchor, time, playing, now);
     note(`sample ${time.toFixed(2)}${age ? ` (+${age.toFixed(1)} late)` : ""}${playing ? "" : " paused"}, clock was ${before.toFixed(2)}`);
-    // Diagnostic: a snap is a seek, a track change, a pause, or time sources disagreeing.
-    if (anchor.correction === 0 && Math.abs(before - time) > 0.4 && before > 0.5) {
+    // Diagnostic: a snap is a seek, a pause, or time sources disagreeing. A paused
+    // sample at 0 is the next track being loaded, which is not news.
+    const trackChange = !playing && time === 0;
+    if (anchor.correction === 0 && Math.abs(before - time) > 0.4 && before > 0.5 && !trackChange) {
       console.warn(`[clock] snapped ${time < before ? "back" : "forward"} ${before.toFixed(2)}s→${time.toFixed(2)}s${playing ? "" : " (paused)"} | ${trail.join(" ; ")}`);
     }
     kick();
