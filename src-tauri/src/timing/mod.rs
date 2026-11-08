@@ -66,13 +66,37 @@ pub fn estimate_plain(plain: &str, track_secs: f64) -> Vec<LyricLine> {
         .collect()
 }
 
-/// From LRCLIB search results, pick the synced entry closest in length to
-/// `track_secs`, if one is within `SAME_RECORDING_SECS`.
+/// Faster than anyone sings: a line this dense was stamped wrong.
+const MAX_SYLLABLES_PER_SEC: f64 = 15.0;
+/// Share of lines allowed that pace: duets and echoes stamp lines together.
+/// Sound records stay under 5%; broken LRCLIB entries run 16-35%.
+const MAX_RUSHED_SHARE: f64 = 0.1;
+
+/// Can these timed lines be sung? Some LRCLIB synced entries cram half the
+/// song into a few seconds; their stamps are not timing, whatever the length.
+/// Each line has until the next later stamp: lines stamped together (duets,
+/// echoes) are sung at once, not one after another. `lines` sorted by time.
+pub(crate) fn singable(lines: &[LyricLine]) -> bool {
+    let mut later = f64::INFINITY;
+    let mut rushed = 0;
+    for (i, line) in lines.iter().enumerate().rev() {
+        if let Some(next) = lines.get(i + 1).filter(|n| n.time > line.time) {
+            later = next.time;
+        }
+        if syllables(&line.text) as f64 > MAX_SYLLABLES_PER_SEC * (later - line.time) {
+            rushed += 1;
+        }
+    }
+    rushed as f64 <= MAX_RUSHED_SHARE * lines.len() as f64
+}
+
+/// From LRCLIB search results, pick the singable synced entry closest in
+/// length to `track_secs`, if one is within `SAME_RECORDING_SECS`.
 pub fn pick_synced_alternative(results: &[serde_json::Value], track_secs: f64) -> Option<String> {
     results
         .iter()
         .filter_map(|r| {
-            let synced = r["syncedLyrics"].as_str().filter(|s| !s.trim().is_empty())?;
+            let synced = r["syncedLyrics"].as_str().filter(|s| !s.trim().is_empty() && singable(&crate::lyrics::parse_lrc_format(s)))?;
             let gap = (r["duration"].as_f64()? - track_secs).abs();
             (gap <= SAME_RECORDING_SECS).then_some((gap, synced))
         })
@@ -120,5 +144,49 @@ mod tests {
         ];
         assert_eq!(pick_synced_alternative(&results, 200.0).as_deref(), Some("[00:01.00]studio"));
         assert_eq!(pick_synced_alternative(&results, 250.0), None);
+    }
+
+    /// LRCLIB 5500700 (broken) and 27544956 (sound), the same song, fetched 2026-11-08.
+    const CRAMMED: &str = include_str!("fixtures/lrclib_5500700.lrc");
+    const SOUND: &str = include_str!("fixtures/lrclib_27544956.lrc");
+
+    /// Ten lines four seconds apart; `at` lists (index, seconds) overrides.
+    fn ten_lines(at: &[(usize, f64)]) -> Vec<LyricLine> {
+        let mut times: Vec<f64> = (0..10).map(|i| 10.0 + 4.0 * i as f64).collect();
+        for &(i, t) in at {
+            times[i] = t;
+        }
+        let lrc: String = times.iter().map(|t| format!("[00:{t:05.2}]one two three four\n")).collect();
+        crate::lyrics::parse_lrc_format(&lrc)
+    }
+
+    #[test]
+    fn a_record_that_crams_lines_is_not_singable() {
+        // LRCLIB 5500700: beabadoobee's "If You Want To" at the MV's 247 s,
+        // with its last 28 lines squeezed into 92-132 s.
+        assert!(!singable(&crate::lyrics::parse_lrc_format(CRAMMED)));
+        assert!(singable(&crate::lyrics::parse_lrc_format(SOUND)));
+    }
+
+    #[test]
+    fn an_unsingable_alternative_is_passed_over() {
+        let results = vec![
+            json!({"duration": 247.0, "syncedLyrics": CRAMMED}),
+            json!({"duration": 247.168, "syncedLyrics": SOUND}),
+        ];
+        assert_eq!(pick_synced_alternative(&results, 247.0).as_deref(), Some(SOUND));
+    }
+
+    #[test]
+    fn lines_sung_together_are_not_rushed() {
+        // Three duet pairs: each line has until the next later stamp.
+        assert!(singable(&ten_lines(&[(1, 10.0), (4, 22.0), (7, 34.0)])));
+    }
+
+    #[test]
+    fn the_rushed_share_has_a_boundary() {
+        // Line 1 gets 0.2 s for four syllables: one rushed line is allowed, two are not.
+        assert!(singable(&ten_lines(&[(1, 17.8)])));
+        assert!(!singable(&ten_lines(&[(1, 17.8), (5, 33.8)])));
     }
 }
