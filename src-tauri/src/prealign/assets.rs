@@ -161,14 +161,16 @@ pub async fn ensure(paths: &Paths, progress: impl Fn(Progress) + Send + Sync) ->
     }
     std::fs::create_dir_all(&paths.dir).map_err(|e| e.to_string())?;
     let client = client();
-    // One progress bar over the three files, when their sizes are known.
+    // One progress bar over the three files when their sizes are known (an
+    // override has none); otherwise one bar per file.
     let total: Option<u64> = MODELS.iter().map(|m| m.source().bytes).sum();
     let mut before = 0;
     for (m, path) in MODELS.iter().zip(paths.models()) {
         let src = m.source();
         if !path.exists() {
             info!("Downloading {} from {}", m.name, src.url);
-            let report = |p: Progress| progress(Progress { file: "model", done: before + p.done, total: total.or(p.total) });
+            let base = if total.is_some() { before } else { 0 };
+            let report = |p: Progress| progress(Progress { file: "model", done: base + p.done, total: total.or(p.total) });
             download(&client, &src.url, &path, &src.sha256, m.name, &report).await?;
         }
         before += src.bytes.unwrap_or(0);

@@ -7,8 +7,10 @@ use super::decode::VOCAB;
 
 /// The encoder's hidden size.
 pub const HIDDEN: usize = 1024;
+/// Width of the text side's `text` and `kappa` outputs.
+pub const TEXT_DIM: usize = 512;
 /// Letters per token the head sees (the decoder still uses all of them).
-const MAX_LETTERS: usize = 16;
+pub const MAX_LETTERS: usize = 16;
 const PAD: i64 = 32;
 const WIN: usize = 1250;
 const STEP: usize = 1000;

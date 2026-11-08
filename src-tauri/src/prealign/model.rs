@@ -4,7 +4,7 @@
 use super::align::{self, AlignError, AlignedLine, Chunking, Lattice};
 use super::assets::Paths;
 use super::decode::VOCAB;
-use super::head::{self, Packed, Text, HIDDEN};
+use super::head::{self, Packed, Text, HIDDEN, MAX_LETTERS, TEXT_DIM};
 use super::romanize;
 use ort::execution_providers::CPUExecutionProvider;
 use ort::session::{builder::GraphOptimizationLevel, Session, SessionOutputs};
@@ -81,7 +81,7 @@ impl Model {
         let out = self
             .text
             .run(ort::inputs![
-                "letters" => view([k, 16], &p.letters)?,
+                "letters" => view([k, MAX_LETTERS], &p.letters)?,
                 "line" => view([k], &p.line)?,
                 "pos" => view([k], &p.pos)?,
             ])
@@ -97,8 +97,8 @@ impl Model {
             .run(ort::inputs![
                 "hidden" => view([w, HIDDEN], hidden)?,
                 "logp" => view([w, VOCAB], logp)?,
-                "text" => view([k, 512], &t.text)?,
-                "kappa" => view([k, 512], &t.kappa)?,
+                "text" => view([k, TEXT_DIM], &t.text)?,
+                "kappa" => view([k, TEXT_DIM], &t.kappa)?,
                 "m" => view([k, VOCAB], &t.m)?,
             ])
             .map_err(|e| e.to_string())?;
@@ -118,6 +118,7 @@ impl Model {
         if labels.tokens.ids.is_empty() {
             return Err(AlignError::NoText);
         }
+        align::check_size(wav.len(), labels.tokens.ids.len())?;
         let t0 = std::time::Instant::now();
         let mut lat = self.lattice(wav, cancel)?;
         let t1 = std::time::Instant::now();
