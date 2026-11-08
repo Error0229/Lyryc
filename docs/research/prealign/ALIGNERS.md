@@ -57,12 +57,56 @@ The int8 encoder (dynamic quantization, MatMul weights) is within noise of fp32:
   - Given the vectors' inputs, the decoder reproduces echora's token times to the millisecond (0 mismatches in 1,429 tokens). The fp32 head is within 6e-5 log-probability.
 - **Not needed:** labels, espeak (GPL) and language detection. We use our own `align.py` pieces.
 
+## Reject rule on echora
+
+The reject rule ([REPORT.md](REPORT.md), "Robustness and the reject rule") was tuned on MMS posteriors. Line confidence is still the mean posterior of a line's letters over their spans (`run_echo.py` `conf`), but echora's scale differs. It has fewer very low lines: 10th percentile 0.147 against MMS's 0.057, and median 0.316 against 0.343. The tables below come from `confidence.py` and `reject.py` on `echo_clean`, with the same 1,210 lines and the same "bad" definition (more than 1 s off).
+
+**MMS rule on each model** (smoothed3 < 0.10, or the track has more than 60% of its lines below 0.15):
+
+| run | rejected | precision (>1 s) | recall | kept ≤0.3 s | kept ≤1.0 s |
+|---|---|---|---|---|---|
+| MMS, no rule | 0% | – | – | 79% | 89% |
+| MMS, rule | 20% | 36% | 62% | 87% | 95% |
+| MMS, rule + LRCLIB 0.7 s (LRCLIB subset) | 21% | 45% | 92% | 92% | 99% |
+| echora, no rule | 0% | – | – | 88% | 96% |
+| echora, MMS rule | 3% | 32% | 25% | 89% | 97% |
+| echora, MMS rule + LRCLIB 0.7 s (LRCLIB subset) | 6% | 42% | 69% | 92% | 99% |
+
+**Line threshold:** it stays at 0.10. On echora, raising it only adds false rejects: smoothed3 < 0.15 or < 0.20 has 26% and 18% precision on the LRCLIB subset, against 43% at 0.10, and the same 98.8–98.9% kept within 1 s. The "sure" override in `reject.rs` (a line with confidence 0.4 or more is believed over LRCLIB) changes no outcome on echora at 0.4, 0.6 or 0.8, so it stays at 0.4.
+
+**Track threshold:** this changes to **more than 50% of lines below 0.20**. The MMS constants never fire on echora: Billie Jean, the track they were made for, sits at exactly 60%. No study track is "lost" under echora, so the rule was checked on lost alignments made on purpose (`bench/lost.py`). Echora has no line skipping, so short versions now go through this rule too.
+
+| lost alignment | median conf | lines < 0.15 | lines < 0.20 | MMS rule | new rule |
+|---|---|---|---|---|---|
+| lyrics of 1 on audio of 0 (en) | 0.135 | 71% | 92% | reject | reject |
+| lyrics of 7 on audio of 5 (ja) | 0.252 | 7% | 22% | keep | keep |
+| lyrics of 11 on audio of 10 (zh) | 0.191 | 28% | 55% | keep | reject |
+| lyrics of 17 on audio of 16 (ko) | 0.097 | 76% | 91% | reject | reject |
+| track 0 cut to 45%, full lyrics | 0.075 | 81% | 85% | reject | reject |
+| track 5 cut to 45% | 0.167 | 40% | 60% | keep | reject |
+| track 11 cut to 45% | 0.145 | 51% | 62% | keep | reject |
+| track 15 cut to 60% | 0.255 | 30% | 41% | keep | keep |
+
+Of the 20 real tracks, the new rule rejects only Billie Jean (84% of its lines are below 0.20, and 23% are more than 1 s off). The next highest is 37%.
+
+| echora, new rule | rejected | precision (>1 s) | recall | kept ≤0.3 s | kept ≤1.0 s |
+|---|---|---|---|---|---|
+| smoothed3 < 0.10 or track > 50% below 0.20 | 9% | 21% | 45% | 91% | 97% |
+| + LRCLIB 0.7 s (LRCLIB subset) | 11% | 22% | 69% | 92% | 99% |
+
+With LRCLIB timing, the new track rule costs Billie Jean's good lines their word timing and buys nothing measurable here, because the LRCLIB check already catches its bad lines. It is there for lyrics that only have estimated timing, where a lost alignment would otherwise be shown. Same-language wrong lyrics (ja on ja) and mildly cut versions still pass. Confidence cannot see them.
+
+**Another confidence definition, tried and dropped:** the head's own token probability `exp(S[t, k])` over the same letter spans (`run_echo.py` `conf_head`). It is worse at every threshold. At 0.10 it rejects 15% at 13% precision, against 5% at 28% for `conf`.
+
 ## Reproduce
 
 ```
 uv run python -X utf8 bench/run_echo.py --name echo_clean --head onnx-int8   # needs models/ from echo_head.py export + echora_enc.int8.onnx
 uv run python -X utf8 bench/check_echo.py                                    # needs data/spec_vectors/
 uv run python -X utf8 bench/evaluate.py echo_clean
+uv run python -X utf8 bench/confidence.py echo_clean                        # -> results/confidence_echo_clean.json
+uv run python -X utf8 bench/reject.py echo_clean 0.10 0.20 0.5              # line, track-low, track-share thresholds
+uv run python -X utf8 bench/lost.py                                         # deliberately lost alignments
 ```
 
 To produce the encoder ONNX, run `run_echora.py export` in a venv with transformers. That module only imports echora when it runs the CLI.

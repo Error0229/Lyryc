@@ -57,10 +57,13 @@ def ranges(line_of):
     return [[a, b] for a, b in zip(starts, starts[1:] + [len(line_of)])]
 
 
-def output(lines, plan, out, E, encoded):
+def output(lines, plan, out, E, encoded, S):
+    """conf: mean exp(E) over the letters' final spans; conf_head: the same with the head's exp(S[:, own])."""
     ids = [c for tok in encoded for c in tok]
     first = np.cumsum([0] + [len(t) for t in encoded])
+    own = np.repeat(np.arange(len(encoded)), [len(t) for t in encoded])
     prob = [float(np.exp(E[s:e, c]).mean()) for (s, e), c in zip(out["final_letter_spans"], ids)]
+    head = [float(np.exp(S[s:e, k]).mean()) for (s, e), k in zip(out["final_letter_spans"], own)]
     res = []
     for text, row in zip(lines, plan):
         words = [{"start": out["times_s"][k][0] if k is not None else None, "end": out["times_s"][k][1] if k is not None else None,
@@ -68,9 +71,11 @@ def output(lines, plan, out, E, encoded):
         fill(words)
         ks = [k for _, _, k in row if k is not None]
         p = [prob[j] for k in ks for j in range(first[k], first[k + 1])]
+        h = [head[j] for k in ks for j in range(first[k], first[k + 1])]
         timed = [w for w in words if w["start"] is not None]
         res.append({"start": timed[0]["start"] if timed else None, "end": timed[-1]["end"] if timed else None,
-                    "text": text, "conf": float(np.mean(p)) if p else 0.0, "words": words})
+                    "text": text, "conf": float(np.mean(p)) if p else 0.0,
+                    "conf_head": float(np.mean(h)) if h else 0.0, "words": words})
     return res
 
 
@@ -109,7 +114,7 @@ def main():
             T = len(E)
             out = decode(E, activity(x, T), S, encoded, ranges(line_of), (199.5 + 320 * np.arange(T)) / SR, len(x) / SR / T)
             t3 = time.perf_counter()
-            preds[t["id"]] = {"text_src": src, "lines": output(lines, plan, out, E, encoded)}
+            preds[t["id"]] = {"text_src": src, "lines": output(lines, plan, out, E, encoded, S)}
             dur = len(x) / SR
             speed[t["id"]] = {"audio_s": dur, "emission_s": t2 - t0, "viterbi_s": t3 - t2, "rtf": (t3 - t0) / dur,
                               "encoder_s": t1 - t0, "head_s": t2 - t1}
