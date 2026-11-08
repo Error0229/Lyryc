@@ -36,9 +36,11 @@ impl Tokens {
 }
 
 pub struct Decoded {
-    /// Pass 1 letter spans (only for checking).
+    /// Pass 1 letter spans; with `floors`, read only by the vector test.
+    #[allow(dead_code)]
     pub plain: Vec<Span>,
     /// Per-letter frame floors of pass 2.
+    #[allow(dead_code)]
     pub floors: Vec<usize>,
     /// Pass 2 letter spans.
     pub letters: Vec<Span>,
@@ -131,7 +133,7 @@ impl Bits {
     }
     fn get(&self, t: usize, s: usize) -> bool {
         let i = t * self.n + s;
-        self.words[i / 64] >> (i % 64) & 1 == 1
+        (self.words[i / 64] >> (i % 64)) & 1 == 1
     }
 }
 
@@ -150,8 +152,8 @@ fn viterbi(frames: usize, tokens: &Tokens, floors: &[usize], emit: impl Fn(usize
     score[1] = emit(0, states[1].letter);
     let mut best = vec![f32::NEG_INFINITY; n];
     for t in 1..frames {
-        for s in 0..n {
-            best[s] = step(&states, &score, s, t, &mut stayed, &mut skipped);
+        for (s, b) in best.iter_mut().enumerate() {
+            *b = step(&states, &score, s, t, &mut stayed, &mut skipped);
         }
         for (s, st) in states.iter().enumerate() {
             score[s] = best[s] + emit(t, st.letter);

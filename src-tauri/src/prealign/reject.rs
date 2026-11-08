@@ -1,8 +1,9 @@
 //! The study's reject rule, and how aligned timing is laid over the lyrics the
 //! lookup found (docs/research/prealign/REPORT.md, "Robustness and the reject rule").
 //!
-//! 1. More than 60% of a track's lines below confidence 0.15: drop the whole
-//!    alignment (the model knows it is lost).
+//! 1. More than 50% of a track's lines below confidence 0.20: drop the whole
+//!    alignment (the model knows it is lost). The study's MMS rule was 60% below
+//!    0.15; echora's confidence runs higher, see docs/research/prealign/ALIGNERS.md.
 //! 2. Otherwise a line loses its aligned words if the median confidence of it
 //!    and its neighbours is below 0.10, or, when the lyrics came with real line
 //!    timing, if its onset is more than 0.7 s off that timing (after removing
@@ -13,17 +14,13 @@
 //! 3. A rejected line keeps the source's line time if it had real timing, else
 //!    the aligner's line start, and gets estimated words from that time on, at
 //!    the song's own pace, so it sweeps like its neighbours.
-//!
-//! Lines the aligner left out (the recording does not sing them: a short
-//! version, a cut verse) are not shown at all; the rules apply to the rest as
-//! if they were the whole song.
 
 use super::align::{AlignedLine, AlignedWord};
 use crate::timing::syllables;
 use crate::types::{LyricLine, LyricWord};
 
-const TRACK_LOW_CONF: f64 = 0.15;
-const TRACK_LOW_SHARE: f64 = 0.6;
+const TRACK_LOW_CONF: f64 = 0.20;
+const TRACK_LOW_SHARE: f64 = 0.5;
 const LINE_MIN_CONF: f64 = 0.10;
 const MAX_OFF_SOURCE: f64 = 0.7;
 /// A line heard at least this clearly outvotes the source's timing.
@@ -87,18 +84,11 @@ fn own_phrase(source: &[LyricLine], i: usize, at: f64) -> bool {
     [i.wrapping_sub(1), i + 1].iter().filter_map(|&j| source.get(j)).all(|n| own < (at - n.time).abs())
 }
 
-/// The lookup's lines re-timed by the alignment, without the lines it left
-/// out. `real_timing`: the lines' times are a real source's (LRCLIB synced,
-/// QQ, ...), not an estimate. None if the alignment does not fit these lines
-/// or is rejected as a whole.
+/// The lookup's lines re-timed by the alignment. `real_timing`: the lines'
+/// times are a real source's (LRCLIB synced, QQ, ...), not an estimate. None if
+/// the alignment does not fit these lines or is rejected as a whole.
 pub fn apply(source: &[LyricLine], real_timing: bool, aligned: &[AlignedLine]) -> Option<Vec<LyricLine>> {
-    if aligned.len() != source.len() {
-        return None;
-    }
-    let (source, aligned): (Vec<LyricLine>, Vec<AlignedLine>) =
-        source.iter().zip(aligned).filter(|(_, al)| !al.skipped).map(|(l, al)| (l.clone(), al.clone())).unzip();
-    let (source, aligned) = (&source[..], &aligned[..]);
-    if track_rejected(aligned) {
+    if aligned.len() != source.len() || track_rejected(aligned) {
         return None;
     }
     let keep = keep(aligned, source, real_timing);
@@ -203,7 +193,6 @@ mod tests {
                 AlignedWord { start, end: start + 0.4, text: "a".into() },
                 AlignedWord { start: start + 0.3, end: start + 1.0, text: "b".into() },
             ],
-            skipped: false,
         }
     }
 
@@ -213,12 +202,12 @@ mod tests {
 
     #[test]
     fn a_lost_track_is_dropped_whole() {
-        // 7 of 10 lines below 0.15 (70% > 60%).
-        let aligned: Vec<_> = (0..10).map(|i| al(i as f64 * 5.0, if i < 7 { 0.1 } else { 0.5 })).collect();
+        // 6 of 10 lines below 0.20 (60% > 50%).
+        let aligned: Vec<_> = (0..10).map(|i| al(i as f64 * 5.0, if i < 6 { 0.19 } else { 0.5 })).collect();
         assert!(track_rejected(&aligned));
         assert!(apply(&src(&[0.0; 10]), false, &aligned).is_none());
-        // 6 of 10 (60%) is not more than 60%.
-        let aligned: Vec<_> = (0..10).map(|i| al(i as f64 * 5.0, if i < 6 { 0.1 } else { 0.5 })).collect();
+        // 5 of 10 (50%) is not more than 50%.
+        let aligned: Vec<_> = (0..10).map(|i| al(i as f64 * 5.0, if i < 5 { 0.19 } else { 0.5 })).collect();
         assert!(!track_rejected(&aligned));
     }
 
@@ -344,41 +333,10 @@ mod tests {
         assert!(out.windows(2).all(|w| w[0].time <= w[1].time));
     }
 
-    /// A line the aligner left out.
-    fn gone() -> AlignedLine {
-        AlignedLine { start: None, end: None, conf: 0.0, words: vec![], skipped: true }
-    }
-
     #[test]
-    fn a_short_version_shows_only_the_lines_it_sings() {
-        // Lines 0-14 of 53 sung, the rest left out. The estimate spread all 53
-        // over the track; the sung lines take the aligner's times.
-        let estimate = src(&(0..53).map(|i| i as f64 * 2.7).collect::<Vec<_>>());
-        let aligned: Vec<_> = (0..53).map(|i| if i < 15 { al(10.0 + i as f64 * 8.0, 0.5) } else { gone() }).collect();
-        let out = apply(&estimate, false, &aligned).unwrap();
-        assert_eq!(out.len(), 15);
-        assert_eq!(aligned_words(&out, &aligned[..15]), [true; 15]);
-        assert_eq!(out[14].duration, Some(3.0), "the last sung line ends the lyrics");
-        // Had the left-out lines been forced in, unheard, the track would be lost.
-        let forced: Vec<_> = (0..53).map(|i| if i < 15 { al(10.0 + i as f64 * 8.0, 0.5) } else { al(130.0 + i as f64 * 0.1, 0.02) }).collect();
-        assert!(apply(&estimate, false, &forced).is_none());
-    }
-
-    #[test]
-    fn a_cut_verse_is_not_shown_and_the_rest_keep_their_words() {
-        let lrclib: Vec<f64> = (0..12).map(|i| i as f64 * 5.0).collect();
-        let aligned: Vec<_> = lrclib.iter().enumerate().map(|(i, &t)| if (4..8).contains(&i) { gone() } else { al(t + 0.2, 0.5) }).collect();
-        let out = apply(&src(&lrclib), true, &aligned).unwrap();
-        let sung: Vec<_> = aligned.iter().filter(|a| !a.skipped).cloned().collect();
-        assert_eq!(out.len(), 8);
-        assert_eq!(aligned_words(&out, &sung), [true; 8]);
-        assert!((out[3].time - 15.2).abs() < 1e-9 && (out[4].time - 40.2).abs() < 1e-9);
-        assert!((out[3].duration.unwrap() - 25.0).abs() < 1e-9, "up to the next sung line");
-    }
-
-    #[test]
-    fn nothing_sung_is_rejected() {
-        assert!(apply(&src(&[0.0, 5.0, 10.0]), false, &[gone(), gone(), gone()]).is_none());
+    fn nothing_aligned_is_rejected() {
+        let none = AlignedLine { start: None, end: None, conf: 0.0, words: vec![] };
+        assert!(apply(&src(&[0.0, 5.0, 10.0]), false, &[none.clone(), none.clone(), none]).is_none());
     }
 
     #[test]

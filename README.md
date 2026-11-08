@@ -124,5 +124,10 @@ Load `extension/` unpacked to connect a browser. [AGENTS.md](AGENTS.md) maps the
 code, and [docs/releasing.md](docs/releasing.md) covers releases.
 
 Thanks to [LRCLIB](https://lrclib.net/), [Tauri](https://tauri.app/),
-[yt-dlp](https://github.com/yt-dlp/yt-dlp), [ONNX Runtime](https://onnxruntime.ai/)
-and the [MMS](https://huggingface.co/docs/transformers/model_doc/mms) alignment model.
+[yt-dlp](https://github.com/yt-dlp/yt-dlp), [ONNX Runtime](https://onnxruntime.ai/),
+[Lindera](https://github.com/lindera/lindera) with [UniDic](https://clrd.ninjal.ac.jp/unidic/),
+[pinyin](https://github.com/mozillazg/rust-pinyin) and [Symphonia](https://github.com/pdeljanov/Symphonia).
+
+Word timing uses [hcxlabs/echora-kara-300m](https://huggingface.co/hcxlabs/echora-kara-300m)
+(CC BY-NC 4.0), converted to ONNX and used non-commercially. Its decoder and
+text head here are our own implementations, written from a behavioural spec.

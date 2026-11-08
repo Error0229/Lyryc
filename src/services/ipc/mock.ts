@@ -104,7 +104,7 @@ function changeSong(step: number) {
 if (typeof window !== "undefined") setInterval(emitTime, 700);
 
 /** Word-level timing: a pretend download that finishes in a few seconds. */
-const MODEL_BYTES = 356_289_622;
+const MODEL_BYTES = 397_744_269; // echora encoder + text head + frame head
 let prealign: PrealignStatus = { enabled: false, state: "off", download: null, error: null, diskBytes: 0, workingOn: null, aligned: 0 };
 
 function setPrealign(p: Partial<PrealignStatus>) {
