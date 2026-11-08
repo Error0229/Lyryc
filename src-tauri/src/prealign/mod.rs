@@ -18,6 +18,7 @@ mod audio;
 #[cfg(test)]
 mod bench;
 mod ctc;
+mod decode;
 mod model;
 mod queue;
 mod reject;
