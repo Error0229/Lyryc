@@ -1186,7 +1186,7 @@ async fn fetch_timed<E: Effects>(
         // length: a trusted cover's original, else the identified song itself
         // (a music video, a live take). An unconfirmed "cover of" gives none.
         let words_from = match said.cover_of {
-            Some(original) => trusted_cover(req, pass).then_some(original),
+            Some(original) => trusted_cover(req, pass, &original).then_some(original),
             None => names.first().cloned(),
         };
         // The player's names reach the sources with every other pass.
@@ -1272,10 +1272,19 @@ static COVER_MARK: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)\bcover(ed)?\b|カバー|歌ってみた|翻唱|弾き語り").unwrap());
 
 /// Taking another artist's words is only safe when the cover is plain: the
-/// player says so, or a web search found it. A guessed "cover of" would put
-/// some other song's lyrics on screen.
-fn trusted_cover(req: &Request, pass: Pass) -> bool {
-    pass == (Pass::Identified { web_search: true }) || marked_cover(req)
+/// player says so, a web search found it, or the player shows the original's
+/// own title, so the guess adds an artist and no song (季節は次々死んでいく by
+/// 春猿火, "a cover of amazarashi"). A guessed title would put some other
+/// song's lyrics on screen.
+fn trusted_cover(req: &Request, pass: Pass, original: &Names) -> bool {
+    pass == (Pass::Identified { web_search: true }) || marked_cover(req) || titled(req, &original.title)
+}
+
+/// The player's title is this one: all of it, or one half of a bilingual
+/// "夜行バスにて - By Night Bus".
+fn titled(req: &Request, title: &str) -> bool {
+    let (shown, title) = (clean_title(&req.title, &req.artist), sources::align::norm(title));
+    !title.is_empty() && [shown.as_str()].into_iter().chain(shown.split(" - ")).any(|t| sources::align::norm(t) == title)
 }
 
 fn marked_cover(req: &Request) -> bool {
@@ -2181,9 +2190,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_unmarked_cover_guess_is_not_trusted_without_web_search() {
+    async fn an_unmarked_cover_under_the_originals_title_sings_its_words() {
+        // 季節は次々死んでいく by 春猿火 (347 s): "a cover of amazarashi", whose 20
+        // LRCLIB entries are all 5 s or more off. No mark, and no web search (the
+        // free tier has none), but the player shows that very title.
         let (_, original) = a_cover();
-        let req = Request::new("Bye My Sigh".into(), "Someone".into(), Some(299.0));
+        for title in ["Bye My Sigh", "Bye My Sigh - さよならのため息"] {
+            let req = Request::new(title.into(), "Someone".into(), Some(299.0));
+            let fx = Fake { llm_cover_of: Some(original.clone()), ..Default::default() }
+                .rule("artist_name=Original", json_reply(json!([record("Bye My Sigh", "Original Band", 240.0, true)])))
+                .rule("search?", json_reply(json!([])));
+            let (timed, _) = fetch_timed(&fx, &req, false).await.unwrap();
+            assert_eq!(timed.source, TimingSource::CoverEstimate, "{title}: the words, never another length's timing");
+            assert_eq!(fx.saved(), vec![TimingSource::CoverEstimate]);
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unmarked_cover_guess_at_another_title_is_not_trusted_without_web_search() {
+        // The LLM names a song the player doesn't: nothing says it is this one.
+        let (_, original) = a_cover();
+        let req = Request::new("Sigh".into(), "Someone".into(), Some(299.0));
         let fx = Fake { llm_cover_of: Some(original), ..Default::default() }
             .rule("artist_name=Original", json_reply(json!([record("Bye My Sigh", "Original Band", 240.0, true)])))
             .rule("search?", json_reply(json!([])));
