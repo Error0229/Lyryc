@@ -84,6 +84,13 @@ export interface Backend {
    */
   prealignConfigure(enabled: boolean, extraSources: boolean): Promise<PrealignStatus>;
   prealignStatus(): Promise<PrealignStatus>;
+  /**
+   * Times a saved song's lyrics that have no times by listening to it: the
+   * YouTube Music video it last played as (word-level timing must be on).
+   * Takes a minute or so; resolves to `lines` with their times, and rejects
+   * with the reason when it can't (never played there, words not heard, ...).
+   */
+  alignLyrics(artist: string, track: string, lines: string[]): Promise<LyricLine[]>;
   /** "Prepare lyrics for upcoming songs", mirrored like `prealignConfigure`. */
   lookaheadConfigure(enabled: boolean, extraSources: boolean): Promise<void>;
   /** The cache of lyrics, translations and word timings: how much is saved. */
@@ -240,6 +247,7 @@ const tauriBackend: Backend = {
 
   prealignConfigure: (enabled, extraSources) => invoke<PrealignStatus>("prealign_configure", { enabled, extraSources }),
   prealignStatus: () => invoke<PrealignStatus>("prealign_status"),
+  alignLyrics: (artist, track, lines) => invoke<LyricLine[]>("prealign_align", { artist, track, lines }),
   lookaheadConfigure: (enabled, extraSources) => invoke<void>("lookahead_configure", { enabled, extraSources }),
   prealignRemoveFiles: () => invoke<PrealignStatus>("prealign_remove_files"),
   cacheSize: () => invoke<CacheSize>("cache_size"),

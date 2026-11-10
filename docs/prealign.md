@@ -51,6 +51,31 @@ LRCLIB timing lose their words.
 Any failure (yt-dlp, model, decode, length mismatch, low confidence) leaves
 today's timing in place and logs at debug level (`RUST_LOG=lyryc_lib=debug`).
 
+## Timing pasted lyrics (the saved-lyrics editor)
+
+Settings → Lyrics & sync → Saved lyrics → a song → **Paste lyrics** / **Edit as
+text** takes lyrics with no times at all and has the same worker time them
+(`prealign_align`):
+
+- The audio is the YouTube Music video the song was last seen as. Every
+  lookup that comes with a videoId (the playing track's, the lookahead's)
+  writes it to the cache's `song_video` table under the song's (artist,
+  title) key (`lyrics_cache::remember_video`), and the command reads it from
+  there: the editor passes only the song's names. That is the one source: a
+  song that never played on YouTube Music has no audio, and the editor says
+  to play it there once. With the feature off it says so too, and nothing
+  runs.
+- The job goes ahead of the queue and stops the job that is running, which
+  runs again afterwards. The playing track does not preempt it. A newer ask
+  replaces an older one.
+- The lines come back with the aligner's line starts (the same `reject::apply`
+  as an estimate: there is no source timing to check against) and fill the
+  editor's rows, unsaved. A whole-track reject, or any failure, is shown as
+  the reason and changes nothing.
+- The alignment is cached as usual (videoId + text hash). Once the rows are
+  saved with the same words, the song gets its word timing from the cache
+  the next time it is served, without aligning again.
+
 ## Downloads (on first enable, into `%LOCALAPPDATA%\<app id>\prealign\`)
 
 | file | source | size | check |

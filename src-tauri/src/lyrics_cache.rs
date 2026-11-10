@@ -122,6 +122,7 @@ fn init_db() -> Option<Connection> {
     }
 
     create_aligned_table(&conn);
+    create_video_table(&conn);
     create_translation_table(&conn);
 
     // Create composite index for optimal lookups with TTL filtering
@@ -415,6 +416,52 @@ pub fn cache_aligned(video_id: &str, text_hash: &str, lines_json: Option<&str>) 
     }
 }
 
+// ---------------------------------------------------------------------------
+// The YouTube Music video each song was last seen as (played, or in the queue):
+// the recording the saved-lyrics editor's aligner listens to. A table of its
+// own, as it isn't about the lyrics: a song's lyrics row is replaced on every
+// save and expires, and the video is known before there is one.
+
+fn create_video_table(conn: &Connection) {
+    if let Err(e) = conn.execute(
+        "CREATE TABLE IF NOT EXISTS song_video (
+            artist TEXT NOT NULL,
+            track TEXT NOT NULL,
+            video_id TEXT NOT NULL,
+            PRIMARY KEY (artist, track)
+        )",
+        [],
+    ) {
+        warn!("Failed to create song_video table: {}", e);
+    }
+}
+
+fn remember_video_in(conn: &Connection, artist: &str, track: &str, video_id: &str) {
+    let (artist, track) = song_key(artist, track);
+    if let Err(e) = conn.execute("INSERT OR REPLACE INTO song_video (artist, track, video_id) VALUES (?1, ?2, ?3)", params![artist, track, video_id]) {
+        error!("Failed to remember the song's video: {}", e);
+    }
+}
+
+fn video_of_in(conn: &Connection, artist: &str, track: &str) -> Option<String> {
+    let (artist, track) = song_key(artist, track);
+    conn.query_row("SELECT video_id FROM song_video WHERE artist = ?1 AND track = ?2", params![artist, track], |row| row.get(0)).ok()
+}
+
+/// The song is this video on YouTube Music; the newest one seen wins.
+pub fn remember_video(artist: &str, track: &str, video_id: &str) {
+    if let Ok(guard) = DB_CONNECTION.lock() {
+        if let Some(conn) = guard.as_ref() {
+            remember_video_in(conn, artist, track, video_id);
+        }
+    }
+}
+
+/// The video the song was last seen as on YouTube Music, if it ever was.
+pub fn video_of(artist: &str, track: &str) -> Option<String> {
+    DB_CONNECTION.lock().ok()?.as_ref().and_then(|c| video_of_in(c, artist, track))
+}
+
 fn create_translation_table(conn: &Connection) {
     if let Err(e) = conn.execute(
         "CREATE TABLE IF NOT EXISTS translation_cache (
@@ -483,10 +530,10 @@ fn entries_in(conn: &Connection) -> u64 {
     .unwrap_or(0)
 }
 
-/// Forget everything: lyrics, translations and word timings.
+/// Forget everything: lyrics, translations, word timings and the songs' videos.
 fn clear_in(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
-        "DELETE FROM lyrics_cache; DELETE FROM translation_cache; DELETE FROM aligned_cache;
+        "DELETE FROM lyrics_cache; DELETE FROM translation_cache; DELETE FROM aligned_cache; DELETE FROM song_video;
          VACUUM; PRAGMA wal_checkpoint(TRUNCATE);",
     )
 }
@@ -544,17 +591,32 @@ mod tests {
     }
 
     #[test]
+    fn a_song_is_the_video_it_was_last_seen_as() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_video_table(&conn);
+        assert_eq!(video_of_in(&conn, "a", "t"), None);
+        remember_video_in(&conn, "A", " T ", "vid1");
+        remember_video_in(&conn, "a", "other", "vid9");
+        assert_eq!(video_of_in(&conn, "a", "t").as_deref(), Some("vid1"), "by the cache's key for the song");
+        remember_video_in(&conn, "a", "t", "vid2");
+        assert_eq!(video_of_in(&conn, "a", "t").as_deref(), Some("vid2"), "another upload played since");
+    }
+
+    #[test]
     fn clearing_forgets_lyrics_translations_and_timings() {
         let conn = Connection::open_in_memory().unwrap();
         create_lyrics_table(&conn).unwrap();
         create_aligned_table(&conn);
+        create_video_table(&conn);
         create_translation_table(&conn);
         conn.execute("INSERT INTO lyrics_cache (artist, track, cached_at) VALUES ('a', 't', 0)", []).unwrap();
         cache_translation_in(&conn, "k", "x");
         cache_aligned_in(&conn, "v", "h", Some("[1]"));
+        remember_video_in(&conn, "a", "t", "v");
         assert_eq!(entries_in(&conn), 3);
         clear_in(&conn).unwrap();
         assert_eq!(entries_in(&conn), 0);
+        assert_eq!(video_of_in(&conn, "a", "t"), None);
         assert_eq!(get_translation_in(&conn, "k"), None);
         assert_eq!(get_aligned_in(&conn, "v", "h"), AlignedCache::Miss);
     }

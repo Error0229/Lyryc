@@ -11,6 +11,10 @@
 //! `fetch_lyrics_timed` serves a cached alignment (after the reject rule) as
 //! source `"aligned"`; one that finishes while its track plays is pushed as
 //! `lyrics-timing-updated`. Any failure leaves today's timing in place.
+//!
+//! The saved-lyrics editor uses the same worker for lyrics the user pasted
+//! without times (`prealign_align`): that job goes first, and its lines come
+//! back timed.
 
 pub mod align;
 mod assets;
@@ -26,7 +30,7 @@ pub(crate) mod romanize;
 mod ytdlp;
 
 use crate::lyrics::{TimingSource, TimingUpdate, TIMING_UPDATED_EVENT};
-use crate::lyrics_cache::{cache_aligned, get_aligned, AlignedCache};
+use crate::lyrics_cache::{cache_aligned, get_aligned, video_of, AlignedCache};
 use crate::types::LyricLine;
 use crate::ytmusic;
 use align::{AlignError, AlignedLine};
@@ -39,7 +43,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex, MutexGuard, OnceLock};
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::sync::Notify;
+use tokio::sync::{oneshot, Notify};
 
 pub const STATUS_EVENT: &str = "prealign-status";
 /// Fewer lines than this is not worth a download.
@@ -90,9 +94,20 @@ struct Waiter {
     lyrics: Lyrics,
 }
 
+type Reply = oneshot::Sender<Result<Vec<LyricLine>, String>>;
+
+/// Lyrics the user is timing in the editor (`prealign_align`), and where the
+/// timed lines go. Dropping it tells the editor nothing is coming.
+struct Ask {
+    job: Job,
+    reply: Reply,
+}
+
 #[derive(Default)]
 struct Shared {
     queue: Queue,
+    /// The editor's job: the worker's next, ahead of the queue. Only the newest.
+    asked: Option<Ask>,
     /// Requests showing estimate/line timing that an alignment would upgrade.
     waiters: HashMap<String, Waiter>,
     downloading: Option<DownloadProgress>,
@@ -130,6 +145,16 @@ static P: LazyLock<Prealign> = LazyLock::new(|| Prealign {
     app: OnceLock::new(),
     paths: OnceLock::new(),
 });
+
+impl Shared {
+    /// The worker's next job, and the editor waiting for it if it asked.
+    fn next(&mut self) -> Option<(Job, Option<Reply>)> {
+        match self.asked.take() {
+            Some(ask) => Some((ask.job, Some(ask.reply))),
+            None => self.queue.next().map(|job| (job, None)),
+        }
+    }
+}
 
 fn shared() -> MutexGuard<'static, Shared> {
     P.shared.lock().unwrap_or_else(|e| e.into_inner())
@@ -333,23 +358,22 @@ async fn worker() {
     let mut model: Option<model::Model> = None;
     let mut verified = false;
     loop {
-        let job = {
+        let work = {
             let mut s = shared();
-            let ready = P.paths.get().is_some_and(Paths::ready);
-            if enabled() && ready && s.downloading.is_none() {
-                s.queue.next()
-            } else {
-                None
+            let work = if runnable(&s) { s.next() } else { None };
+            if let Some((job, _)) = &work {
+                // Under the lock, with the pick: a cancel after it is meant for this job.
+                P.cancel.store(false, Ordering::Relaxed);
+                s.working_on = Some(format!("{} — {}", job.song.title, job.song.artist));
             }
+            work
         };
-        let Some(job) = job else {
+        let Some((job, asked)) = work else {
             model = None; // idle: give the memory back
             P.wake.notified().await;
             continue;
         };
-        P.cancel.store(false, Ordering::Relaxed);
         let id = job.song.video_id.clone();
-        shared().working_on = Some(format!("{} — {}", job.song.title, job.song.artist));
         emit_status();
         let started = std::time::Instant::now();
         let outcome = run(&job, &mut model, &mut verified).await;
@@ -361,13 +385,35 @@ async fn worker() {
         }
         {
             let mut s = shared();
-            s.queue.end(&id, finished);
+            // The editor's job was never the queue's: the song's turn there still comes.
+            if asked.is_none() {
+                s.queue.end(&id, finished);
+            }
             s.working_on = None;
             if matches!(outcome, Ok("aligned")) {
                 s.aligned += 1;
             }
         }
+        if let (Some(reply), Some(lyrics)) = (asked, &job.lyrics) {
+            let cached = get_aligned(&id, &text_key(&lyrics.lines));
+            let _ = reply.send(answer(lyrics, &outcome, cached)); // the editor may be gone
+        }
         emit_status();
+    }
+}
+
+/// The editor's job ended without an answer: switched off, or asked again.
+const STOPPED: &str = "it was stopped before it finished";
+
+/// What the editor gets for the lines it asked about: the lines timed, or why not.
+fn answer(lyrics: &Lyrics, outcome: &Result<&'static str, Failure>, cached: AlignedCache) -> Result<Vec<LyricLine>, String> {
+    const NOT_HEARD: &str = "these words weren't heard in the song. Check that they are its lyrics";
+    match (outcome, cached) {
+        (Err(Failure::Cancelled), _) => Err(STOPPED.into()),
+        (Err(Failure::Skip(why)), _) => Err(why.clone()),
+        (Ok(_), AlignedCache::Hit(json)) => apply_cached(&json, lyrics).ok_or_else(|| NOT_HEARD.into()),
+        (Ok(_), AlignedCache::Rejected) => Err(NOT_HEARD.into()),
+        (Ok(_), AlignedCache::Miss) => Err("the timing couldn't be saved".into()),
     }
 }
 
@@ -461,20 +507,27 @@ async fn run(job: &Job, model: &mut Option<model::Model>, verified: &mut bool) -
 // ---------------------------------------------------------------------------
 // Settings and status.
 
+/// Can the worker take a job: switched on, the files there, nothing downloading.
+fn runnable(s: &Shared) -> bool {
+    enabled() && s.downloading.is_none() && P.paths.get().is_some_and(Paths::ready)
+}
+
+/// "off" | "downloading" | "ready" | "error", as the settings page shows it.
+fn state(s: &Shared) -> &'static str {
+    match () {
+        _ if !enabled() => "off",
+        _ if s.error.is_some() => "error",
+        _ if !runnable(s) => "downloading",
+        _ => "ready",
+    }
+}
+
 fn status() -> Status {
     let paths = P.paths.get();
     let s = shared();
-    let on = enabled();
-    let ready = paths.is_some_and(Paths::ready);
-    let state = match () {
-        _ if !on => "off",
-        _ if s.error.is_some() => "error",
-        _ if s.downloading.is_some() || !ready => "downloading",
-        _ => "ready",
-    };
     Status {
-        enabled: on,
-        state,
+        enabled: enabled(),
+        state: state(&s),
         download: s.downloading.clone(),
         error: s.error.clone(),
         disk_bytes: paths.map_or(0, Paths::disk_bytes),
@@ -551,6 +604,7 @@ pub fn prealign_configure(enabled: bool, extra_sources: bool) -> Status {
         let mut s = shared();
         s.queue.clear();
         s.waiters.clear();
+        s.asked = None;
     }
     let st = status();
     emit_status();
@@ -560,6 +614,47 @@ pub fn prealign_configure(enabled: bool, extra_sources: bool) -> Status {
 #[tauri::command]
 pub fn prealign_status() -> Status {
     status()
+}
+
+/// Settings → Saved lyrics: time lyrics pasted without times by listening to
+/// the song. `artist` and `track` name the saved song, whose audio is the
+/// YouTube Music video it was last seen as (`lyrics_cache::video_of`); `lines`
+/// are its words, one sung line each. The job goes ahead of the queue and
+/// stops the one that is running (which runs again later); a minute or so on
+/// this resolves to the lines with their times. The alignment is cached like
+/// any other, so the song gets its word timing from it once these lines are
+/// saved.
+#[tauri::command]
+pub async fn prealign_align(artist: String, track: String, lines: Vec<String>) -> Result<Vec<LyricLine>, String> {
+    let lines = untimed(&lines);
+    if lines.len() < MIN_LINES {
+        return Err(format!("it takes at least {MIN_LINES} lines"));
+    }
+    let video_id = video_of(&artist, &track).ok_or("this song hasn't played on YouTube Music yet. Play it there once, then try again")?;
+    info!("Pre-align: timing {} pasted lines of '{}' by '{}' ({})", lines.len(), track, artist, video_id);
+    let (reply, answer) = oneshot::channel();
+    {
+        let mut s = shared();
+        match state(&s) {
+            "ready" => {}
+            "off" => return Err("word-level timing is off. Turn it on under Lyrics & sync".into()),
+            "downloading" => return Err("word-level timing is still downloading its files. Try again when it's ready".into()),
+            _ => return Err(s.error.clone().unwrap_or_else(|| "word-level timing is unavailable".into())),
+        }
+        let song = Song { video_id, title: track, artist, duration: None };
+        s.asked = Some(Ask { job: Job { song, lyrics: Some(Lyrics { lines, real_timing: false }) }, reply });
+        if s.working_on.is_some() {
+            P.cancel.store(true, Ordering::Relaxed);
+        }
+    }
+    P.wake.notify_one();
+    answer.await.unwrap_or_else(|_| Err(STOPPED.into()))
+}
+
+/// Pasted lines as lyrics that have no times yet. A blank line is no line.
+fn untimed(lines: &[String]) -> Vec<LyricLine> {
+    let line = |text: &str| LyricLine { time: 0.0, text: text.into(), duration: None, words: None };
+    lines.iter().map(|l| l.trim()).filter(|l| !l.is_empty()).map(line).collect()
 }
 
 /// Delete the model, yt-dlp and any audio, and switch the feature off.
@@ -623,6 +718,53 @@ mod tests {
 
     fn line(text: &str) -> LyricLine {
         LyricLine { time: 0.0, text: text.into(), duration: None, words: None }
+    }
+
+    fn job(id: &str) -> Job {
+        let song = Song { video_id: id.into(), title: id.into(), artist: "a".into(), duration: None };
+        Job { song, lyrics: Some(Lyrics { lines: vec![line("one"), line("two"), line("three")], real_timing: false }) }
+    }
+
+    #[test]
+    fn the_editors_lyrics_go_first_and_the_playing_track_waits_for_them() {
+        let mut s = Shared::default();
+        s.queue.set_current(job("playing"));
+        let (reply, _editor) = oneshot::channel();
+        s.asked = Some(Ask { job: job("asked"), reply });
+        let (first, waiting) = s.next().unwrap();
+        assert_eq!((first.song.video_id.as_str(), waiting.is_some()), ("asked", true));
+        // A track that starts meanwhile is queued; it is no reason to stop the editor's job.
+        s.queue.set_current(job("next"));
+        assert!(!s.queue.should_preempt());
+        let (second, waiting) = s.next().unwrap();
+        assert_eq!((second.song.video_id.as_str(), waiting.is_some()), ("next", false), "asked once, run once");
+    }
+
+    #[test]
+    fn the_editor_gets_its_lines_timed_or_the_reason() {
+        let lyrics = job("a").lyrics.unwrap();
+        let al = |start: f64, text: &str| AlignedLine {
+            start: Some(start),
+            end: Some(start + 2.0),
+            conf: 0.9,
+            words: vec![align::AlignedWord { start, end: start + 2.0, text: text.into() }],
+        };
+        let json = serde_json::to_string(&[al(10.0, "one"), al(14.0, "two"), al(20.5, "three")]).unwrap();
+        let timed = answer(&lyrics, &Ok("aligned"), AlignedCache::Hit(json)).unwrap();
+        let shown: Vec<_> = timed.iter().map(|l| (l.time, l.text.as_str(), l.duration)).collect();
+        assert_eq!(shown, [(10.0, "one", Some(4.0)), (14.0, "two", Some(6.5)), (20.5, "three", Some(3.0))], "times it never had");
+
+        assert!(answer(&lyrics, &Ok("rejected (low confidence)"), AlignedCache::Rejected).is_err());
+        let skipped = Err(Failure::Skip("audio is 200s, the player says 250s".into()));
+        assert_eq!(answer(&lyrics, &skipped, AlignedCache::Miss).unwrap_err(), "audio is 200s, the player says 250s");
+        assert_eq!(answer(&lyrics, &Err(Failure::Cancelled), AlignedCache::Miss).unwrap_err(), STOPPED);
+    }
+
+    #[test]
+    fn pasted_lines_are_trimmed_and_blank_ones_dropped() {
+        let pasted = ["  one ".to_string(), String::new(), "   ".into(), "two".into()];
+        let lines = untimed(&pasted);
+        assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["one", "two"]);
     }
 
     #[test]

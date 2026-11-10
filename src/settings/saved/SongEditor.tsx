@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, FileText, Plus, Trash2 } from "lucide-react";
-import { formatLrc, parseLrc } from "../../lib/lrc";
+import { formatLrc, parseLrc, parsePlain } from "../../lib/lrc";
+import type { LyricLine } from "../../lib/types";
 import { backend, type SavedChange, type SavedSong, type SavedSongDetail } from "../../services/ipc/backend";
+import { useSettings } from "../../state/settings";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
 import { ConfirmDialog, Dialog } from "../../ui/Dialog";
@@ -93,7 +95,7 @@ export function SongEditor({ song, onBack, onChanged }: { song: SavedSong; onBac
                 <Plus /> Add lyrics
               </Button>
               <Button size="sm" variant="ghost" onClick={() => setLrc("")}>
-                <FileText /> Paste LRC
+                <FileText /> Paste lyrics
               </Button>
             </div>
           )}
@@ -156,7 +158,7 @@ export function SongEditor({ song, onBack, onChanged }: { song: SavedSong; onBac
               <Plus /> Add line
             </Button>
             <Button size="sm" variant="ghost" onClick={() => setLrc(formatLrc(draft.change?.op === "save" ? draft.change.lines : saved.lines))}>
-              <FileText /> Edit as LRC
+              <FileText /> Edit as text
             </Button>
           </div>
         </section>
@@ -213,7 +215,7 @@ export function SongEditor({ song, onBack, onChanged }: { song: SavedSong; onBac
         confirmLabel="Discard"
         onConfirm={onBack}
       />
-      <LrcDialog text={lrc} onClose={() => setLrc(null)} onApply={(lines) => setRows(rowsOf(lines, saved.translations.map((t) => t.lines)))} />
+      <LyricsDialog text={lrc} song={song} onClose={() => setLrc(null)} onApply={(lines) => setRows(rowsOf(lines, saved.translations.map((t) => t.lines)))} />
     </div>
   );
 }
@@ -232,36 +234,89 @@ function Part({ label, hint, disabled, onDelete }: { label: string; hint: string
   );
 }
 
-/** The lines as LRC text, to paste or bulk-edit; applying replaces the rows (not saved yet). */
-function LrcDialog({ text, onClose, onApply }: { text: string | null; onClose: () => void; onApply: (lines: ReturnType<typeof parseLrc>) => void }) {
+const count = (n: number) => `${n} ${n === 1 ? "line" : "lines"}`;
+
+/**
+ * The lines as text, to paste or bulk-edit; applying replaces the rows (not
+ * saved yet). Lines with times ("[01:02.50] words") are used as they are.
+ * Lyrics with no times at all go to the aligner, which listens to `song`
+ * and times them.
+ */
+function LyricsDialog({ text, song, onClose, onApply }: { text: string | null; song: SavedSong; onClose: () => void; onApply: (lines: LyricLine[]) => void }) {
   const [value, setValue] = useState("");
-  useEffect(() => setValue(text ?? ""), [text]);
-  const lines = parseLrc(value);
+  const [listening, setListening] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const aligner = useSettings((s) => s.prealign);
+  // The request still wanted: closing, or asking again, drops the answers of the others.
+  const asked = useRef(0);
+  useEffect(() => {
+    asked.current++;
+    setValue(text ?? "");
+    setListening(false);
+    setError(null);
+  }, [text]);
+
+  const timed = parseLrc(value);
+  const untimed = timed.length > 0 ? [] : parsePlain(value);
+  const cant = aligner ? null : "Turn on word-level timing under Lyrics & sync to time them.";
+  const note = listening
+    ? "Listening to the song to time each line. This takes a minute or so."
+    : (error ?? (untimed.length > 0 ? `These lines have no times. ${cant ?? "Word-level timing listens to the song as it last played on YouTube Music to time them, which takes a minute or so."}` : null));
+
+  const listen = () => {
+    const mine = ++asked.current;
+    setListening(true);
+    setError(null);
+    backend.alignLyrics(song.artist, song.track, untimed).then(
+      (lines) => {
+        if (asked.current !== mine) return;
+        onApply(lines);
+        onClose();
+      },
+      (e) => {
+        if (asked.current !== mine) return;
+        setListening(false);
+        setError(`Couldn't time them: ${String(e)}.`);
+      },
+    );
+  };
+
   return (
     <Dialog
       open={text !== null}
       onOpenChange={(o) => !o && onClose()}
-      title="Lyrics as LRC"
-      description='One line each, like "[01:02.50] words". Paste from anywhere; untimed lines are skipped.'
+      title="Lyrics as text"
+      description='Lines with times look like "[01:02.50] words"; lines without one among them are skipped. Lyrics with no times at all are timed by listening to the song.'
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button
-            variant="primary"
-            disabled={lines.length === 0 || value === text}
-            onClick={() => {
-              onApply(lines);
-              onClose();
-            }}
-          >
-            Use {lines.length} {lines.length === 1 ? "line" : "lines"}
-          </Button>
+          {untimed.length > 0 ? (
+            <Button variant="primary" disabled={listening || !!cant} onClick={listen}>
+              {listening ? "Listening…" : `Time ${count(untimed.length)}`}
+            </Button>
+          ) : (
+            <Button
+              variant="primary"
+              disabled={timed.length === 0 || value === text}
+              onClick={() => {
+                onApply(timed);
+                onClose();
+              }}
+            >
+              Use {count(timed.length)}
+            </Button>
+          )}
         </>
       }
     >
-      <TextArea aria-label="LRC" className="min-h-72 font-mono text-xs" value={value} onChange={(e) => setValue(e.target.value)} spellCheck={false} />
+      <div className="grid gap-2">
+        <TextArea aria-label="Lyrics" className="min-h-72 font-mono text-xs" value={value} readOnly={listening} onChange={(e) => (setValue(e.target.value), setError(null))} spellCheck={false} />
+        <p className={cx("text-xs", error && !listening ? "text-danger" : "text-fg-muted")} aria-live="polite">
+          {note}
+        </p>
+      </div>
     </Dialog>
   );
 }

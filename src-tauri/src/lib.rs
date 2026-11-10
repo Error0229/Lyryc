@@ -35,7 +35,7 @@ use llm::commands::{
 };
 use lyrics::{fetch_lrclib_raw, fetch_lyrics, fetch_lyrics_timed, lookahead_configure, mark_instrumental};
 use lyrics_cache::{cache_clear, cache_size, saved_song, saved_song_change, saved_songs};
-use prealign::{prealign_configure, prealign_remove_files, prealign_status};
+use prealign::{prealign_align, prealign_configure, prealign_remove_files, prealign_status};
 use updater::{update_check, update_install, update_status, UpdaterState};
 use types::{TrackState, WebSocketState};
 use websocket_commands::{
@@ -153,6 +153,7 @@ pub fn run() {
             llm_import_legacy_keys,
             prealign_configure,
             prealign_status,
+            prealign_align,
             prealign_remove_files,
             cache_size,
             cache_clear,

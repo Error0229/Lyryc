@@ -23,7 +23,7 @@ use crate::cleaning::{clean_title, normalize_name, Names};
 use crate::llm;
 use crate::prealign::{self, Served};
 use crate::lyrics_cache::{
-    cache_instrumental, cache_lyrics, cache_no_lyrics, forget_lyrics, get_cached_lyrics, song_key, CacheResult,
+    cache_instrumental, cache_lyrics, cache_no_lyrics, forget_lyrics, get_cached_lyrics, remember_video, song_key, CacheResult,
 };
 use crate::llm::identify::SongIdentity;
 use crate::sources::{self, align, Found, Provider};
@@ -859,6 +859,9 @@ pub async fn fetch_lyrics_timed(
     req.video_id = video_id.filter(|id| ytmusic::is_video_id(id));
     req.web_search = web_search.unwrap_or(false);
     req.refetch = refetch.unwrap_or(false);
+    if let Some(id) = &req.video_id {
+        remember_video(&req.artist, &req.title, id); // the recording the editor's aligner listens to
+    }
     debug!(
         "Lookup asked for '{}' by '{}' (length {:?}, video {:?}, search again {})",
         req.title, req.artist, req.duration, req.video_id, req.refetch
@@ -1068,6 +1071,7 @@ pub async fn lookup_ahead(
     req.background = true;
     if let Some(id) = &req.video_id {
         QUEUE_NAMES.lock().unwrap().insert(id.clone(), (title.to_string(), artist.to_string()));
+        remember_video(artist, title, id); // its lyrics are saved under the queue's names
     }
     let _song = song_lock(&req).await;
     let (timed, upgrade) = fetch_timed(&Live, &req, extra_sources).await.ok()?;
