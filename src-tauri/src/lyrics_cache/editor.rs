@@ -70,9 +70,10 @@ pub struct SavedSongDetail {
 #[derive(Deserialize, Debug)]
 #[serde(tag = "op", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Change {
-    /// New lines (any order) and edited translation lines. The translations
-    /// are dropped instead when the words changed, the word timing when the
-    /// lines changed at all: it would replace the new times as the song plays.
+    /// New lines (any order) and edited translation lines. When the words
+    /// changed, the translations and the word timing are dropped instead.
+    /// New times alone keep both: an alignment is made from the audio and the
+    /// words, so aligning again would only make the same one.
     Save { lines: Vec<LyricLine>, translations: Vec<SavedTranslation> },
     /// Forget the lyrics (or "nothing found"): looked up again next time.
     Forget,
@@ -263,10 +264,10 @@ fn apply(conn: &Connection, artist: &str, track: &str, change: Change) -> rusqli
                     for t in index.translations(&old) {
                         conn.execute("DELETE FROM translation_cache WHERE key = ?1", params![t.key])?;
                     }
-                }
-                for t in index.timings(&old) {
-                    delete_timing(conn, &t)?;
-                    realign.push(t.video_id);
+                    for t in index.timings(&old) {
+                        delete_timing(conn, &t)?;
+                        realign.push(t.video_id);
+                    }
                 }
                 let json = serde_json::to_string(&lines).map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
                 conn.execute(
@@ -404,13 +405,14 @@ mod tests {
     }
 
     #[test]
-    fn new_times_keep_the_translation_and_drop_the_timing() {
+    fn new_times_keep_the_translation_and_the_timing() {
+        // The editor's aligner retimes a song's own words: its alignment must outlive the save.
         let (conn, mut lines) = cache();
         lines[1].time = 4.5;
-        assert_eq!(change_in(&conn, "a", "t", save(lines.clone(), vec![])).unwrap(), ["vid"]);
+        assert!(change_in(&conn, "a", "t", save(lines.clone(), vec![])).unwrap().is_empty(), "nothing to align again");
         let d = detail(&conn);
         assert_eq!((d.song.source.as_deref(), d.song.expires_at), (Some(EDITED), None));
-        assert_eq!((d.lines, d.song.translations, d.song.timings), (lines, 1, 0));
+        assert_eq!((d.lines, d.song.translations, d.song.timings), (lines, 1, 1));
     }
 
     #[test]

@@ -32,6 +32,18 @@ export function parseLrc(text: string): LyricLine[] {
   return lines.sort((a, b) => a.time - b.time);
 }
 
+/**
+ * The sung lines of lyrics pasted without times, for the aligner to time:
+ * no blank lines, and no section headers ("[Chorus]"), which nobody sings.
+ * Any line that is all one bracket goes as a header, a sung "[hey]" too.
+ */
+export function parsePlain(text: string): string[] {
+  return text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l && !/^\[.*\]$/.test(l));
+}
+
 /** Lines → LRC text, one "[mm:ss.cc]words" per line. */
 export function formatLrc(lines: readonly LyricLine[]): string {
   return lines.map((l) => `[${formatTime(l.time).padStart(8, "0")}]${l.text}`).join("\n");

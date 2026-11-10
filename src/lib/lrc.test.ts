@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatLrc, formatTime, parseLrc, parseTime } from "./lrc";
+import { formatLrc, formatTime, parseLrc, parsePlain, parseTime } from "./lrc";
 
 describe("lrc", () => {
   it("reads timed lines, repeats, and skips the rest", () => {
@@ -10,6 +10,12 @@ describe("lrc", () => {
       [80.25, "chorus"],
       [123, "end"],
     ]);
+  });
+
+  it("reads lyrics pasted without times as their sung lines", () => {
+    const pasted = "[Verse 1]\r\n  夜明けの街を \n\n君と歩いた\n\n[Chorus]\nla la [hey] la\n";
+    expect(parsePlain(pasted)).toEqual(["夜明けの街を", "君と歩いた", "la la [hey] la"]);
+    expect(parseLrc(pasted)).toEqual([]);
   });
 
   it("formats and parses times both ways", () => {

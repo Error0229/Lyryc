@@ -49,7 +49,7 @@ export interface Draft {
   bad: Set<number>;
   /** The words differ: the translations and the word timing go on save. */
   wordsChanged: boolean;
-  /** Words or times differ: the word timing goes on save. */
+  /** Words or times differ: the lines are saved as the user's own. */
   linesChanged: boolean;
   /** What Save sends; null when there's nothing (valid) to save. */
   change: SavedChange | null;

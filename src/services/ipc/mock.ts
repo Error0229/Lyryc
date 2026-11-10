@@ -65,7 +65,7 @@ function changeSaved(d: SavedSongDetail, c: SavedChange): SavedSongDetail | null
       const changed = JSON.stringify(lines) !== JSON.stringify(d.lines);
       const translations = sameWords ? d.translations.map((t) => c.translations.find((n) => n.key === t.key) ?? t) : [];
       const song = changed ? { ...d.song, kind: "lyrics" as const, source: "edited", cachedAt: now(), expiresAt: null } : d.song;
-      return recount({ song, lines, translations, timings: changed ? [] : d.timings });
+      return recount({ song, lines, translations, timings: sameWords ? d.timings : [] });
     }
   }
 }
@@ -262,6 +262,12 @@ export const mockBackend: Backend = {
     return prealign;
   },
   prealignStatus: async () => prealign,
+  /** A pretend listen: the lines four seconds apart. A first line "fail" isn't heard. */
+  async alignLyrics(_artist, _track, lines) {
+    await wait(2500);
+    if (lines[0]?.toLowerCase() === "fail") throw "these words weren't heard in the song. Check that they are its lyrics";
+    return lines.map((text, i) => ({ time: 12.34 + i * 4, text, duration: 4 }));
+  },
   lookaheadConfigure: async () => {},
   markInstrumental: async () => {},
   async prealignRemoveFiles() {

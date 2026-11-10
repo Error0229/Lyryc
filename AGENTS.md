@@ -32,6 +32,16 @@
 - Tailwind for styling, with the tokens in `src/design/tokens.css`.
 - Keep pure logic out of components (`src/lib/`, `src/overlay/model.ts`), and test it.
 
+## One User, No Compatibility Layers
+The app has one user: its author. Nothing else reads its data, settings or IPC.
+- Don't write for old data or old versions: no migrations, no "rows written before this
+  existed" branches, no keeping an old command or setting alive. Change the schema or the
+  API and move on; data that doesn't fit is played or fetched again.
+- Don't add fallbacks. When something is needed, store it and read it from that one place.
+  A second or third way to get the same answer ("else guess it, else search for it") is
+  code that hides when the first way is broken.
+- When the one source has nothing, say so to the user plainly and stop.
+
 ## Testing
 - Frontend: Vitest, `*.test.ts(x)` next to the source.
 - Rust: `#[cfg(test)]` modules in the file they test.

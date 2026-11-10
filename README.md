@@ -83,6 +83,7 @@ one SQLite file, `%LOCALAPPDATA%\com.lyryc.app\lyrics_cache.db`:
 | Translations | the lyric text, languages, style, prompt and model | until you clear them |
 | Word timing | the YouTube video and the lyric text | until you clear them |
 | Lyrics you edited | artist and title | until you delete them |
+| Which YouTube Music video a song is | artist and title | until you clear them |
 
 - **Translations** are saved only when every line got one, so a partial answer
   is asked for again next time. A new model, style or language translates the
@@ -96,6 +97,10 @@ one SQLite file, `%LOCALAPPDATA%\com.lyryc.app\lyrics_cache.db`:
   LRC, add lyrics where none were found, or delete any part of it. Changing the
   words deletes its translation and word timing, which are made again when it
   plays.
+- **Have the words but no times?** Paste them in the same place (**Paste lyrics**,
+  or **Edit as text**). With word-level timing on, **Time N lines** listens to the
+  song as it last played on YouTube Music and times each line, in about a
+  minute. Check the times, then save.
 - **To start over,** use **Clear** under Settings → Lyrics & sync → Saved lyrics
   and translations, which shows the cache's size. (**Remove downloaded files**
   there deletes the word-timing model and yt-dlp, not the cache.)
