@@ -155,8 +155,8 @@ export interface SavedSongDetail {
 }
 
 /**
- * `saved_song_change`. A save drops the song's translations when the words
- * change, and its word timing when the lines change at all.
+ * `saved_song_change`. A save drops the song's translations and word timing
+ * when the words change; new times alone keep both.
  */
 export type SavedChange =
   | { op: "save"; lines: LyricLine[]; translations: SavedTranslation[] }

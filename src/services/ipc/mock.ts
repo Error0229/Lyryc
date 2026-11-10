@@ -65,7 +65,7 @@ function changeSaved(d: SavedSongDetail, c: SavedChange): SavedSongDetail | null
       const changed = JSON.stringify(lines) !== JSON.stringify(d.lines);
       const translations = sameWords ? d.translations.map((t) => c.translations.find((n) => n.key === t.key) ?? t) : [];
       const song = changed ? { ...d.song, kind: "lyrics" as const, source: "edited", cachedAt: now(), expiresAt: null } : d.song;
-      return recount({ song, lines, translations, timings: changed ? [] : d.timings });
+      return recount({ song, lines, translations, timings: sameWords ? d.timings : [] });
     }
   }
 }

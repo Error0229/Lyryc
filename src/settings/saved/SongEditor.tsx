@@ -102,16 +102,12 @@ export function SongEditor({ song, onBack, onChanged }: { song: SavedSong; onBac
         </div>
       )}
 
-      {draft.wordsChanged && kept ? (
+      {draft.wordsChanged && kept && (
         <Callout tone="warning" title="You're changing the words">
           Saving deletes this song's {kept}, made for the old words. {saved.translations.length > 0 ? "They're" : "It's"} made again the next time it plays
           {saved.translations.length > 0 && ", and translating uses your AI provider again"}.
         </Callout>
-      ) : draft.linesChanged && hasTiming ? (
-        <Callout tone="warning" title="New times drop the word timing">
-          Word timing would replace your times as the song plays, so saving deletes it. It's worked out again the next time the song plays.
-        </Callout>
-      ) : null}
+      )}
 
       {editing && (
         <section className="grid gap-2">

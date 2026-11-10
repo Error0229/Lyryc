@@ -74,7 +74,10 @@ text** takes lyrics with no times at all and has the same worker time them
   the reason and changes nothing.
 - The alignment is cached as usual (videoId + text hash). Once the rows are
   saved with the same words, the song gets its word timing from the cache
-  the next time it is served, without aligning again.
+  the next time it is served, without aligning again. That holds for a song
+  retimed with the words it already had too: a save deletes a song's
+  alignments only when its words change (new times can't change what the
+  aligner hears).
 
 ## Downloads (on first enable, into `%LOCALAPPDATA%\<app id>\prealign\`)
 

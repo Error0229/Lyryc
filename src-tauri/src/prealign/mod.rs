@@ -642,7 +642,10 @@ pub async fn prealign_align(artist: String, track: String, lines: Vec<String>) -
             _ => return Err(s.error.clone().unwrap_or_else(|| "word-level timing is unavailable".into())),
         }
         let song = Song { video_id, title: track, artist, duration: None };
+        // Replacing an older ask drops its reply: that editor is told it was stopped.
         s.asked = Some(Ask { job: Job { song, lyrics: Some(Lyrics { lines, real_timing: false }) }, reply });
+        // A job past its last checkpoint finishes anyway; the worker clears the
+        // flag, under this lock, when it picks the next one.
         if s.working_on.is_some() {
             P.cancel.store(true, Ordering::Relaxed);
         }
@@ -738,6 +741,19 @@ mod tests {
         assert!(!s.queue.should_preempt());
         let (second, waiting) = s.next().unwrap();
         assert_eq!((second.song.video_id.as_str(), waiting.is_some()), ("next", false), "asked once, run once");
+    }
+
+    #[test]
+    fn a_newer_ask_replaces_the_older_one_whose_editor_hears_it_was_dropped() {
+        let mut s = Shared::default();
+        let (reply, mut older) = oneshot::channel();
+        s.asked = Some(Ask { job: job("older"), reply });
+        let (reply, _newer) = oneshot::channel();
+        s.asked = Some(Ask { job: job("newer"), reply });
+        // `prealign_align` answers a closed channel with STOPPED.
+        assert!(matches!(older.try_recv(), Err(oneshot::error::TryRecvError::Closed)));
+        assert_eq!(s.next().unwrap().0.song.video_id, "newer");
+        assert!(s.next().is_none());
     }
 
     #[test]

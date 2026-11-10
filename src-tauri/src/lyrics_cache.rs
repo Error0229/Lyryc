@@ -438,14 +438,26 @@ fn create_video_table(conn: &Connection) {
 
 fn remember_video_in(conn: &Connection, artist: &str, track: &str, video_id: &str) {
     let (artist, track) = song_key(artist, track);
-    if let Err(e) = conn.execute("INSERT OR REPLACE INTO song_video (artist, track, video_id) VALUES (?1, ?2, ?3)", params![artist, track, video_id]) {
+    // Called on every play: the same video again writes nothing.
+    let written = conn.execute(
+        "INSERT INTO song_video (artist, track, video_id) VALUES (?1, ?2, ?3)
+         ON CONFLICT (artist, track) DO UPDATE SET video_id = excluded.video_id WHERE video_id <> excluded.video_id",
+        params![artist, track, video_id],
+    );
+    if let Err(e) = written {
         error!("Failed to remember the song's video: {}", e);
     }
 }
 
 fn video_of_in(conn: &Connection, artist: &str, track: &str) -> Option<String> {
     let (artist, track) = song_key(artist, track);
-    conn.query_row("SELECT video_id FROM song_video WHERE artist = ?1 AND track = ?2", params![artist, track], |row| row.get(0)).ok()
+    conn.query_row("SELECT video_id FROM song_video WHERE artist = ?1 AND track = ?2", params![artist, track], |row| row.get(0))
+        .map_err(|e| {
+            if !matches!(e, rusqlite::Error::QueryReturnedNoRows) {
+                warn!("song_video query error: {}", e);
+            }
+        })
+        .ok()
 }
 
 /// The song is this video on YouTube Music; the newest one seen wins.
@@ -598,6 +610,8 @@ mod tests {
         remember_video_in(&conn, "A", " T ", "vid1");
         remember_video_in(&conn, "a", "other", "vid9");
         assert_eq!(video_of_in(&conn, "a", "t").as_deref(), Some("vid1"), "by the cache's key for the song");
+        remember_video_in(&conn, "a", "t", "vid1");
+        assert_eq!(conn.changes(), 0, "played again: nothing to write");
         remember_video_in(&conn, "a", "t", "vid2");
         assert_eq!(video_of_in(&conn, "a", "t").as_deref(), Some("vid2"), "another upload played since");
     }
