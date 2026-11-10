@@ -35,6 +35,7 @@ export function parseLrc(text: string): LyricLine[] {
 /**
  * The sung lines of lyrics pasted without times, for the aligner to time:
  * no blank lines, and no section headers ("[Chorus]"), which nobody sings.
+ * Any line that is all one bracket goes as a header, a sung "[hey]" too.
  */
 export function parsePlain(text: string): string[] {
   return text

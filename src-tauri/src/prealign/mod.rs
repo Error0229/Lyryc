@@ -630,17 +630,18 @@ pub async fn prealign_align(artist: String, track: String, lines: Vec<String>) -
     if lines.len() < MIN_LINES {
         return Err(format!("it takes at least {MIN_LINES} lines"));
     }
-    let video_id = video_of(&artist, &track).ok_or("this song hasn't played on YouTube Music yet. Play it there once, then try again")?;
-    info!("Pre-align: timing {} pasted lines of '{}' by '{}' ({})", lines.len(), track, artist, video_id);
     let (reply, answer) = oneshot::channel();
     {
         let mut s = shared();
+        // What the user can fix here first; playing the song comes after.
         match state(&s) {
             "ready" => {}
             "off" => return Err("word-level timing is off. Turn it on under Lyrics & sync".into()),
             "downloading" => return Err("word-level timing is still downloading its files. Try again when it's ready".into()),
             _ => return Err(s.error.clone().unwrap_or_else(|| "word-level timing is unavailable".into())),
         }
+        let video_id = video_of(&artist, &track).ok_or("this song hasn't played on YouTube Music yet. Play it there once, then try again")?;
+        info!("Pre-align: timing {} pasted lines of '{}' by '{}' ({})", lines.len(), track, artist, video_id);
         let song = Song { video_id, title: track, artist, duration: None };
         // Replacing an older ask drops its reply: that editor is told it was stopped.
         s.asked = Some(Ask { job: Job { song, lyrics: Some(Lyrics { lines, real_timing: false }) }, reply });
