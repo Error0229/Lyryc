@@ -6,6 +6,17 @@
 import { create } from "zustand";
 import type { Anchor, LookupStage, LyricLine, LyricsSource, Span, StripHover, Track } from "../lib/types";
 
+/**
+ * How "Search again" ended (`searchAgain.ts` words it). `rejected`: it threw
+ * lyrics away for this song, so "Start over" has something to forget. `at`:
+ * performance.now(), so the ✓ for new lyrics shows for a moment.
+ */
+export interface Searched {
+  message: string;
+  rejected: boolean;
+  at: number;
+}
+
 export type LyricsStatus = "idle" | "loading" | "ready" | "missing" | "instrumental";
 
 export interface Session {
@@ -28,6 +39,8 @@ export interface Session {
   pending: boolean;
   /** The pre-aligner is working on this song right now (`prealign-status`). */
   aligning: boolean;
+  /** How the last "Search again" ended, for the status icon to name; null for a song it never ran on. */
+  searched: Searched | null;
   /** Bumped when AI providers or routes change: a failed translation retries. */
   llmRevision: number;
   playing: boolean;
@@ -52,6 +65,7 @@ export const useSession = create<Session>()(() => ({
   stage: null,
   pending: false,
   aligning: false,
+  searched: null,
   llmRevision: 0,
   playing: false,
   locked: true,

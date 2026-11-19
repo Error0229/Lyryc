@@ -66,6 +66,14 @@ export interface PrealignStatus {
   workingOn: string | null;
   /** Songs aligned this session. */
   aligned: number;
+  /** Saved songs being timed for the editor (`alignLyrics`), the running one first; names as the cache keys them. */
+  timing: SongRef[];
+}
+
+/** A saved song, by the names the cache keys it under. */
+export interface SongRef {
+  artist: string;
+  track: string;
 }
 
 /** `update_status` / `update-status`: the self-updater's state. */

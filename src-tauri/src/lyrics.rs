@@ -612,6 +612,12 @@ impl TimingSource {
     }
 }
 
+/// Lyrics saved with this `source` carry real timing of the recording that
+/// plays: what word alignment is checked against.
+pub(crate) fn times_this_recording(source: Option<&str>) -> bool {
+    TimingSource::from_cache(source).times_this_recording()
+}
+
 impl From<Provider> for TimingSource {
     fn from(p: Provider) -> Self {
         match p {

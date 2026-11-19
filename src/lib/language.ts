@@ -80,6 +80,19 @@ export function detectLanguage(lines: readonly string[]): string {
 }
 
 /**
+ * One line's language, from its script, with the song's for what the script
+ * can't tell: a kanji-only line in a Japanese song is Japanese, Han in a
+ * Traditional Chinese song is Traditional. A Latin-script line is UNKNOWN.
+ */
+export function lineLanguage(line: string, song: string): string {
+  const script = lineScript(line);
+  if (script === "latin") return UNKNOWN;
+  if (script !== "zh") return script;
+  const family = languageFamily(song);
+  return family === "ja" || family === "zh-tw" ? family : "zh";
+}
+
+/**
  * Codes as families: lyrics show Simplified vs Traditional Chinese, never
  * Mainland vs Taiwan vs Hong Kong.
  */

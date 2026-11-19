@@ -81,6 +81,40 @@ pub struct TranslationResult {
     pub processing_time_ms: u64,
     pub error: Option<String>,
     pub is_same_language: bool,
+    /// What made it, kept with it in the cache: a song has one translation
+    /// per setting and model (`cache::key`), and Saved lyrics names each by
+    /// this. None when nothing was translated.
+    #[serde(default)]
+    pub made_with: Option<MadeWith>,
+}
+
+/// The settings a translation was made with, and the model that answered.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct MadeWith {
+    pub target_language: String,
+    pub style: String,
+    pub custom_prompt: Option<String>,
+    pub preserve_rhyme: bool,
+    pub preserve_meaning: bool,
+    pub maintain_structure: bool,
+    /// The provider's name in Settings, and the model asked.
+    pub provider: String,
+    pub model: String,
+}
+
+impl MadeWith {
+    pub fn new(config: &TranslationConfig, target: &crate::llm::Target) -> Self {
+        Self {
+            target_language: config.target_language.clone(),
+            style: config.style.clone(),
+            custom_prompt: config.custom_prompt.clone(),
+            preserve_rhyme: config.preserve_rhyme,
+            preserve_meaning: config.preserve_meaning,
+            maintain_structure: config.maintain_structure,
+            provider: target.label.clone(),
+            model: target.model.clone(),
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -94,6 +128,7 @@ impl TranslationResult {
             processing_time_ms: 0,
             error: Some(message.into()),
             is_same_language: false,
+            made_with: None,
         }
     }
 

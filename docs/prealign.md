@@ -55,7 +55,10 @@ today's timing in place and logs at debug level (`RUST_LOG=lyryc_lib=debug`).
 
 Settings → Lyrics & sync → Saved lyrics → a song → **Paste lyrics** / **Edit as
 text** takes lyrics with no times at all and has the same worker time them
-(`prealign_align`):
+(`prealign_align` with `lines`). **Also saved → Word timing → Work it out** does
+the same for a song's saved lines (`lines` null), for songs saved before word
+timing was on: they keep their line times, and the alignment is checked against
+them like any other (`real_timing` from the saved source).
 
 - The audio is the YouTube Music video the song was last seen as. Every
   lookup that comes with a videoId (the playing track's, the lookahead's)
@@ -65,13 +68,24 @@ text** takes lyrics with no times at all and has the same worker time them
   song that never played on YouTube Music has no audio, and the editor says
   to play it there once. With the feature off it says so too, and nothing
   runs.
-- The job goes ahead of the queue and stops the job that is running, which
-  runs again afterwards. The playing track does not preempt it. A newer ask
-  replaces an older one.
-- The lines come back with the aligner's line starts (the same `reject::apply`
-  as an estimate: there is no source timing to check against) and fill the
-  editor's rows, unsaved. A whole-track reject, or any failure, is shown as
-  the reason and changes nothing.
+- It runs in the background: the command returns once the job is queued (or
+  with what to fix first), and the editor closes its dialog. The editor's jobs
+  wait in their own line, in the order asked, ahead of the queue; one stops a
+  queue job that is running (that one runs again afterwards), never another
+  editor's job. The playing track does not preempt them. Asking again for a
+  song that is still waiting replaces its lines. `prealign-status` lists the
+  songs being timed (`timing`), so the editor and the song list show it.
+- Pasted lines come back with the aligner's line starts (the same
+  `reject::apply` as an estimate: there is no source timing to check against)
+  and are saved as the song's lyrics (`lyrics_cache::save_timed`, as if the
+  user pressed Save). A saved song's own lines need no saving: their word
+  timing is the cached alignment. Either way the overlay hears
+  `saved-lyrics-changed` and Settings hears `prealign-timed`, which shows a
+  toast. A whole-track reject, or any failure, is that toast's reason and
+  changes nothing. Turning the feature off drops the waiting jobs, each told so.
+- A saved song whose words were already aligned with its video is refused:
+  the aligner would hear the same thing again. Deleting that word timing
+  allows it.
 - The alignment is cached as usual (videoId + text hash). Once the rows are
   saved with the same words, the song gets its word timing from the cache
   the next time it is served, without aligning again. That holds for a song

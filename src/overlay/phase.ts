@@ -7,7 +7,7 @@
  * timing (→ Syncing words) → Word timing; side branches Searching again (which
  * names the pass it is in, like a first lookup), Not found, Instrumental.
  * Silence (no icon) means everything is fine. How "Search again" ended is
- * said in words, by a toast (actions.ts).
+ * the icon's name: a ✓ for a moment over new lyrics, or the no-lyrics icon.
  */
 import type { LookupStage, LyricsSource } from "../lib/types";
 import type { LyricsStatus } from "../state/session";
@@ -79,11 +79,15 @@ export type IconId =
 /** How the icon moves: breathing while working, bars while syncing, spinning while searching again; green when done. */
 export type IconMotion = "breathe" | "bars" | "spin" | "done";
 
+/** What clicking the icon does; it takes clicks (even on a locked strip) only when it has one. */
+export type IconAction = "paste-lyrics";
+
 export interface StatusIcon {
   id: IconId;
-  /** Its name, shown on hover: at most a few words. */
+  /** Its name, shown on hover: at most a few words, or how "Search again" ended. */
   tip: string;
   motion?: IconMotion;
+  action?: IconAction;
 }
 
 export interface IconInput {
@@ -98,11 +102,19 @@ export interface IconInput {
   quiet: boolean;
   /** Idle, and just launched or hovered: say what the strip waits for. */
   idleHint: boolean;
+  /** How "Search again" ended for this song, in words; null if it didn't run. */
+  searched: string | null;
+  /** It ended a moment ago (for 4 s). */
+  justSearched: boolean;
 }
 
 const SYNCING: StatusIcon = { id: "syncing", tip: "Syncing to the vocals", motion: "bars" };
 
+/** Lyrics are showing: what a new find is shown over. */
+const SHOWING: readonly Phase[] = ["word", "line", "estimate"];
+
 export function statusIcon(i: IconInput): StatusIcon | null {
+  if (i.justSearched && i.searched && SHOWING.includes(i.phase)) return { id: "synced", tip: i.searched, motion: "done" };
   if (i.justSynced && (i.phase === "word" || i.phase === "line")) {
     return { id: "synced", tip: i.phase === "word" ? "Synced to the vocals" : "Synced lyrics found", motion: "done" };
   }
@@ -122,10 +134,11 @@ export function statusIcon(i: IconInput): StatusIcon | null {
       return i.syncing ? SYNCING : null;
     case "refetch":
       return { id: "refetch", tip: "Searching again", motion: "spin" };
+    // Search again's words say more than the card does: they show at once.
     case "missing":
-      return i.quiet ? { id: "no-lyrics", tip: "No lyrics found" } : null;
+      return i.quiet || i.searched ? { id: "no-lyrics", tip: i.searched ?? "No lyrics found", action: "paste-lyrics" } : null;
     case "instrumental":
-      return i.quiet ? { id: "instrumental", tip: "Instrumental" } : null;
+      return i.quiet || i.searched ? { id: "instrumental", tip: i.searched ?? "Instrumental" } : null;
     case "word":
       return null;
   }

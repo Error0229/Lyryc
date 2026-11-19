@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, FileText, Plus, Trash2 } from "lucide-react";
 import { formatLrc, parseLrc, parsePlain } from "../../lib/lrc";
+import { songCacheKey } from "../../lib/lyrics";
 import type { LyricLine } from "../../lib/types";
 import { backend, type SavedChange, type SavedSong, type SavedSongDetail } from "../../services/ipc/backend";
 import { useSettings } from "../../state/settings";
@@ -10,13 +11,26 @@ import { ConfirmDialog, Dialog } from "../../ui/Dialog";
 import { TextArea, TextInput } from "../../ui/Field";
 import { IconButton } from "../../ui/IconButton";
 import { Segmented } from "../../ui/Segmented";
+import { Select } from "../../ui/Select";
 import { cx } from "../../lib/cx";
+import { isTiming, usePrealignStatus } from "../usePrealign";
 import { blankRow, draftOf, retimed, rowsOf, timeOf, type EditRow } from "./draft";
-import { savedOn, sourceLabel } from "./labels";
+import { savedOn, sourceLabel, translationMadeWith, translationNames, type LanguageName } from "./labels";
+
+/** Language codes by name, from the backend's list ("zh-TW" → "Chinese Traditional"). */
+function useLanguageName(): LanguageName {
+  const [names, setNames] = useState<Map<string, string>>(new Map());
+  useEffect(() => {
+    backend.languages().then((list) => setNames(new Map(list.map(([code, name]) => [code.toLowerCase(), name]))), () => {});
+  }, []);
+  return (code) => names.get(code.toLowerCase()) ?? code;
+}
 
 /**
  * One saved song: its lines with their times and translations, all editable,
  * and each part (lyrics, a translation, a word timing) deletable on its own.
+ * Timing by listening runs in the background (`alignLyrics`): the editor shows
+ * the song is waiting for it, and the timed song once it's saved.
  */
 export function SongEditor({ song, onBack, onChanged }: { song: SavedSong; onBack: () => void; onChanged: () => void }) {
   const [saved, setSaved] = useState<SavedSongDetail | null>(null);
@@ -24,8 +38,14 @@ export function SongEditor({ song, onBack, onChanged }: { song: SavedSong; onBac
   const [shown, setShown] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const [ask, setAsk] = useState<"forget" | "discard" | null>(null);
   const [lrc, setLrc] = useState<string | null>(null);
+  const aligner = useSettings((s) => s.prealign);
+  const timing = isTiming(usePrealignStatus(), song.artist, song.track);
+  const language = useLanguageName();
+  // What the timed song's arrival may replace: unsaved edits are never thrown away.
+  const dirtyNow = useRef(false);
 
   const load = (d: SavedSongDetail | null) => {
     if (!d) return onBack();
@@ -37,6 +57,19 @@ export function SongEditor({ song, onBack, onChanged }: { song: SavedSong; onBac
   useEffect(() => {
     backend.savedSong(song.artist, song.track).then(load, (e) => setError(`Couldn't open it: ${String(e)}`));
   }, [song.artist, song.track]);
+
+  // This song's timing ended (Settings says how in a toast): show what's saved now.
+  useEffect(
+    () =>
+      backend.subscribe({
+        timed: (t) => {
+          if (t.error || songCacheKey(t.artist, t.track) !== songCacheKey(song.artist, song.track)) return;
+          if (dirtyNow.current) return setNote("The timed song is saved. Discard your changes to see it.");
+          backend.savedSong(song.artist, song.track).then(load, () => {});
+        },
+      }),
+    [song.artist, song.track],
+  );
 
   const draft = useMemo(() => saved && draftOf(saved, rows), [saved, rows]);
   if (!saved || !draft) return <p className="py-10 text-center text-sm text-fg-muted">{error ?? "Opening…"}</p>;
@@ -54,6 +87,11 @@ export function SongEditor({ song, onBack, onChanged }: { song: SavedSong; onBac
   };
 
   const dirty = draft.linesChanged || draft.change !== null;
+  dirtyNow.current = dirty;
+  const time = (lines: string[] | null) => {
+    setError(null);
+    return backend.alignLyrics(song.artist, song.track, lines).then(() => setNote(null));
+  };
   const edit = (id: number, f: (r: EditRow) => EditRow) => setRows((rs) => rs.map((r) => (r.id === id ? f(r) : r)));
   const last = rows.reduce((t, r) => Math.max(t, timeOf(r) ?? 0), 0);
   const tr = saved.translations[shown];
@@ -61,6 +99,9 @@ export function SongEditor({ song, onBack, onChanged }: { song: SavedSong; onBac
   const editing = rows.length > 0;
   const kept = [saved.translations.length > 0 && "translation", hasTiming && "word timing"].filter(Boolean).join(" and ");
   const cols = tr ? "grid-cols-[6rem_minmax(0,1fr)_minmax(0,1fr)_2rem]" : "grid-cols-[6rem_minmax(0,1fr)_2rem]";
+  const trNames = translationNames(saved.translations, language);
+  // No word timing for these words yet: the aligner can listen for it.
+  const untimed = saved.song.kind === "lyrics" && saved.timings.length === 0;
 
   return (
     <div className="grid gap-5 pb-2">
@@ -102,6 +143,13 @@ export function SongEditor({ song, onBack, onChanged }: { song: SavedSong; onBac
         </div>
       )}
 
+      {timing && (
+        <Callout title="Listening to the song">
+          It's timed in the background, one song at a time, and saved when it's done. You can close this or open other songs meanwhile.
+        </Callout>
+      )}
+      {note && <Callout title="Timing finished">{note}</Callout>}
+
       {draft.wordsChanged && kept && (
         <Callout tone="warning" title="You're changing the words">
           Saving deletes this song's {kept}, made for the old words. {saved.translations.length > 0 ? "They're" : "It's"} made again the next time it plays
@@ -112,12 +160,14 @@ export function SongEditor({ song, onBack, onChanged }: { song: SavedSong; onBac
       {editing && (
         <section className="grid gap-2">
           {saved.translations.length > 1 && (
-            <div className="flex justify-end">
-              <Segmented
+            <div className="flex items-center justify-end gap-2">
+              <span className="text-xs text-fg-muted">{saved.translations.length} translations, one per setting and model</span>
+              <Select
                 label="Translation shown"
+                className="w-72"
                 value={String(shown)}
                 onChange={(v) => setShown(Number(v))}
-                options={saved.translations.map((_, k) => ({ value: String(k), label: `Translation ${k + 1}` }))}
+                options={trNames.map((label, k) => ({ value: String(k), label }))}
               />
             </div>
           )}
@@ -160,21 +210,43 @@ export function SongEditor({ song, onBack, onChanged }: { song: SavedSong; onBac
         </section>
       )}
 
-      {(saved.translations.length > 0 || saved.timings.length > 0) && (
+      {(saved.translations.length > 0 || saved.timings.length > 0 || untimed) && (
         <section className="grid gap-1">
           <h4 className="text-xs font-medium text-fg-muted">Also saved</h4>
           {tr && (
-            <Part label={saved.translations.length > 1 ? `Translation ${shown + 1}` : "Translation"} hint="Delete it to translate the song again the next time it plays." disabled={busy} onDelete={() => apply({ op: "forgetTranslation", key: tr.key })} />
+            <Part
+              label={saved.translations.length > 1 ? `Translation: ${trNames[shown]}` : "Translation"}
+              hint={`${translationMadeWith(tr, language)}. Delete it to translate the song again the next time it plays with these settings.`}
+              action="Delete"
+              disabled={busy}
+              onClick={() => apply({ op: "forgetTranslation", key: tr.key })}
+            />
           )}
           {saved.timings.map((t) => (
             <Part
               key={t.videoId + t.hash}
               label={t.rejected ? "Word timing (rejected)" : "Word timing"}
               hint={`YouTube video ${t.videoId}. ${t.rejected ? "It didn't fit these lyrics. Delete it to try again" : "Delete it to work it out again"} the next time the song plays.`}
+              action="Delete"
               disabled={busy}
-              onDelete={() => apply({ op: "forgetTiming", videoId: t.videoId, hash: t.hash })}
+              onClick={() => apply({ op: "forgetTiming", videoId: t.videoId, hash: t.hash })}
             />
           ))}
+          {untimed && (
+            <Part
+              label="Word timing"
+              hint={
+                timing
+                  ? "Listening to the song…"
+                  : aligner
+                    ? "None yet. Word-level timing can listen to the song as it last played on YouTube Music and work it out; the line times stay as they are."
+                    : "None yet. Turn on word-level timing under Lyrics & sync to work it out by listening to the song."
+              }
+              action={timing ? "Listening…" : "Work it out"}
+              disabled={busy || timing || !aligner || draft.wordsChanged}
+              onClick={() => time(null).catch((e) => setError(`Couldn't time it: ${String(e)}.`))}
+            />
+          )}
         </section>
       )}
 
@@ -211,20 +283,26 @@ export function SongEditor({ song, onBack, onChanged }: { song: SavedSong; onBac
         confirmLabel="Discard"
         onConfirm={onBack}
       />
-      <LyricsDialog text={lrc} song={song} onClose={() => setLrc(null)} onApply={(lines) => setRows(rowsOf(lines, saved.translations.map((t) => t.lines)))} />
+      <LyricsDialog
+        text={lrc}
+        replaces={saved.song.kind === "lyrics" ? kept : null}
+        onClose={() => setLrc(null)}
+        onApply={(lines) => setRows(rowsOf(lines, saved.translations.map((t) => t.lines)))}
+        onTime={time}
+      />
     </div>
   );
 }
 
-function Part({ label, hint, disabled, onDelete }: { label: string; hint: string; disabled: boolean; onDelete: () => void }) {
+function Part({ label, hint, action, disabled, onClick }: { label: string; hint: string; action: string; disabled: boolean; onClick: () => void }) {
   return (
     <div className="flex items-center justify-between gap-4 rounded-md px-1 py-1.5">
       <div className="min-w-0">
         <p className="text-sm text-fg">{label}</p>
         <p className="text-xs text-fg-muted">{hint}</p>
       </div>
-      <Button size="sm" variant="ghost" disabled={disabled} onClick={onDelete}>
-        Delete
+      <Button size="sm" variant="ghost" className="shrink-0" disabled={disabled} onClick={onClick}>
+        {action}
       </Button>
     </div>
   );
@@ -235,46 +313,51 @@ const count = (n: number) => `${n} ${n === 1 ? "line" : "lines"}`;
 /**
  * The lines as text, to paste or bulk-edit; applying replaces the rows (not
  * saved yet). Lines with times ("[01:02.50] words") are used as they are.
- * Lyrics with no times at all go to the aligner, which listens to `song`
- * and times them.
+ * Lyrics with no times at all go to the aligner (`onTime`), which listens to
+ * the song in the background and saves them timed: the dialog closes as soon
+ * as they're queued. `replaces`: the song has lyrics that saving them
+ * replaces (with what goes with them, e.g. "translation"), or null.
  */
-function LyricsDialog({ text, song, onClose, onApply }: { text: string | null; song: SavedSong; onClose: () => void; onApply: (lines: LyricLine[]) => void }) {
+function LyricsDialog({
+  text,
+  replaces,
+  onClose,
+  onApply,
+  onTime,
+}: {
+  text: string | null;
+  replaces: string | null;
+  onClose: () => void;
+  onApply: (lines: LyricLine[]) => void;
+  onTime: (lines: string[]) => Promise<void>;
+}) {
   const [value, setValue] = useState("");
-  const [listening, setListening] = useState(false);
+  const [queuing, setQueuing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const aligner = useSettings((s) => s.prealign);
-  // The request still wanted: closing, or asking again, drops the answers of the others.
-  const asked = useRef(0);
   useEffect(() => {
-    asked.current++;
     setValue(text ?? "");
-    setListening(false);
+    setQueuing(false);
     setError(null);
   }, [text]);
 
   const timed = parseLrc(value);
   const untimed = timed.length > 0 ? [] : parsePlain(value);
   const cant = aligner ? null : "Turn on word-level timing under Lyrics & sync to time them.";
-  const note = listening
-    ? "Listening to the song to time each line. This takes a minute or so."
-    : (error ?? (untimed.length > 0 ? `These lines have no times. ${cant ?? "Word-level timing listens to the song as it last played on YouTube Music to time them, which takes a minute or so."}` : null));
+  const replacing = replaces === null ? "" : ` They replace the song's lyrics${replaces ? `, and its ${replaces} goes with them` : ""}.`;
+  const note =
+    error ??
+    (untimed.length > 0
+      ? `These lines have no times. ${cant ?? `Word-level timing listens to the song as it last played on YouTube Music to time them, in the background (a minute or so), and saves them timed.${replacing}`}`
+      : null);
 
   const listen = () => {
-    const mine = ++asked.current;
-    setListening(true);
+    setQueuing(true);
     setError(null);
-    backend.alignLyrics(song.artist, song.track, untimed).then(
-      (lines) => {
-        if (asked.current !== mine) return;
-        onApply(lines);
-        onClose();
-      },
-      (e) => {
-        if (asked.current !== mine) return;
-        setListening(false);
-        setError(`Couldn't time them: ${String(e)}.`);
-      },
-    );
+    onTime(untimed).then(onClose, (e) => {
+      setQueuing(false);
+      setError(`Couldn't time them: ${String(e)}.`);
+    });
   };
 
   return (
@@ -289,8 +372,8 @@ function LyricsDialog({ text, song, onClose, onApply }: { text: string | null; s
             Cancel
           </Button>
           {untimed.length > 0 ? (
-            <Button variant="primary" disabled={listening || !!cant} onClick={listen}>
-              {listening ? "Listening…" : `Time ${count(untimed.length)}`}
+            <Button variant="primary" disabled={queuing || !!cant} onClick={listen}>
+              Time {count(untimed.length)}
             </Button>
           ) : (
             <Button
@@ -308,8 +391,8 @@ function LyricsDialog({ text, song, onClose, onApply }: { text: string | null; s
       }
     >
       <div className="grid gap-2">
-        <TextArea aria-label="Lyrics" className="min-h-72 font-mono text-xs" value={value} readOnly={listening} onChange={(e) => (setValue(e.target.value), setError(null))} spellCheck={false} />
-        <p className={cx("text-xs", error && !listening ? "text-danger" : "text-fg-muted")} aria-live="polite">
+        <TextArea aria-label="Lyrics" className="min-h-72 font-mono text-xs" value={value} readOnly={queuing} onChange={(e) => (setValue(e.target.value), setError(null))} spellCheck={false} />
+        <p className={cx("text-xs", error ? "text-danger" : "text-fg-muted")} aria-live="polite">
           {note}
         </p>
       </div>

@@ -184,19 +184,22 @@ while idle).
 | Syncing words | four bars rising and falling | Syncing to the vocals |
 | Timing improved (2.5 s) | ✓, green | Synced to the vocals / Synced lyrics found |
 | Searching again | arrows, spinning, then the pass's icon (sparkle, globe) | Searching again, then the pass's name |
-| Not found (after 6 s) | crossed-out captions | No lyrics found |
+| Not found (after 6 s; at once after Search again) | crossed-out captions, clickable | No lyrics found (or how Search again ended) · Click to paste lyrics |
 | Instrumental (after 4 s) | ♪ | Instrumental |
+| New lyrics from Search again (4 s) | ✓, green | New lyrics from QQ Music |
 | Lyrics playing, paused | none | — |
 
-**How "Search again" ends is said in words** (`overlay/actions.ts`,
-`searchAgain.ts`): an icon can't say which source the new lyrics are from, or
-what could not be asked. A toast on the strip names the source for 4 s ("New
-lyrics from QQ Music"). When nothing is left it stays until dismissed, says
-"Tried everything" only when every method answered (otherwise it names the ones
-that could not be asked, and for how long), and offers "Paste lyrics" (the
-saved-lyrics editor on this song) and "Start over" (forget what was rejected).
-It takes clicks while the strip is locked. While the search runs, the button's
-name follows the pass ("Trying other sources…").
+**How "Search again" ends is the status icon's name** (`overlay/actions.ts`
+keeps it as `searched`, `searchAgain.ts` words it), like every other state: no
+toast. New lyrics get the green ✓ for 4 s, named by their source ("New lyrics
+from QQ Music"). When nothing is left the no-lyrics icon shows at once (not
+after the 6 s card), named "Tried everything" only when every method answered,
+otherwise by the ones that could not be asked, and for how long. That icon
+takes the click, even on a locked strip (its hit rect is clickable), and opens
+the saved-lyrics editor on the song to paste lyrics; its name says so. Once
+Search again has rejected something for the song, "Start over" (forget what was
+rejected) joins the Move-mode toolbar. While the search runs, the button's name
+follows the pass ("Trying other sources…").
 
 ## Primitives (`src/ui`)
 

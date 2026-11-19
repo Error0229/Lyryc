@@ -3,7 +3,7 @@ import { phaseOf, statusIcon, type IconInput, type PhaseInput } from "./phase";
 
 const at = (p: Partial<PhaseInput>) => phaseOf({ hasTrack: true, status: "loading", stage: null, source: null, refetching: false, ...p });
 const icon = (i: Partial<IconInput>) =>
-  statusIcon({ phase: "word", stage: null, source: null, syncing: false, justSynced: false, quiet: false, idleHint: false, ...i });
+  statusIcon({ phase: "word", stage: null, source: null, syncing: false, justSynced: false, quiet: false, idleHint: false, searched: null, justSearched: false, ...i });
 
 describe("phaseOf", () => {
   it("is idle without a track", () => {
@@ -69,8 +69,17 @@ describe("statusIcon", () => {
 
   it("keeps not-found and instrumental in words first, then only an icon", () => {
     expect(icon({ phase: "missing" })).toBeNull();
-    expect(icon({ phase: "missing", quiet: true })?.id).toBe("no-lyrics");
+    expect(icon({ phase: "missing", quiet: true })).toMatchObject({ id: "no-lyrics", action: "paste-lyrics" });
     expect(icon({ phase: "instrumental", quiet: true })?.id).toBe("instrumental");
+  });
+
+  it("names how Search again ended: at once when nothing is left, for a moment over new lyrics", () => {
+    const nothing = "Nothing else found, but web search couldn't be asked (again in 1 min)";
+    expect(icon({ phase: "missing", searched: nothing })).toMatchObject({ id: "no-lyrics", tip: nothing, action: "paste-lyrics" });
+    expect(icon({ phase: "word", searched: "New lyrics from QQ Music", justSearched: true })).toMatchObject({ id: "synced", tip: "New lyrics from QQ Music" });
+    expect(icon({ phase: "estimate", searched: "New lyrics from LRCLIB", justSearched: true })?.id).toBe("synced");
+    expect(icon({ phase: "word", searched: "New lyrics from QQ Music" })).toBeNull();
+    expect(icon({ phase: "instrumental", searched: "No lyrics found: it looks instrumental" })?.tip).toBe("No lyrics found: it looks instrumental");
   });
 
   it("says what an idle strip waits for only when asked", () => {

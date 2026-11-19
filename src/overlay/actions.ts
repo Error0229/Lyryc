@@ -2,11 +2,11 @@
 import { backend } from "../services/ipc/backend";
 import { friendlyError, isNotConfigured } from "../services/ipc/llmClient";
 import { normalizeLines, songCacheKey } from "../lib/lyrics";
-import type { LyricLine, LyricsSource, NotFound, Track } from "../lib/types";
+import type { LyricLine, LyricsSource, Track } from "../lib/types";
 import { useSession } from "../state/session";
 import { useSettings } from "../state/settings";
 import { openSavedSong, openSettings } from "../state/nav";
-import { dismissSlot, toast } from "../ui/Toast";
+import { toast } from "../ui/Toast";
 import { playhead } from "./playhead";
 import { foundMessage, notFoundMessage, notFoundOf } from "./searchAgain";
 import { accepts, sameTrack } from "./upgrade";
@@ -28,8 +28,7 @@ export function setTrack(track: Track) {
     }
     return;
   }
-  useSession.setState({ track, lyrics: [], source: null, status: "loading", translations: {}, retimedAt: 0, refetching: false, stage: null, pending: false, aligning: false });
-  dismissSlot(SEARCH_AGAIN);
+  useSession.setState({ track, lyrics: [], source: null, status: "loading", translations: {}, retimedAt: 0, refetching: false, stage: null, pending: false, aligning: false, searched: null });
   playhead.reset();
   void loadLyrics(track);
 }
@@ -49,61 +48,52 @@ async function loadLyrics(track: Track) {
   }
 }
 
-/** The toast slot for how "Search again" ended: said once, replaced by the next press, gone with the song. */
-const SEARCH_AGAIN = "search-again";
-
 /**
  * "Search again": the lyrics on screen are wrong (or missing). The backend
  * never serves them for this song again and looks for others, so each press
  * shows something new or says there is nothing else. What it finds replaces
  * what is shown, even word timing, since the user asked. When nothing is
- * left, nothing is shown either: those lyrics are rejected, not saved.
+ * left, nothing is shown either: those lyrics are rejected, not saved. How it
+ * ended is the status icon's name (`searched`): where the new lyrics are
+ * from, or what could not be asked.
  */
 export async function refetchLyrics() {
-  const { track, refetching, status } = useSession.getState();
+  const { track, refetching, status, lyrics } = useSession.getState();
   // While the first lookup runs there is nothing to reject yet: its answer has not been seen.
   if (!track || refetching || status === "loading") return;
   const id = ++request;
-  dismissSlot(SEARCH_AGAIN);
-  useSession.setState({ refetching: true, stage: null });
+  useSession.setState({ refetching: true, stage: null, searched: null });
   try {
     const { extraSources, identifyWithSearch } = useSettings.getState();
     const r = await backend.fetchLyrics(track, extraSources, identifyWithSearch, true);
     if (id !== request) return;
     install(r.lines, r.source, r.pending);
-    toast({ slot: SEARCH_AGAIN, title: foundMessage(r.source), tone: r.lines.length ? "success" : "neutral", duration: 4000 });
+    // The lyrics that were showing are rejected now.
+    useSession.setState({ searched: { message: foundMessage(r.source), rejected: lyrics.length > 0, at: performance.now() } });
   } catch (e) {
     if (id !== request) return;
-    useSession.setState({ lyrics: [], source: null, status: "missing", translations: {}, pending: false });
-    sayNothingLeft(track, notFoundOf(e));
+    const nf = notFoundOf(e);
+    useSession.setState({
+      lyrics: [],
+      source: null,
+      status: "missing",
+      translations: {},
+      pending: false,
+      searched: { message: notFoundMessage(nf), rejected: nf.rejected, at: performance.now() },
+    });
   } finally {
     if (id === request) useSession.setState({ refetching: false, stage: null });
   }
 }
 
 /**
- * Every lyric found for the song is rejected, or nothing was found: say
- * whether everything was tried, and offer what is left to do. It stays until
- * dismissed: the user decides what happens to the song.
+ * The saved-lyrics editor on the song playing, where lyrics can be pasted
+ * (and timed by listening): the no-lyrics icon's click. It opens saved songs:
+ * one that nothing was saved for goes in as "not found" first.
  */
-function sayNothingLeft(track: Track, nf: NotFound) {
-  toast({
-    slot: SEARCH_AGAIN,
-    title: notFoundMessage(nf),
-    duration: 0,
-    actions: [
-      { label: "Paste lyrics", onClick: () => void pasteLyrics(track) },
-      ...(nf.rejected ? [{ label: "Start over", onClick: () => void startOver() }] : []),
-    ],
-  });
-}
-
-/**
- * The saved-lyrics editor on this song, where lyrics can be pasted (and timed
- * by listening). It opens saved songs: one that nothing was saved for goes in
- * as "not found" first.
- */
-async function pasteLyrics(track: Track) {
+export async function pasteLyrics() {
+  const { track } = useSession.getState();
+  if (!track) return;
   try {
     const saved = await backend.savedSong(track.artist, track.title);
     if (!saved) await backend.savedSongChange(track.artist, track.title, { op: "mark", instrumental: false });
@@ -118,7 +108,7 @@ export async function startOver() {
   const { track } = useSession.getState();
   if (!track) return;
   ++request; // answers on their way are for the song as it was
-  useSession.setState({ lyrics: [], source: null, status: "loading", translations: {}, refetching: false, stage: null, pending: false });
+  useSession.setState({ lyrics: [], source: null, status: "loading", translations: {}, refetching: false, stage: null, pending: false, searched: null });
   try {
     await backend.startOver(track);
   } catch (e) {
@@ -138,8 +128,8 @@ export async function reloadSaved(song: Pick<Track, "title" | "artist">) {
   const { track } = useSession.getState();
   if (!track || cacheKey(track) !== cacheKey(song)) return;
   const id = ++request;
-  dismissSlot(SEARCH_AGAIN); // "nothing else found" no longer holds: the user saved some
-  useSession.setState((s) => ({ translations: {}, llmRevision: s.llmRevision + 1 }));
+  // "Nothing else found" no longer holds: the user saved some.
+  useSession.setState((s) => ({ translations: {}, llmRevision: s.llmRevision + 1, searched: null }));
   try {
     const { extraSources, identifyWithSearch } = useSettings.getState();
     const r = await backend.fetchLyrics(track, extraSources, identifyWithSearch);
@@ -157,8 +147,7 @@ export function markInstrumental() {
   const { track } = useSession.getState();
   if (!track) return;
   ++request;
-  dismissSlot(SEARCH_AGAIN);
-  useSession.setState({ lyrics: [], source: "instrumental", status: "instrumental", translations: {}, refetching: false, stage: null });
+  useSession.setState({ lyrics: [], source: "instrumental", status: "instrumental", translations: {}, refetching: false, stage: null, searched: null });
   backend.markInstrumental(track).catch((e) => toast({ title: "Couldn't save that", description: friendlyError(e), tone: "danger" }));
 }
 

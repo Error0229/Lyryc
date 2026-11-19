@@ -1,7 +1,7 @@
 /** The strip's controls: the Move-mode toolbar, and the Unlock button a locked strip shows on hover. */
 import { useRef, useState, type ComponentProps, type PointerEvent as ReactPointerEvent, type SyntheticEvent } from "react";
 import { motion } from "motion/react";
-import { ChevronLeft, CircleArrowUp, Ellipsis, EyeOff, Languages, Lock, LockOpen, Minus, Music4, Pause, Play, Plus, SearchCheck, Settings2, SkipBack, SkipForward } from "lucide-react";
+import { ChevronLeft, CircleArrowUp, Ellipsis, EyeOff, Languages, Lock, LockOpen, Minus, Music4, Pause, Play, Plus, RotateCcw, SearchCheck, Settings2, SkipBack, SkipForward } from "lucide-react";
 import { spring, fade } from "../design/motion";
 import { NUDGE_STEP, trackKey } from "../lib/offset";
 import { backend } from "../services/ipc/backend";
@@ -11,7 +11,7 @@ import { openSettings } from "../state/nav";
 import { installUpdate, useUpdateStatus } from "../state/update";
 import { IconButton } from "../ui/IconButton";
 import { OffsetField } from "../ui/OffsetField";
-import { markInstrumental, refetchLyrics } from "./actions";
+import { markInstrumental, refetchLyrics, startOver } from "./actions";
 import { useHitRect } from "./hits";
 import { STAGE_NAME } from "./phase";
 import { ROOM_X_PX } from "./rows";
@@ -86,7 +86,8 @@ function useNameTip() {
 /**
  * Move mode's toolbar: a pill straddling the strip's edge away from the
  * anchor, so it never covers the lyric. Lock, playback, the lyrics lookup and
- * Settings stay in the row (disabled, not gone, without a track); "More" swaps
+ * Settings stay in the row (disabled, not gone, without a track); "Start over"
+ * joins them once "Search again" has rejected something for the song; "More" swaps
  * the row in place for the offset, translation, update and Hide. A first run also names
  * the gesture, in the tip's place, until something is hovered.
  */
@@ -100,6 +101,7 @@ export function Controls({ tipSide }: { tipSide: PillTipSide }) {
   const refetching = useSession((s) => s.refetching);
   const stage = useSession((s) => s.stage);
   const instrumental = useSession((s) => s.status === "instrumental");
+  const rejected = useSession((s) => s.searched?.rejected ?? false);
   // Nothing to search again until the first lookup has answered.
   const busy = useSession((s) => s.refetching || s.status === "loading");
   const showMore = (on: boolean) => () => {
@@ -146,6 +148,7 @@ export function Controls({ tipSide }: { tipSide: PillTipSide }) {
               className={refetching ? "animate-pulse" : undefined}
               onClick={() => void refetchLyrics()}
             />
+            {rejected && <Btn label="Start over" icon={<RotateCcw />} disabled={refetching} onClick={() => void startOver()} />}
             <Btn
               label={instrumental ? "Not instrumental" : "Mark instrumental"}
               aria-pressed={instrumental}

@@ -6,6 +6,7 @@ import type { SongRef } from "../../state/nav";
 import { Dialog } from "../../ui/Dialog";
 import { TextInput } from "../../ui/Field";
 import { Segmented } from "../../ui/Segmented";
+import { isTiming, usePrealignStatus } from "../usePrealign";
 import { useCurrentTrack } from "../useTrack";
 import { ago, sourceLabel } from "./labels";
 import { SongEditor } from "./SongEditor";
@@ -30,8 +31,11 @@ export function SavedLyricsBrowser({ open, onOpenChange, wanted }: { open: boole
   const [filter, setFilter] = useState<Filter>("all");
   const [song, setSong] = useState<SavedSong | null>(null);
   const track = useCurrentTrack();
+  const prealign = usePrealignStatus();
 
   const refresh = () => backend.savedSongs().then(setSongs, (e) => setError(`Couldn't read the saved lyrics: ${String(e)}`));
+  // A song timed in the background changed what's saved.
+  useEffect(() => backend.subscribe({ timed: () => void refresh() }), []);
   // Each request too: the browser may already be open on a list from before the song was saved.
   useEffect(() => {
     if (!open) return setSong(null);
@@ -111,6 +115,7 @@ export function SavedLyricsBrowser({ open, onOpenChange, wanted }: { open: boole
                   </div>
                   <div className="flex shrink-0 items-center gap-1.5">
                     {songCacheKey(s.artist, s.track) === playing && <Tag accent>Playing</Tag>}
+                    {isTiming(prealign, s.artist, s.track) && <Tag accent>Timing…</Tag>}
                     {s.translations > 0 && <Tag>Translated</Tag>}
                     {s.timings > 0 && <Tag>Word timing</Tag>}
                   </div>

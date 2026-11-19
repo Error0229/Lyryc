@@ -18,7 +18,7 @@ use language::detect_language_fallback;
 use parser::parse_translation_response;
 use types::TranslatedLyricLine;
 
-pub use types::{LyricLine, TranslationConfig, TranslationResult};
+pub use types::{LyricLine, MadeWith, TranslationConfig, TranslationResult};
 
 /// Translate with the first of `targets` that answers every line: the routed
 /// provider, then the backup.
@@ -85,7 +85,7 @@ where
         };
         let skipped = lines.iter().filter(|l| l.translation_confidence == Some(0.0)).count();
         if skipped == 0 {
-            let result = done(merge(&lyrics, lines, &language), &language, start);
+            let result = TranslationResult { made_with: Some(MadeWith::new(&config, target)), ..done(merge(&lyrics, lines, &language), &language, start) };
             info!("Translation done in {}ms by {} ({})", result.processing_time_ms, target.label, target.model);
             return Ok(result);
         }
@@ -146,6 +146,7 @@ fn done(translated_lines: Vec<TranslatedLyricLine>, language: &str, start: std::
         processing_time_ms: start.elapsed().as_millis() as u64,
         error: None,
         is_same_language: false,
+        made_with: None,
     }
 }
 
@@ -157,6 +158,7 @@ fn failed(error: String, processing_time_ms: u64) -> TranslationResult {
         processing_time_ms,
         error: Some(error),
         is_same_language: false,
+        made_with: None,
     }
 }
 
@@ -209,6 +211,8 @@ mod tests {
         assert!(r.success);
         assert_eq!(texts(&r), ["bonjour", "monde"]);
         assert_eq!(asked.iter().map(|(l, _)| l.as_str()).collect::<Vec<_>>(), ["main", "backup"]);
+        let by = r.made_with.unwrap();
+        assert_eq!((by.provider.as_str(), by.model.as_str(), by.target_language.as_str()), ("backup", "b", "fr"), "named by the model that answered");
     }
 
     #[tokio::test]

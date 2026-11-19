@@ -18,6 +18,7 @@ const EDITED: &str = "edited";
 
 mod editor;
 pub use editor::{saved_song, saved_song_change, saved_songs};
+pub(crate) use editor::{announce, save_timed, saved_row, SavedRow};
 
 lazy_static::lazy_static! {
     static ref DB_PATH: Option<PathBuf> = db_path();

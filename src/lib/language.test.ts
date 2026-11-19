@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectLanguage, languageFamily, shouldTranslate, UNKNOWN } from "./language";
+import { detectLanguage, languageFamily, lineLanguage, shouldTranslate, UNKNOWN } from "./language";
 import type { LanguageFilter } from "../state/schema";
 
 // Invented placeholder lines: only the script mix matters, not the words.
@@ -69,5 +69,20 @@ describe("shouldTranslate", () => {
     expect(shouldTranslate("zh", "ja", { mode: "except", languages: ["zh-cn"] })).toBe(false);
     expect(shouldTranslate("ja", "zh-tw", except)).toBe(true);
     expect(shouldTranslate(UNKNOWN, "zh-tw", except)).toBe(true);
+  });
+});
+
+describe("lineLanguage", () => {
+  it("reads a line's script, and asks the song what Han alone can't say", () => {
+    expect(lineLanguage("夜明けの街を", "ja")).toBe("ja");
+    expect(lineLanguage("夜明街", "ja")).toBe("ja");
+    expect(lineLanguage("夜明街", "zh-tw")).toBe("zh-tw");
+    expect(lineLanguage("夜明街", "zh")).toBe("zh");
+    expect(lineLanguage("새벽 역에서", "ko")).toBe("ko");
+  });
+
+  it("gives Latin lines, and empty ones, no language of their own", () => {
+    expect(lineLanguage("baby, hold on", "ja")).toBe(UNKNOWN);
+    expect(lineLanguage("", "ja")).toBe(UNKNOWN);
   });
 });

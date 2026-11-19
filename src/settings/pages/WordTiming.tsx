@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { PrealignStatus } from "../../lib/types";
 import { backend } from "../../services/ipc/backend";
 import { settings, useSettings } from "../../state/settings";
@@ -7,26 +7,12 @@ import { Callout } from "../../ui/Callout";
 import { ConfirmDialog } from "../../ui/Dialog";
 import { Row } from "../../ui/Field";
 import { Switch } from "../../ui/Switch";
+import { usePrealignStatus } from "../usePrealign";
 
 const LABEL = "Word-level timing (experimental, YouTube Music)";
 const FILES: Record<string, string> = { model: "alignment model", runtime: "ONNX Runtime", "yt-dlp": "yt-dlp" };
 
 const mb = (bytes: number) => `${Math.round(bytes / 1048576)} MB`;
-
-/** The backend's state for the feature, live. */
-function usePrealignStatus(): PrealignStatus | null {
-  const [status, setStatus] = useState<PrealignStatus | null>(null);
-  useEffect(() => {
-    let live = true;
-    backend.prealignStatus().then((s) => live && setStatus(s), () => {});
-    const off = backend.subscribe({ prealign: setStatus });
-    return () => {
-      live = false;
-      off();
-    };
-  }, []);
-  return status;
-}
 
 function Progress({ done, total }: { done: number; total: number | null }) {
   const share = total ? Math.min(1, done / total) : 0;
@@ -47,7 +33,7 @@ function statusLine(s: PrealignStatus): string {
     case "error":
       return s.error ?? "Something went wrong.";
     case "ready":
-      if (s.workingOn) return `Aligning ${s.workingOn}…`;
+      if (s.workingOn) return `Aligning ${s.workingOn}…${s.timing.length ? ` Saved songs to time: ${s.timing.length}.` : ""}`;
       return s.aligned ? `Ready. ${s.aligned} song${s.aligned === 1 ? "" : "s"} aligned this session.` : "Ready. Play something on YouTube Music.";
   }
 }

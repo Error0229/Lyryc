@@ -3,6 +3,7 @@
  * small looping clock instead of the playhead.
  */
 import { useEffect, useMemo, useRef } from "react";
+import { UNKNOWN } from "../lib/language";
 import { tokenize } from "../lib/timeline";
 import type { LyricLine, Span } from "../lib/types";
 import { LineView } from "../overlay/Line";
@@ -10,8 +11,11 @@ import { stageVars } from "../overlay/style";
 import { useSettings } from "../state/settings";
 import "../overlay/lyric.css";
 
-const samples: Record<"en" | "ja", { line: LyricLine; spans?: Span[]; translation: string }> = {
+/** `lang` / `trLang`: the line's and its translation's language families (fonts by language). */
+const samples: Record<"en" | "ja", { line: LyricLine; spans?: Span[]; translation: string; lang: string; trLang: string }> = {
   en: {
+    lang: UNKNOWN,
+    trLang: "es",
     line: {
       time: 0,
       duration: 4,
@@ -21,6 +25,8 @@ const samples: Record<"en" | "ja", { line: LyricLine; spans?: Span[]; translatio
     translation: "Sostén la luz un poco más",
   },
   ja: {
+    lang: "ja",
+    trLang: UNKNOWN,
     line: {
       time: 0,
       duration: 4,
@@ -96,6 +102,8 @@ export function Preview({ sample = "en", forceTranslation = false }: { sample?: 
               plain={!wordHighlight}
               kana={furigana.mode === "replace"}
               display={translation.display}
+              lang={translatedOnly ? s.trLang : s.lang}
+              subLang={s.trLang}
             />
           </div>
         </div>

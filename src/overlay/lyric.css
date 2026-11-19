@@ -271,6 +271,12 @@
   width: 1em;
   height: 1em;
 }
+[data-action] {
+  cursor: pointer;
+}
+[data-action]:hover .status-icon {
+  opacity: 1;
+}
 [data-motion="breathe"] .status-icon {
   animation: status-breathe 1.6s ease-in-out infinite;
 }

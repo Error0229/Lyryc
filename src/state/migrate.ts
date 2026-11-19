@@ -106,6 +106,7 @@ export function fromLegacy(v2: Obj | null, oldOffsets: Obj | null): Settings {
     nextLine: false,
     lyric: {
       fontFamily: str(style.fontFamily, d.lyric.fontFamily),
+      fonts: {},
       fontSize: num(style.fontSize, d.lyric.fontSize, 0.5, 6),
       fontWeight: WEIGHTS[String(style.fontWeight)] ?? d.lyric.fontWeight,
       lineHeight: num(style.lineHeight, d.lyric.lineHeight, 0.8, 3),

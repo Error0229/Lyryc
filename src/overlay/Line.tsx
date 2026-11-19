@@ -3,6 +3,8 @@
  * lives in per-token CSS variables and progress comes from --t on the stage.
  */
 import { memo, useLayoutEffect, useRef, type CSSProperties, type ReactNode } from "react";
+import { fontVar, htmlLang } from "../lib/fonts";
+import { UNKNOWN } from "../lib/language";
 import type { Token } from "../lib/timeline";
 import type { TranslationDisplay } from "../state/schema";
 
@@ -64,6 +66,12 @@ function useFitWidth(tokens: readonly Token[]) {
   return ref;
 }
 
+/** A row in a language: its `lang`, and its language's font when it has one (Latin script keeps the stage's). */
+function inLanguage(code: string | undefined): { lang?: string; style?: CSSProperties } {
+  if (!code || code === UNKNOWN) return {};
+  return { lang: htmlLang(code), style: { fontFamily: fontVar(code) } };
+}
+
 export interface LineViewProps {
   tokens: Token[];
   sub: string | null;
@@ -78,14 +86,18 @@ export interface LineViewProps {
   nextRow?: boolean;
   /** The status icon, just after the line's last word (it scales with the line). */
   status?: ReactNode;
+  /** Each row's language family (`LineModel`), for its font. */
+  lang?: string;
+  subLang?: string;
+  nextLang?: string;
 }
 
-export const LineView = memo(function LineView({ tokens, sub, plain, kana, display, awaitSub = false, next = null, nextRow = false, status = null }: LineViewProps) {
+export const LineView = memo(function LineView({ tokens, sub, plain, kana, display, awaitSub = false, next = null, nextRow = false, status = null, lang, subLang, nextLang }: LineViewProps) {
   const ref = useFitWidth(tokens);
   const side = display === "side-by-side" && sub;
   return (
     <div className={side ? "flex items-baseline justify-center gap-[1em]" : "block"}>
-      <div className={side ? "lyric-main min-w-0 flex-1 text-right" : "lyric-main"}>
+      <div className={side ? "lyric-main min-w-0 flex-1 text-right" : "lyric-main"} {...inLanguage(lang)}>
         <span ref={ref} className="lyric-line" data-plain={plain || undefined}>
           <span className="lyric-words">
             {tokens.map((tok, i) => (
@@ -95,14 +107,18 @@ export const LineView = memo(function LineView({ tokens, sub, plain, kana, displ
           {status && <span className="status-after">{status}</span>}
         </span>
       </div>
-      {sub && <span className={side ? "lyric-translation min-w-0 flex-1 text-left" : "lyric-translation"}>{sub}</span>}
+      {sub && (
+        <span className={side ? "lyric-translation min-w-0 flex-1 text-left" : "lyric-translation"} {...inLanguage(subLang)}>
+          {sub}
+        </span>
+      )}
       {!sub && awaitSub && (
         <span className="lyric-translation" data-await aria-hidden>
           ···
         </span>
       )}
       {nextRow && (
-        <span className="lyric-next" aria-hidden={!next}>
+        <span className="lyric-next" aria-hidden={!next} {...inLanguage(nextLang)}>
           {next || "\u00a0"}
         </span>
       )}

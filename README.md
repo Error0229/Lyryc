@@ -20,7 +20,9 @@ highlight each word as it's sung.
   are word-timed. Word timing can also be worked out on your machine.
 - **Ready before the song starts:** on YouTube Music, the next songs in your
   queue are looked up and translated in advance.
-- **Your style:** font, colours, glow and background, with a live preview.
+- **Your style:** any installed font, searchable, and a font of their own for the
+  languages you add (Japanese, Korean, Chinese, Cyrillic, ...: each lists only
+  the fonts made for it), colours, glow and background, with a live preview.
 - **Updates itself** from GitHub Releases.
 
 ![Unlocked: the strip's border and toolbar, for moving it and controlling playback](docs/images/unlocked.png)
@@ -90,15 +92,18 @@ one SQLite file, `%LOCALAPPDATA%\com.lyryc.app\lyrics_cache.db`:
 
 - **Translations** are saved only when every line got one, so a partial answer
   is asked for again next time. A new model, style or language translates the
-  song afresh. Better timing for the same words doesn't.
+  song afresh, and the old one is kept: Saved lyrics names each by what made
+  it (language, style or prompt, model, date). Better timing for the same words
+  doesn't translate again.
 - **The queue lookahead** fills this cache before a song starts, so it plays
   straight from it.
 - **Wrong lyrics?** **Search lyrics again** in the toolbar rejects them for that
   song (from any source, however they are transcribed) and shows the next ones
-  found, saying where they are from. When none are left it says whether every
-  source could be asked, and offers **Paste lyrics** (the editor below, on that
-  song) and **Start over** (forget what was rejected). **Mark instrumental**
-  saves "no words" for it.
+  found; the status icon's tooltip says where they are from. When none are left,
+  the no-lyrics icon's tooltip says whether every source could be asked;
+  clicking the icon opens **Paste lyrics** (the editor below, on that song), and
+  **Start over** (forget what was rejected) joins the toolbar. **Mark
+  instrumental** saves "no words" for it.
 - **To fix a song,** click **Browse** under Settings → Lyrics & sync → Saved lyrics
   and translations. Open a song to edit its words, times and translation, paste
   LRC, add lyrics where none were found, or delete any part of it. Changing the
@@ -106,8 +111,12 @@ one SQLite file, `%LOCALAPPDATA%\com.lyryc.app\lyrics_cache.db`:
   plays.
 - **Have the words but no times?** Paste them in the same place (**Paste lyrics**,
   or **Edit as text**). With word-level timing on, **Time N lines** listens to the
-  song as it last played on YouTube Music and times each line, in about a
-  minute. Check the times, then save.
+  song as it last played on YouTube Music in the background, times each line and
+  saves them, in about a minute. Close the editor and time other songs
+  meanwhile: they go one at a time, and a toast says when each is done.
+- **Word timing for songs saved before you turned it on?** Open the song: under
+  **Also saved**, **Word timing → Work it out** listens to it the same way and
+  keeps its line times.
 - **To start over,** use **Clear** under Settings → Lyrics & sync → Saved lyrics
   and translations, which shows the cache's size. (**Remove downloaded files**
   there deletes the word-timing model and yt-dlp, not the cache.)

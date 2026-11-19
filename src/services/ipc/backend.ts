@@ -5,7 +5,7 @@
  */
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { Anchor, HitRect, LookupStage, LyricLine, LyricsSource, PlaybackCommand, PrealignStatus, Span, StripHover, StripView, TimedLyrics, TimeSample, Track, UpdateStatus } from "../../lib/types";
+import type { Anchor, HitRect, LookupStage, LyricLine, LyricsSource, PlaybackCommand, PrealignStatus, SongRef, Span, StripHover, StripView, TimedLyrics, TimeSample, Track, UpdateStatus } from "../../lib/types";
 import type { TranslationPrefs } from "../../state/schema";
 import { mockBackend } from "./mock";
 
@@ -36,6 +36,8 @@ export interface BackendEvents {
   timingFinal: (track: Pick<Track, "title" | "artist">) => void;
   /** Word-level timing: download progress and state changes (`prealign-status`). */
   prealign: (s: PrealignStatus) => void;
+  /** A song `alignLyrics` was asked to time is done (`prealign-timed`): `error` says why it didn't work. */
+  timed: (t: Timed) => void;
   /** A song's saved lyrics were edited in Settings (`saved-lyrics-changed`): names as the cache keys them. */
   savedLyrics: (song: Pick<Track, "title" | "artist">) => void;
   /** The lookahead found an upcoming song's lyrics (`lyrics-ahead`): translate them before it plays. */
@@ -64,6 +66,8 @@ export interface Backend {
   translate(lines: LyricLine[], prefs: TranslationPrefs): Promise<Translated[]>;
   furigana(text: string): Promise<Span[]>;
   languages(): Promise<Array<[code: string, name: string]>>;
+  /** Every installed font family that writes some script, sorted, with the scripts it's made for. */
+  systemFonts(): Promise<SystemFont[]>;
   playback(cmd: PlaybackCommand, seekTime?: number): Promise<void>;
   /** The strip's height (CSS px; it grows away from its anchored edge) and the transparent room around it. */
   setFrame(height: number, room: { x: number; y: number }): Promise<void>;
@@ -88,12 +92,15 @@ export interface Backend {
   prealignConfigure(enabled: boolean, extraSources: boolean): Promise<PrealignStatus>;
   prealignStatus(): Promise<PrealignStatus>;
   /**
-   * Times a saved song's lyrics that have no times by listening to it: the
-   * YouTube Music video it last played as (word-level timing must be on).
-   * Takes a minute or so; resolves to `lines` with their times, and rejects
-   * with the reason when it can't (never played there, words not heard, ...).
+   * Times a saved song by listening to it, in the background: the YouTube
+   * Music video it last played as (word-level timing must be on). `lines`:
+   * lyrics pasted without times, saved with the times heard; null: the song's
+   * saved lines, which keep their times and get word timing. Resolves once
+   * it's queued, or rejects with what to fix first (never played there, ...);
+   * a minute or so later `timed` says how it ended. Songs are timed one at a
+   * time, in the order asked (`PrealignStatus.timing`).
    */
-  alignLyrics(artist: string, track: string, lines: string[]): Promise<LyricLine[]>;
+  alignLyrics(artist: string, track: string, lines: string[] | null): Promise<void>;
   /** "Prepare lyrics for upcoming songs", mirrored like `prealignConfigure`. */
   lookaheadConfigure(enabled: boolean, extraSources: boolean): Promise<void>;
   /** The cache of lyrics, translations and word timings: how much is saved. */
@@ -114,6 +121,21 @@ export interface Backend {
   /** Downloads, installs and restarts the app. Resolves only if that fails. */
   updateInstall(): Promise<void>;
   subscribe(on: Partial<BackendEvents>): () => void;
+}
+
+/** `prealign-timed`: how timing a saved song ended. `pasted`: its lyrics were pasted without times (and are saved now, if it worked). */
+export interface Timed extends SongRef {
+  pasted: boolean;
+  error: string | null;
+}
+
+/**
+ * `system_fonts`: an installed family, by the name CSS font-family knows it.
+ * `scripts`: what it's made to write, "latin" or a lib/fonts.ts FONT_LANGUAGES code.
+ */
+export interface SystemFont {
+  name: string;
+  scripts: string[];
 }
 
 /** `cache_size`: entries across lyrics, translations and timings, and bytes on disk. */
@@ -141,6 +163,22 @@ export interface SavedSong {
 export interface SavedTranslation {
   key: string;
   lines: string[];
+  /** What made it: a song has one per language, style, prompt and model. */
+  madeWith: MadeWith;
+  /** Unix seconds. */
+  cachedAt: number;
+}
+
+/** `MadeWith`, as the cache stores it (snake_case, like the rest of a translation). */
+export interface MadeWith {
+  target_language: string;
+  style: string;
+  custom_prompt: string | null;
+  preserve_rhyme: boolean;
+  preserve_meaning: boolean;
+  maintain_structure: boolean;
+  provider: string;
+  model: string;
 }
 
 /** Saved word timing for one YouTube video; `rejected`: aligned and thrown away. */
@@ -162,7 +200,7 @@ export interface SavedSongDetail {
  * when the words change; new times alone keep both.
  */
 export type SavedChange =
-  | { op: "save"; lines: LyricLine[]; translations: SavedTranslation[] }
+  | { op: "save"; lines: LyricLine[]; translations: Array<Pick<SavedTranslation, "key" | "lines">> }
   | { op: "forget" }
   | { op: "mark"; instrumental: boolean }
   | { op: "forgetTranslation"; key: string }
@@ -228,6 +266,7 @@ const tauriBackend: Backend = {
   },
 
   languages: () => invoke<Array<[string, string]>>("get_supported_languages"),
+  systemFonts: () => invoke<SystemFont[]>("system_fonts"),
   playback: (command, seekTime) => invoke("send_playback_command", { command, seekTime: seekTime ?? null }),
   setFrame: (height, room) => invoke<void>("strip_set_frame", { height, room }),
   setWidth: (width, done) => invoke<void>("strip_set_width", { width, done }),
@@ -251,7 +290,7 @@ const tauriBackend: Backend = {
 
   prealignConfigure: (enabled, extraSources) => invoke<PrealignStatus>("prealign_configure", { enabled, extraSources }),
   prealignStatus: () => invoke<PrealignStatus>("prealign_status"),
-  alignLyrics: (artist, track, lines) => invoke<LyricLine[]>("prealign_align", { artist, track, lines }),
+  alignLyrics: (artist, track, lines) => invoke<void>("prealign_align", { artist, track, lines }),
   lookaheadConfigure: (enabled, extraSources) => invoke<void>("lookahead_configure", { enabled, extraSources }),
   prealignRemoveFiles: () => invoke<PrealignStatus>("prealign_remove_files"),
   cacheSize: () => invoke<CacheSize>("cache_size"),
@@ -276,6 +315,7 @@ const tauriBackend: Backend = {
           on.lyrics!({ track: { title: p.title, artist: p.artist }, lines: p.lines, source: p.source }),
         ),
       on.prealign && listen<PrealignStatus>("prealign-status", (e) => on.prealign!(e.payload)),
+      on.timed && listen<Timed>("prealign-timed", (e) => on.timed!(e.payload)),
       on.progress &&
         listen<{ title: string; artist: string; stage: LookupStage }>("lyrics-progress", ({ payload: p }) =>
           on.progress!({ track: { title: p.title, artist: p.artist }, stage: p.stage }),
