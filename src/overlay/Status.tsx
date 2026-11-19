@@ -11,7 +11,7 @@ import { CaptionsOff, Check, CirclePlay, EqualApproximately, Globe, Music4, Refr
 import seal from "../../src-tauri/icons/tray/48.png";
 import { fade, spring } from "../design/motion";
 import { useHitRect } from "./hits";
-import type { IconId, StatusIcon as Icon } from "./phase";
+import type { IconAction, IconId, StatusIcon as Icon } from "./phase";
 
 export type TipSide = "above" | "below" | "left" | "right";
 
@@ -77,22 +77,30 @@ const ICONS: Record<IconId, ReactNode> = {
   instrumental: <Music4 />,
 };
 
+/** How an icon's click is named after its own name: "No lyrics found · Click to paste lyrics". */
+const ACTION_HINT: Record<IconAction, string> = { "paste-lyrics": "Click to paste lyrics" };
+
 /**
  * The icon, sized by the text it sits with (lyric.css .status-slot). Hovered
  * (`hovered`: the backend's cursor poll while locked, or the DOM) it shows its
- * name; `pinned` shows it regardless.
+ * name; `pinned` shows it regardless. An icon with an action takes the click
+ * (a locked strip lets it through there) and `onAction` does it.
  */
-export function StatusIcon({ icon, hovered, pinned }: { icon: Icon; hovered: boolean; pinned: boolean }) {
+export function StatusIcon({ icon, hovered, pinned, onAction }: { icon: Icon; hovered: boolean; pinned: boolean; onAction: (a: IconAction) => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const [domHover, setDomHover] = useState(false);
-  useHitRect("status", ref, false, 4);
+  const action = icon.action;
+  useHitRect("status", ref, !!action, 4);
+  const name = action ? `${icon.tip} · ${ACTION_HINT[action]}` : icon.tip;
   return (
     <motion.div
       ref={ref}
       className="status-slot"
       data-motion={icon.motion}
-      aria-label={icon.tip}
-      role="status"
+      data-action={action}
+      aria-label={name}
+      role={action ? "button" : "status"}
+      onClick={action ? () => onAction(action) : undefined}
       onPointerEnter={() => setDomHover(true)}
       onPointerLeave={() => setDomHover(false)}
       initial={{ opacity: 0 }}
@@ -103,7 +111,7 @@ export function StatusIcon({ icon, hovered, pinned }: { icon: Icon; hovered: boo
       <span key={icon.id} className="status-icon">
         {ICONS[icon.id]}
       </span>
-      <NameTip text={hovered || domHover || pinned ? icon.tip : null} side="right" />
+      <NameTip text={hovered || domHover || pinned ? name : null} side="right" />
     </motion.div>
   );
 }

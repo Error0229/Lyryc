@@ -1,26 +1,31 @@
+import { useEffect, useMemo, useState } from "react";
 import { AlignCenter, AlignLeft, AlignRight, Monitor, Moon, RotateCcw, Sun } from "lucide-react";
 import { matchPreset, overlayPresets } from "../../design/overlayPresets";
 import { cx } from "../../lib/cx";
-import type { FontWeight, LyricStyle, TextAlign, UiTheme } from "../../state/schema";
+import { fontsFor } from "../../lib/fonts";
+import { backend, type SystemFont } from "../../services/ipc/backend";
+import { defaultLyric, type FontWeight, type LyricStyle, type TextAlign, type UiTheme } from "../../state/schema";
 import { settings, useSettings } from "../../state/settings";
 import { Button } from "../../ui/Button";
 import { ColorField } from "../../ui/ColorField";
 import { Row } from "../../ui/Field";
 import { Section } from "../../ui/Section";
 import { Segmented } from "../../ui/Segmented";
-import { Select } from "../../ui/Select";
+import { FontPicker } from "../../ui/FontPicker";
 import { Slider } from "../../ui/Slider";
 import { Switch } from "../../ui/Switch";
+import { LanguageFonts } from "../LanguageFonts";
 import { PageHeader } from "../Page";
 import { Preview } from "../Preview";
 
-const fonts = [
-  { value: "Inter, system-ui, sans-serif", label: "Inter / System" },
-  { value: "'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif", label: "Segoe UI" },
-  { value: "'Noto Sans JP', 'Yu Gothic UI', 'Hiragino Sans', sans-serif", label: "Noto Sans JP" },
-  { value: "Georgia, 'Times New Roman', serif", label: "Serif" },
-  { value: "'JetBrains Mono', 'Cascadia Code', monospace", label: "Monospace" },
-];
+/** The installed fonts, with what each writes; empty until the backend answers. */
+function useSystemFonts(): SystemFont[] {
+  const [fonts, setFonts] = useState<SystemFont[]>([]);
+  useEffect(() => {
+    backend.systemFonts().then(setFonts, () => {});
+  }, []);
+  return fonts;
+}
 
 const px = (v: number) => `${Math.round(v)} px`;
 const set = settings.lyric;
@@ -58,6 +63,9 @@ function Presets({ style }: { style: LyricStyle }) {
 export function AppearancePage() {
   const theme = useSettings((s) => s.theme);
   const style = useSettings((s) => s.lyric);
+  const installed = useSystemFonts();
+  // The main font writes Latin; a language with its own script gets its own below.
+  const fonts = useMemo(() => [{ value: defaultLyric.fontFamily, label: "System default" }, ...fontsFor(installed, "latin")], [installed]);
 
   return (
     <div className="grid gap-8">
@@ -91,8 +99,9 @@ export function AppearancePage() {
           </Button>
         }
       >
-        <Row label="Font">
-          <Select label="Font" value={fonts.find((f) => f.value === style.fontFamily)?.value} placeholder="Custom" options={fonts} onChange={(fontFamily) => set({ fontFamily })} />
+        <Row label="Font" hint="For Latin script, and every language without a font of its own.">
+          {/* A font set some other way (or uninstalled since) shows as "Custom", and keeps working. */}
+          <FontPicker label="Font" value={style.fontFamily} placeholder="Custom" options={fonts} onChange={(fontFamily) => set({ fontFamily })} onPreview={(fontFamily) => fontFamily && set({ fontFamily })} />
         </Row>
         <Row label="Size">
           <Slider label="Size" value={style.fontSize} min={1} max={5} step={0.05} format={(v) => px(v * 16)} onChange={(fontSize) => set({ fontSize })} />
@@ -129,6 +138,8 @@ export function AppearancePage() {
           <Slider label="Line height" value={style.lineHeight} min={1} max={2} step={0.05} format={(v) => v.toFixed(2)} onChange={(lineHeight) => set({ lineHeight })} />
         </Row>
       </Section>
+
+      <LanguageFonts style={style} installed={installed} />
 
       <Section title="Colours" description="Words sweep from upcoming to active, then settle as sung.">
         <Row label="Upcoming words">

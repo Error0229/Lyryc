@@ -2,19 +2,21 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode, type RefObject } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { fade, spring } from "../design/motion";
+import { detectLanguage, languageFamily } from "../lib/language";
 import { lineKeys } from "../lib/lyrics";
 import { totalOffset, trackKey } from "../lib/offset";
 import { backend } from "../services/ipc/backend";
 import { useSession } from "../state/session";
 import { useSettings } from "../state/settings";
 import { Toaster } from "../ui/Toast";
+import { pasteLyrics } from "./actions";
 import { Controls, UnlockButton, WidthHandles } from "./Controls";
 import { useHitRect } from "./hits";
 import { useBackendEvents, useFurigana, useRows, useSettingsMirror, useStripHeight, useTranslations } from "./hooks";
 import { PILL_OVERLAP_PX, PILL_PX, ROOM_PX, ROOM_X_PX } from "./rows";
 import { LineView } from "./Line";
 import { lineModel } from "./model";
-import { phaseOf, QUIET_AFTER_MS, statusIcon, type Phase } from "./phase";
+import { phaseOf, QUIET_AFTER_MS, statusIcon, type IconAction, type Phase } from "./phase";
 import { Stage, useActiveLine, useRetiming } from "./Stage";
 import { Card, IdleSeal, StatusAlone, StatusIcon, useAfter, useFor } from "./Status";
 import { stageVars } from "./style";
@@ -28,6 +30,11 @@ const LAUNCH_HINT_MS = 5000;
 const SYNCED_MS = 2500;
 /** Paused this long, the lyrics step back. */
 const PAUSE_DIM_MS = 2000;
+/** The ✓ over lyrics "Search again" just found, named by where they're from. */
+const SEARCHED_MS = 4000;
+
+const ACTIONS: Record<IconAction, () => void> = { "paste-lyrics": () => void pasteLyrics() };
+const act = (a: IconAction) => ACTIONS[a]();
 
 /** What the lyric rows hold when there is no line to sing: decided by the phase. */
 function shownWithoutLine(phase: Phase, quiet: boolean): "idle" | "card" | "message" | "none" {
@@ -65,7 +72,7 @@ function useEscToLock(moving: boolean) {
   }, [moving]);
 }
 
-/** A toast takes clicks while the strip is locked too: its actions ("Paste lyrics") must work there. */
+/** A toast takes clicks while the strip is locked too: its actions ("Set up a provider") must work there. */
 function useToastHit(ref: RefObject<HTMLElement | null>) {
   useHitRect("toast", ref, true);
 }
@@ -125,6 +132,8 @@ export function Overlay() {
   const furiganaOn = useFurigana(index);
   const retiming = useRetiming(s.retimedAt);
   const keys = useMemo(() => lineKeys(s.lyrics), [s.lyrics]);
+  const language = useMemo(() => detectLanguage(s.lyrics.map((l) => l.text)), [s.lyrics]);
+  const target = languageFamily(cfg.translation.targetLanguage);
 
   // Guessed timing must not drive a highlight: show estimated lines plain.
   const estimated = isEstimate(s.source);
@@ -141,8 +150,10 @@ export function Overlay() {
         translations,
         display: cfg.translation.display,
         furigana: furiganaOn ? s.furigana : null,
+        language,
+        target,
       }),
-    [s.lyrics, keys, index, highlight, translations, cfg.translation.display, furiganaOn, s.furigana],
+    [s.lyrics, keys, index, highlight, translations, cfg.translation.display, furiganaOn, s.furigana, language, target],
   );
   const vars = useMemo(
     () => stageVars({ lyric: cfg.lyric, translation: cfg.translation, furigana: cfg.furigana, rows }),
@@ -171,6 +182,7 @@ export function Overlay() {
   useEffect(() => void setTimeout(() => setLaunched(false), LAUNCH_HINT_MS), []);
   const quiet = useAfter(phase === "missing" || phase === "instrumental", QUIET_AFTER_MS[phase] ?? 0, key);
   const justSynced = useFor(s.retimedAt, SYNCED_MS);
+  const justSearched = useFor(s.searched?.at ?? 0, SEARCHED_MS);
   const dim = useAfter(!s.playing && !!model, PAUSE_DIM_MS) || (s.refetching && !!model);
   const icon = statusIcon({
     phase,
@@ -180,12 +192,14 @@ export function Overlay() {
     justSynced,
     quiet,
     idleHint: launched || stripHovered,
+    searched: s.searched?.message ?? null,
+    justSearched,
   });
   const empty = shownWithoutLine(phase, quiet);
   // The status icon goes with the content, never at the strip's border.
   const status = (
     <AnimatePresence>
-      {!moving && icon && <StatusIcon key="status" icon={icon} hovered={s.hover.target === "status"} pinned={phase === "idle" && launched} />}
+      {!moving && icon && <StatusIcon key="status" icon={icon} hovered={s.hover.target === "status"} pinned={phase === "idle" && launched} onAction={act} />}
     </AnimatePresence>
   );
   const itemKey = model ? `line:${model.key}` : `${empty}:${key ?? ""}`;
@@ -221,6 +235,9 @@ export function Overlay() {
                   next={model.next}
                   nextRow={rows.next}
                   status={icon && !moving ? status : null}
+                  lang={model.lang}
+                  subLang={model.subLang}
+                  nextLang={model.nextLang}
                 />
               ) : empty === "idle" ? (
                 <IdleSeal status={status} />

@@ -64,3 +64,6 @@ tauri-plugin-global-shortcut = "2"
 # tells a finished drag from a paused one (src/placement.rs).
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse"] }
+# The installed font families, by DirectWrite's names: what the webview matches
+# CSS font-family against (src/fonts.rs).
+dwrote = { version = "0.11", default-features = false }

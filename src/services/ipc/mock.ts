@@ -34,7 +34,15 @@ const now = () => Math.floor(Date.now() / 1000);
 function savedSong(s: MockSong, source: string, age: number, timing: boolean): SavedSongDetail {
   const lines = s.lines.map(({ time, text, duration }) => ({ time, text, duration }));
   const translated = lines.map((l) => s.translations[translationKey(l.text)] ?? "");
-  const translations = translated.some(Boolean) ? [{ key: `${s.track.title}-tr`, lines: translated }] : [];
+  const made = { target_language: "en", style: "natural", custom_prompt: null, preserve_rhyme: true, preserve_meaning: true, maintain_structure: true, provider: "GitHub Models", model: "gpt-4.1-mini" };
+  const at = now() - age * DAY;
+  const translations = translated.some(Boolean)
+    ? [
+        { key: `${s.track.title}-tr`, lines: translated, madeWith: made, cachedAt: at },
+        // The same song again in another style: Saved lyrics tells the two apart.
+        { key: `${s.track.title}-tr2`, lines: translated.map((t) => t && `${t} (poetic)`), madeWith: { ...made, style: "poetic" }, cachedAt: at - DAY },
+      ]
+    : [];
   const timings = timing ? [{ videoId: "dQw4w9WgXcQ", hash: "h", rejected: false }] : [];
   return { song: summary(s.track.artist, s.track.title, "lyrics", source, now() - age * DAY, lines.length, translations.length, timings.length), lines, translations, timings };
 }
@@ -63,7 +71,7 @@ function changeSaved(d: SavedSongDetail, c: SavedChange): SavedSongDetail | null
       const words = (ls: LyricLine[]) => ls.map((l) => l.text).join("\n");
       const sameWords = words(lines) === words(d.lines);
       const changed = JSON.stringify(lines) !== JSON.stringify(d.lines);
-      const translations = sameWords ? d.translations.map((t) => c.translations.find((n) => n.key === t.key) ?? t) : [];
+      const translations = sameWords ? d.translations.map((t) => ({ ...t, ...c.translations.find((n) => n.key === t.key) })) : [];
       const song = changed ? { ...d.song, kind: "lyrics" as const, source: "edited", cachedAt: now(), expiresAt: null } : d.song;
       return recount({ song, lines, translations, timings: sameWords ? d.timings : [] });
     }
@@ -105,7 +113,7 @@ if (typeof window !== "undefined") setInterval(emitTime, 700);
 
 /** Word-level timing: a pretend download that finishes in a few seconds. */
 const MODEL_BYTES = 397_744_269; // echora encoder + text head + frame head
-let prealign: PrealignStatus = { enabled: false, state: "off", download: null, error: null, diskBytes: 0, workingOn: null, aligned: 0 };
+let prealign: PrealignStatus = { enabled: false, state: "off", download: null, error: null, diskBytes: 0, workingOn: null, aligned: 0, timing: [] };
 
 function setPrealign(p: Partial<PrealignStatus>) {
   prealign = { ...prealign, ...p };
@@ -231,6 +239,21 @@ export const mockBackend: Backend = {
 
   furigana: async (text) => furigana(text),
 
+  systemFonts: async () =>
+    (
+      [
+        ["Arial", "latin ru el he ar"],
+        ["BIZ UDPGothic", "latin ja ru el"],
+        ["Georgia", "latin ru el"],
+        ["Malgun Gothic", "latin ko ru el"],
+        ["Meiryo", "latin ja ru el"],
+        ["Microsoft JhengHei", "latin zh-tw el"],
+        ["Microsoft YaHei", "latin zh ru el"],
+        ["Segoe UI", "latin ru el he ar"],
+        ["Yu Gothic UI", "latin ja ru el"],
+        ["Yu Mincho", "latin ja ru el"],
+      ] as const
+    ).map(([name, scripts]) => ({ name, scripts: scripts.split(" ") })),
   languages: async () => [
     ["auto", "Auto-detect"],
     ["en", "English"],
@@ -273,11 +296,25 @@ export const mockBackend: Backend = {
     return prealign;
   },
   prealignStatus: async () => prealign,
-  /** A pretend listen: the lines four seconds apart. A first line "fail" isn't heard. */
-  async alignLyrics(_artist, _track, lines) {
-    await wait(2500);
-    if (lines[0]?.toLowerCase() === "fail") throw "these words weren't heard in the song. Check that they are its lyrics";
-    return lines.map((text, i) => ({ time: 12.34 + i * 4, text, duration: 4 }));
+  /**
+   * A pretend listen, 2.5 s a song, one at a time: pasted lines four seconds
+   * apart, or word timing for the saved ones. A first line "fail" isn't heard.
+   */
+  async alignLyrics(artist, track, lines) {
+    if (prealign.state !== "ready") throw "word-level timing is off. Turn it on under Lyrics & sync";
+    const song = { artist, track };
+    setPrealign({ timing: [...prealign.timing.filter((t) => t.artist !== artist || t.track !== track), song] });
+    void (async () => {
+      while (prealign.timing[0] !== song) await wait(200);
+      await wait(2500);
+      const i = saved.findIndex((d) => d.song.artist === artist && d.song.track === track);
+      const heard = i >= 0 && (lines ?? saved[i].lines.map((l) => l.text))[0]?.toLowerCase() !== "fail";
+      if (heard && lines) saved[i] = changeSaved(saved[i], { op: "save", translations: [], lines: lines.map((text, k) => ({ time: 12.34 + k * 4, text, duration: 4 })) })!;
+      if (heard && !lines) saved[i] = { ...saved[i], timings: [{ videoId: "dQw4w9WgXcQ", hash: "h", rejected: false }], song: { ...saved[i].song, timings: 1 } };
+      setPrealign({ timing: prealign.timing.slice(1), aligned: prealign.aligned + Number(heard) });
+      if (heard) emit("savedLyrics", { artist, title: track });
+      emit("timed", { artist, track, pasted: !!lines, error: heard ? null : "these words weren't heard in the song. Check that they are its lyrics" });
+    })();
   },
   lookaheadConfigure: async () => {},
   markInstrumental: async () => {},

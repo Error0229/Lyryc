@@ -16,6 +16,7 @@ import { LyricsPage } from "./pages/Lyrics";
 import { ProvidersPage } from "./pages/Providers";
 import { TranslationPage } from "./pages/Translation";
 import type { PageProps } from "./Page";
+import { useTimedToasts } from "./usePrealign";
 
 const nav: Array<{ id: SettingsPage; label: string; icon: ComponentType<{ className?: string }>; Page: ComponentType<PageProps> }> = [
   { id: "appearance", label: "Appearance", icon: Palette, Page: AppearancePage },
@@ -74,6 +75,7 @@ function initialPage(): SettingsPage {
 
 export function SettingsApp() {
   useThemeAttribute();
+  useTimedToasts();
   const [page, setPage] = useState<SettingsPage>(initialPage);
   useEffect(() => onPageRequest(setPage), []);
   const current = nav.find((n) => n.id === page)!;

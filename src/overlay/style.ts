@@ -23,10 +23,16 @@ export function textShadow(on: boolean, color: string, blur: number): string {
   return `0 0 ${Math.max(1, Math.round(blur / 4))}px ${withAlpha(color, 0.35)}, 0 0 ${blur}px ${withAlpha(color, 0.4)}`;
 }
 
+/** A language's own font ahead of the main one (`fontVar` reads it), for each language that has one. */
+function languageFonts(lyric: LyricStyle): Record<string, string> {
+  return Object.fromEntries(Object.entries(lyric.fonts).map(([code, font]) => [`--lyric-font-${code}`, `${font}, ${lyric.fontFamily}`]));
+}
+
 export function stageVars({ lyric, translation, furigana, rows }: StageOptions): CSSProperties {
   const lh = lyric.lineHeight;
 
   return {
+    ...languageFonts(lyric),
     "--lyric-font": lyric.fontFamily,
     "--lyric-size": `${lyric.fontSize}rem`,
     "--lyric-weight": lyric.fontWeight,

@@ -6,6 +6,7 @@ use tokio::sync::Mutex;
 mod cleaning;
 mod commands;
 mod cookies;
+mod fonts;
 mod furigana;
 mod llm;
 mod logging;
@@ -116,6 +117,7 @@ pub fn run() {
             clean_track_name_with_config,
             translate_lyrics_command,
             get_supported_languages,
+            fonts::system_fonts,
             fetch_lyrics_timed,
             lookahead_configure,
             mark_instrumental,

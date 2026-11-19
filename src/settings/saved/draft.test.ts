@@ -8,7 +8,7 @@ const saved: SavedSongDetail = {
     { time: 1.234, text: "夜明けの街を", duration: 2.5 },
     { time: 4, text: "君と歩いた", duration: null },
   ],
-  translations: [{ key: "k", lines: ["The town at dawn", "I walked with you"] }],
+  translations: [{ key: "k", lines: ["The town at dawn", "I walked with you"], madeWith: null, cachedAt: 0 }],
   timings: [{ videoId: "v", hash: "h", rejected: false }],
 };
 

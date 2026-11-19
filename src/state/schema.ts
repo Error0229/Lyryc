@@ -8,7 +8,14 @@ export type TranslationStyle = "natural" | "literal" | "poetic" | "rhyming" | "c
 export type FuriganaMode = "over" | "under" | "replace";
 
 export interface LyricStyle {
+  /** A CSS font-family list; the picker writes one installed family, quoted (`"Yu Gothic UI"`). */
   fontFamily: string;
+  /**
+   * Fonts of their own for some languages (lib/fonts.ts FONT_LANGUAGES, by
+   * language family: "ja", "zh-tw", ...): for lines in that language and
+   * translations into it, ahead of `fontFamily`. Absent: `fontFamily`.
+   */
+  fonts: Record<string, string>;
   fontSize: number; // rem
   fontWeight: FontWeight;
   lineHeight: number;
@@ -92,6 +99,7 @@ export interface Settings {
 
 export const defaultLyric: LyricStyle = {
   fontFamily: "Inter, system-ui, sans-serif",
+  fonts: {},
   fontSize: 2.5,
   fontWeight: 500,
   lineHeight: 1.4,

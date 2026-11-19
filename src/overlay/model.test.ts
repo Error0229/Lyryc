@@ -19,6 +19,8 @@ const input = (over: Partial<ModelInput> = {}): ModelInput => ({
   translations: null,
   display: "bilingual",
   furigana: null,
+  language: "en",
+  target: "es",
   ...over,
 });
 
@@ -30,6 +32,15 @@ describe("lineModel", () => {
   it("uses word timing only when highlighting is on", () => {
     expect(lineModel(input())!.tokens).toHaveLength(3);
     expect(lineModel(input({ wordHighlight: false }))!.tokens).toHaveLength(1);
+  });
+
+  it("names each row's language: the line's script, the translation's target", () => {
+    expect(lineModel(input({ index: 0 }))).toMatchObject({ lang: "und", subLang: "es" });
+    expect(lineModel(input({ index: 2, language: "ja" }))!.lang).toBe("ja");
+    expect(lineModel(input({ index: 2, language: "zh-tw" }))!.lang).toBe("ja"); // kana says so, whatever the song
+    expect(lineModel(input({ index: 1, language: "ja" }))!.nextLang).toBe("ja");
+    const translations = { "hello world": "Hola mundo" };
+    expect(lineModel(input({ translations, display: "translated" }))).toMatchObject({ lang: "es", sub: null });
   });
 
   it("shows ♪ for instrumental lines", () => {
