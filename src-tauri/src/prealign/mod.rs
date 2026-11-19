@@ -913,6 +913,17 @@ mod tests {
     }
 
     #[test]
+    fn a_newer_ask_replaces_a_waiting_one_whatever_it_was_for() {
+        let mut s = Shared::default();
+        let own = Ask { asked: Asked { purpose: Purpose::Saved, ..ask("own", "song").asked }, job: job("own") };
+        s.ask(own);
+        s.ask(ask("pasted", "song"));
+        let (job, asked) = s.next().unwrap();
+        assert_eq!((job.song.video_id.as_str(), asked.map(|a| a.purpose)), ("pasted", Some(Purpose::Pasted { was: None })), "the words the user gave last");
+        assert!(s.next().is_none());
+    }
+
+    #[test]
     fn an_editors_job_stops_a_queue_job_but_not_another_editors() {
         let _guard = CANCEL.lock().unwrap_or_else(|e| e.into_inner());
         let mut s = Shared::default();

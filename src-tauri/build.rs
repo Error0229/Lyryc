@@ -14,6 +14,10 @@ fn main() {
         let dir = std::env::var("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR");
         let manifest = std::path::Path::new(&dir).join("windows-app-manifest.xml");
         println!("cargo:rerun-if-changed={}", manifest.display());
+        // Every artifact: the binary that needs it is the library's own unit-test
+        // binary, which `rustc-link-arg-tests` doesn't reach (that one is for
+        // tests/ targets, and cargo refuses it without any). The cdylib gets it
+        // too, where it's an unused resource: nothing loads that dll.
         println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
         println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
     }

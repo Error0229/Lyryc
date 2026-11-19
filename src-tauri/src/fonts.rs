@@ -1,6 +1,9 @@
 //! The fonts installed on this machine, for the lyric font pickers: each
 //! family with the scripts it is made for, so a language's picker lists only
-//! fonts that can write it.
+//! fonts that can write it. Read from DirectWrite, so Windows only, like the
+//! app's builds; elsewhere the list is empty. Read again each time the
+//! Appearance page opens (once for all its pickers, ~0.2 s off the main
+//! thread), so a font installed meanwhile shows up without a restart.
 
 use serde::Serialize;
 
