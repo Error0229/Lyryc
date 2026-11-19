@@ -32,10 +32,12 @@ export function SavedLyricsBrowser({ open, onOpenChange, wanted }: { open: boole
   const track = useCurrentTrack();
 
   const refresh = () => backend.savedSongs().then(setSongs, (e) => setError(`Couldn't read the saved lyrics: ${String(e)}`));
+  // Each request too: the browser may already be open on a list from before the song was saved.
   useEffect(() => {
-    if (open) void refresh();
-    else setSong(null);
-  }, [open]);
+    if (!open) return setSong(null);
+    if (wanted) setSongs(null);
+    void refresh();
+  }, [open, wanted]);
 
   // Once per request, and once the list has it: it may have been saved a moment ago.
   const openedFor = useRef<SongRef | null>(null);

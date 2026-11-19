@@ -194,6 +194,7 @@ const NOT_FOUND: NotFound = {
     { method: "sources", end: "nothing" },
     { method: "lrclib", end: "rejected" },
   ],
+  rejected: true,
 };
 
 export const mockBackend: Backend = {

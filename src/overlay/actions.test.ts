@@ -103,7 +103,7 @@ describe("refetchLyrics (Search again)", () => {
   it("with nothing left shows none, says what was tried, and offers what is left to do", async () => {
     await showing();
     void refetchLyrics();
-    answers[1]({ tried: [{ method: "lrclib", end: "rejected" }, { method: "web-search", end: "unavailable", retrySecs: 600 }] });
+    answers[1]({ tried: [{ method: "lrclib", end: "rejected" }, { method: "web-search", end: "unavailable", retrySecs: 600 }], rejected: true });
     await flush();
     const s = useSession.getState();
     expect([s.refetching, s.status, s.lyrics.length]).toEqual([false, "missing", 0]);
@@ -124,7 +124,7 @@ describe("refetchLyrics (Search again)", () => {
     answers[0](null);
     await flush();
     void refetchLyrics();
-    answers[1]({ tried: [{ method: "lrclib", end: "nothing" }] });
+    answers[1]({ tried: [{ method: "lrclib", end: "nothing" }], rejected: false });
     await flush();
     expect(toasts[0].title).toBe("Tried everything. Nothing found.");
     expect(toasts[0].actions!.map((a) => a.label)).toEqual(["Paste lyrics"]);
@@ -134,7 +134,7 @@ describe("refetchLyrics (Search again)", () => {
     await showing();
     void refetchLyrics();
     setTrack({ ...full, title: "Another", videoId: "another0000" });
-    answers[1]({ tried: [] });
+    answers[1]({ tried: [], rejected: false });
     await flush();
     expect(toasts).toEqual([]);
     expect(useSession.getState().refetching).toBe(false);

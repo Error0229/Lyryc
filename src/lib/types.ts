@@ -148,4 +148,6 @@ export interface Tried {
 /** What `fetch_lyrics_timed` rejects with: no lyrics, and what each method came to. */
 export interface NotFound {
   tried: Tried[];
+  /** The user has rejected lyrics for the song: starting over would bring some back. */
+  rejected: boolean;
 }

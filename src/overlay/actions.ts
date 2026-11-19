@@ -2,13 +2,13 @@
 import { backend } from "../services/ipc/backend";
 import { friendlyError, isNotConfigured } from "../services/ipc/llmClient";
 import { normalizeLines, songCacheKey } from "../lib/lyrics";
-import type { LyricLine, LyricsSource, Track, Tried } from "../lib/types";
+import type { LyricLine, LyricsSource, NotFound, Track } from "../lib/types";
 import { useSession } from "../state/session";
 import { useSettings } from "../state/settings";
 import { openSavedSong, openSettings } from "../state/nav";
 import { dismissSlot, toast } from "../ui/Toast";
 import { playhead } from "./playhead";
-import { canStartOver, foundMessage, notFoundMessage, triedOf } from "./searchAgain";
+import { foundMessage, notFoundMessage, notFoundOf } from "./searchAgain";
 import { accepts, sameTrack } from "./upgrade";
 
 let request = 0;
@@ -75,7 +75,7 @@ export async function refetchLyrics() {
   } catch (e) {
     if (id !== request) return;
     useSession.setState({ lyrics: [], source: null, status: "missing", translations: {}, pending: false });
-    sayNothingLeft(track, triedOf(e));
+    sayNothingLeft(track, notFoundOf(e));
   } finally {
     if (id === request) useSession.setState({ refetching: false, stage: null });
   }
@@ -86,14 +86,14 @@ export async function refetchLyrics() {
  * whether everything was tried, and offer what is left to do. It stays until
  * dismissed: the user decides what happens to the song.
  */
-function sayNothingLeft(track: Track, tried: Tried[]) {
+function sayNothingLeft(track: Track, nf: NotFound) {
   toast({
     slot: SEARCH_AGAIN,
-    title: notFoundMessage(tried),
+    title: notFoundMessage(nf),
     duration: 0,
     actions: [
       { label: "Paste lyrics", onClick: () => void pasteLyrics(track) },
-      ...(canStartOver(tried) ? [{ label: "Start over", onClick: () => void startOver() }] : []),
+      ...(nf.rejected ? [{ label: "Start over", onClick: () => void startOver() }] : []),
     ],
   });
 }

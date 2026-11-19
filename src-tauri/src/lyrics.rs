@@ -682,6 +682,10 @@ pub struct Tried {
 #[derive(Debug, Default, Serialize)]
 pub struct NotFound {
     pub tried: Vec<Tried>,
+    /// The user has rejected lyrics for the song, so starting over would bring
+    /// some back. Kept apart from `tried`: a method that also failed reports
+    /// `Unavailable`, and one may no longer serve what was rejected.
+    pub rejected: bool,
 }
 
 impl NotFound {
@@ -1258,7 +1262,7 @@ async fn fetch_timed<E: Effects>(
     extra: bool,
 ) -> Result<(TimedLyrics, Option<Upgrade>), NotFound> {
     // What each method came to, should none of them have the song.
-    let mut trail = NotFound::default();
+    let mut trail = NotFound { rejected: !req.rejected.is_empty(), ..NotFound::default() };
     let negative = match fx.cached(&req.artist, &req.title) {
         CacheResult::Hit(lines, source) => {
             info!("Using cached lyrics for: {} by {}", req.title, req.artist);
@@ -2205,12 +2209,22 @@ epsilon zeta",
         assert_eq!(end_of(&err, Method::Sources), Some((End::Rejected, None)));
         assert_eq!(end_of(&err, Method::Identify), Some((End::Nothing, None)));
         assert_eq!(end_of(&err, Method::WebSearch), Some((End::Unavailable, Some(3600))), "not tried: say so, and until when");
+        assert!(err.rejected, "the popup offers Start over");
         assert!(fx.saved().is_empty(), "the rejected lyrics are never saved again");
         assert_eq!(fx.saved_none(), 1, "remembered: the next play asks the sources only");
         assert_eq!(
             serde_json::to_value(&err.tried[..2]).unwrap(),
             json!([{"method": "ytmusic", "end": "rejected"}, {"method": "web-search", "end": "unavailable", "retrySecs": 3600}])
         );
+    }
+
+    #[test]
+    fn a_method_asked_twice_reports_its_later_end() {
+        let mut nf = NotFound::default();
+        for end in [End::Rejected, End::Off, End::Unavailable, End::Nothing] {
+            nf.note(Method::Lrclib, end, None);
+        }
+        assert_eq!(end_of(&nf, Method::Lrclib), Some((End::Unavailable, None)), "Off < Nothing < Rejected < Unavailable");
     }
 
     #[tokio::test]
@@ -2223,6 +2237,14 @@ epsilon zeta",
         assert_eq!(end_of(&err, Method::Identify), Some((End::Unavailable, None)));
         assert_eq!(end_of(&err, Method::Ytmusic), None, "not playing on YouTube Music: nothing to ask it");
         assert_eq!(end_of(&err, Method::WebSearch), None, "not part of an ordinary lookup");
+        assert!(!err.rejected, "nothing to start over");
+
+        // Rejected before, and now nothing can be asked: no method says
+        // `Rejected`, but starting over would still bring lyrics back.
+        let fx = sync_daoko(Fake { sources_fail: true, llm_fails: true, ..Fake::default() });
+        let err = fetch_timed(&fx, &searching_again(req.clone()), true).await.unwrap_err();
+        assert!(err.tried.iter().all(|t| t.end != End::Rejected));
+        assert!(err.rejected);
 
         // Extra sources off: YouTube Music and the sources are not asked.
         let (fx, req) = on_ytmusic(Fake::default().rule("search?", json_reply(json!([]))), yt(&["one", "two", "three"], true));

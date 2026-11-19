@@ -2,7 +2,7 @@
  * What "Search again" says when it ends, in words: where the new lyrics came
  * from, or that there are no others, and then whether everything was tried.
  */
-import type { LookupMethod, LyricsSource, Tried } from "../lib/types";
+import type { LookupMethod, LyricsSource, NotFound } from "../lib/types";
 
 /** Who the lyrics are from, where one name says it. */
 const FROM: Partial<Record<LyricsSource, string>> = {
@@ -41,8 +41,8 @@ function list(names: string[]): string {
  * method was asked and answered; otherwise the ones that could not be asked
  * are named, with how long until they are asked again when that is known.
  */
-export function notFoundMessage(tried: Tried[]): string {
-  const nothing = tried.some((t) => t.end === "rejected") ? "Nothing else found" : "Nothing found";
+export function notFoundMessage({ tried, rejected }: NotFound): string {
+  const nothing = rejected ? "Nothing else found" : "Nothing found";
   const unasked = tried.filter((t) => t.end === "unavailable");
   if (unasked.length) {
     const wait = Math.max(0, ...unasked.map((t) => t.retrySecs ?? 0));
@@ -53,13 +53,8 @@ export function notFoundMessage(tried: Tried[]): string {
   return `Tried everything. ${nothing}.`;
 }
 
-/** Something was rejected for the song, so starting over would bring lyrics back. */
-export function canStartOver(tried: Tried[]): boolean {
-  return tried.some((t) => t.end === "rejected");
-}
-
-/** What a failed lookup tried; nothing when it failed some other way. */
-export function triedOf(err: unknown): Tried[] {
-  const tried = (err as { tried?: unknown } | null)?.tried;
-  return Array.isArray(tried) ? (tried as Tried[]) : [];
+/** What a failed lookup came to; nothing tried or rejected when it failed some other way. */
+export function notFoundOf(err: unknown): NotFound {
+  const e = err as Partial<NotFound> | null;
+  return { tried: Array.isArray(e?.tried) ? e.tried : [], rejected: e?.rejected === true };
 }

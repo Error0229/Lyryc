@@ -99,6 +99,12 @@ mod tests {
     }
 
     #[test]
+    fn asks_for_the_lyric_as_a_client_that_has_none() {
+        let c = Candidate { id: "2145067975".into(), title: String::new(), artist: String::new(), duration: 0.0, key: String::new() };
+        assert!(lyric_url(&c).ends_with("?id=2145067975&lv=-1&kv=-1&tv=-1"));
+    }
+
+    #[test]
     fn parses_lyric_and_refusals() {
         let lrc = lyric(&fixture("netease_lyric.json")).unwrap().unwrap();
         assert!(lrc.starts_with("[00:00.00] 作词 : 茅原実里"));
