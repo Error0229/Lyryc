@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Search } from "lucide-react";
 import { songCacheKey } from "../../lib/lyrics";
 import { backend, type SavedSong } from "../../services/ipc/backend";
+import type { SongRef } from "../../state/nav";
 import { Dialog } from "../../ui/Dialog";
 import { TextInput } from "../../ui/Field";
 import { Segmented } from "../../ui/Segmented";
@@ -18,8 +19,11 @@ const FILTERS: Record<Filter, (s: SavedSong) => boolean> = {
   edited: (s) => s.source === "edited",
 };
 
-/** Settings → Lyrics & sync → Browse: every saved song, and an editor for each. */
-export function SavedLyricsBrowser({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+/**
+ * Settings → Lyrics & sync → Browse: every saved song, and an editor for each.
+ * `wanted`: the song to open in its editor at once (the overlay's "Paste lyrics").
+ */
+export function SavedLyricsBrowser({ open, onOpenChange, wanted }: { open: boolean; onOpenChange: (open: boolean) => void; wanted?: SongRef | null }) {
   const [songs, setSongs] = useState<SavedSong[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -32,6 +36,17 @@ export function SavedLyricsBrowser({ open, onOpenChange }: { open: boolean; onOp
     if (open) void refresh();
     else setSong(null);
   }, [open]);
+
+  // Once per request, and once the list has it: it may have been saved a moment ago.
+  const openedFor = useRef<SongRef | null>(null);
+  useEffect(() => {
+    if (!songs || !wanted || openedFor.current === wanted) return;
+    const key = songCacheKey(wanted.artist, wanted.title);
+    const found = songs.find((s) => songCacheKey(s.artist, s.track) === key);
+    if (!found) return;
+    openedFor.current = wanted;
+    setSong(found);
+  }, [songs, wanted]);
 
   const playing = track && songCacheKey(track.artist, track.title);
   const shown = useMemo(() => {

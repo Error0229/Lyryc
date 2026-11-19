@@ -179,6 +179,43 @@ pub fn map_lines(target: &[String], source: &[(f64, String)]) -> Vec<Option<f64>
     out
 }
 
+/// How much of two texts must be shared for them to be the same lyrics.
+const SAME_LYRICS: f64 = 0.7;
+/// Characters per piece when two whole texts are compared: long enough that
+/// two songs in one language share few (bigrams they share by the hundred).
+const PIECE: usize = 4;
+
+/// Every run of `PIECE` characters in the text, lines joined, and how often.
+fn pieces(lines: &[String]) -> HashMap<Vec<char>, usize> {
+    let text: Vec<char> = lines.iter().flat_map(|line| norm(line).chars().collect::<Vec<_>>()).collect();
+    let mut counts = HashMap::new();
+    for piece in text.windows(PIECE) {
+        *counts.entry(piece.to_vec()).or_default() += 1;
+    }
+    counts
+}
+
+/// How alike two lyric texts are, 0 to 1: the share of their characters that
+/// sit in runs both have (Dice over `PIECE`-character runs, repeats counted).
+/// Where the lines break is not part of it: transcribers split the same
+/// words into 41 lines or 54.
+pub fn lyrics_sim(a: &[String], b: &[String]) -> f64 {
+    let (a, b) = (pieces(a), pieces(b));
+    let total: usize = a.values().sum::<usize>() + b.values().sum::<usize>();
+    if total == 0 {
+        return 0.0;
+    }
+    let shared: usize = a.iter().map(|(piece, n)| *n.min(b.get(piece).unwrap_or(&0))).sum();
+    2.0 * shared as f64 / total as f64
+}
+
+/// Two texts are the same lyrics, whoever transcribed them and however they
+/// broke the lines. Another song shares almost nothing; half of a song (a TV
+/// edit against the full version) is not the same either.
+pub fn same_lyrics(a: &[String], b: &[String]) -> bool {
+    lyrics_sim(a, b) >= SAME_LYRICS
+}
+
 /// Fill unpaired lines linearly between their paired neighbours, with 0 s
 /// and the track end as the outer anchors.
 pub fn interpolate(times: &[Option<f64>], duration: f64) -> Vec<f64> {
@@ -282,6 +319,22 @@ mod tests {
             map_lines(&target, &source),
             vec![Some(10.0), Some(20.0), None, Some(30.0)]
         );
+    }
+
+    #[test]
+    fn the_same_lyrics_are_told_from_a_cut_and_from_another_song() {
+        let full = s(&["眠れない夜 脳裏をよぎる", "今頃あなたは誰といるの", "忘れたいのに思い出す", "あの日の約束を", "もう一度だけ会いたくて", "名前を呼んでみる"]);
+        // Another transcription: punctuation, spacing, one line worded differently.
+        let other = s(&["眠れない夜、脳裏をよぎる", "今頃 あなたは誰といるの", "忘れたいのに 思い出す", "あの日の約束を", "もう一度だけ会いたい", "名前を呼んでみる"]);
+        assert!(same_lyrics(&full, &other));
+        assert!(same_lyrics(&other, &full), "either way round");
+        // The same words, two lines to a row.
+        let joined: Vec<String> = full.chunks(2).map(|pair| pair.join(" ")).collect();
+        assert!(same_lyrics(&full, &joined), "where the lines break does not matter");
+        assert!(!same_lyrics(&full, &full[..3]), "a TV cut is not the full song");
+        let another = s(&["first line here", "second line here", "third one", "and a fourth", "fifth", "sixth line"]);
+        assert!(!same_lyrics(&full, &another));
+        assert!(!same_lyrics(&[], &[]), "no lines are nobody's lyrics");
     }
 
     #[test]

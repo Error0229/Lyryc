@@ -33,7 +33,7 @@ use llm::commands::{
     llm_get_settings, llm_import_legacy_keys, llm_list_models, llm_list_presets, llm_remove_provider,
     llm_set_route, llm_test, llm_upsert_provider,
 };
-use lyrics::{fetch_lrclib_raw, fetch_lyrics, fetch_lyrics_timed, lookahead_configure, mark_instrumental};
+use lyrics::{fetch_lrclib_raw, fetch_lyrics_timed, lookahead_configure, mark_instrumental, start_over};
 use lyrics_cache::{cache_clear, cache_size, saved_song, saved_song_change, saved_songs};
 use prealign::{prealign_align, prealign_configure, prealign_remove_files, prealign_status};
 use updater::{update_check, update_install, update_status, UpdaterState};
@@ -115,10 +115,10 @@ pub fn run() {
             clean_track_name_with_config,
             translate_lyrics_command,
             get_supported_languages,
-            fetch_lyrics,
             fetch_lyrics_timed,
             lookahead_configure,
             mark_instrumental,
+            start_over,
             fetch_lrclib_raw,
             init_extension_connection,
             get_websocket_status,

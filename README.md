@@ -90,8 +90,12 @@ one SQLite file, `%LOCALAPPDATA%\com.lyryc.app\lyrics_cache.db`:
   song afresh. Better timing for the same words doesn't.
 - **The queue lookahead** fills this cache before a song starts, so it plays
   straight from it.
-- **Wrong lyrics?** **Search lyrics again** in the toolbar drops that song's
-  saved lyrics and searches anew. **Mark instrumental** saves "no words" for it.
+- **Wrong lyrics?** **Search lyrics again** in the toolbar rejects them for that
+  song (from any source, however they are transcribed) and shows the next ones
+  found, saying where they are from. When none are left it says whether every
+  source could be asked, and offers **Paste lyrics** (the editor below, on that
+  song) and **Start over** (forget what was rejected). **Mark instrumental**
+  saves "no words" for it.
 - **To fix a song,** click **Browse** under Settings → Lyrics & sync → Saved lyrics
   and translations. Open a song to edit its words, times and translation, paste
   LRC, add lyrics where none were found, or delete any part of it. Changing the

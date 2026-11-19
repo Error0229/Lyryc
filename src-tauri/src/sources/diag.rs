@@ -245,7 +245,7 @@ async fn hit_rate() {
             }
             // Together, as the app runs them.
             let get = |url, referer| http.get(url, referer);
-            let found = find_with(&Breaker::new(), &q, |p, n| fetch(&get, p, n, &q, None)).await;
+            let found = find_with(&Breaker::new(), &q, &Default::default(), |p, n| fetch(&get, p, n, &q, None)).await.found;
             let winner = found.map(|f| f.provider);
             println!("  {mode} => {winner:?}");
             rows.push(

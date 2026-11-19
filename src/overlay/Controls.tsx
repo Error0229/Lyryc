@@ -13,6 +13,7 @@ import { IconButton } from "../ui/IconButton";
 import { OffsetField } from "../ui/OffsetField";
 import { markInstrumental, refetchLyrics } from "./actions";
 import { useHitRect } from "./hits";
+import { STAGE_NAME } from "./phase";
 import { ROOM_X_PX } from "./rows";
 import { NameTip } from "./Status";
 import { playhead } from "./playhead";
@@ -97,7 +98,10 @@ export function Controls({ tipSide }: { tipSide: PillTipSide }) {
   const playing = useSession((s) => s.playing);
   const translating = useSettings((s) => s.translation.enabled);
   const refetching = useSession((s) => s.refetching);
+  const stage = useSession((s) => s.stage);
   const instrumental = useSession((s) => s.status === "instrumental");
+  // Nothing to search again until the first lookup has answered.
+  const busy = useSession((s) => s.refetching || s.status === "loading");
   const showMore = (on: boolean) => () => {
     setMore(on);
     names.clear();
@@ -136,9 +140,9 @@ export function Controls({ tipSide }: { tipSide: PillTipSide }) {
             <Btn label="Next" icon={<SkipForward />} disabled={!track} onClick={() => void backend.playback("next")} />
             <Divider />
             <Btn
-              label={refetching ? "Searching again…" : "Search lyrics again"}
+              label={refetching ? `${stage ? STAGE_NAME[stage] : "Searching again"}…` : "Search lyrics again"}
               icon={<SearchCheck />}
-              disabled={!track || refetching}
+              disabled={!track || busy}
               className={refetching ? "animate-pulse" : undefined}
               onClick={() => void refetchLyrics()}
             />

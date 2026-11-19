@@ -121,6 +121,7 @@ fn init_db() -> Option<Connection> {
         return None;
     }
 
+    create_rejected_table(&conn);
     create_aligned_table(&conn);
     create_video_table(&conn);
     create_translation_table(&conn);
@@ -345,6 +346,106 @@ pub fn forget_lyrics(artist: &str, track: &str) {
 }
 
 // ---------------------------------------------------------------------------
+// Lyrics the user rejected for a song ("Search again"): wrong, so no lookup
+// serves them for it again, from any source. Kept until the user starts the
+// song over or clears the cache.
+
+/// The lyrics rejected for one song, each as its lines.
+#[derive(Clone, Debug, Default)]
+pub struct Rejected(Vec<Vec<String>>);
+
+impl Rejected {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// These lines are lyrics the user rejected, in any transcription.
+    pub fn has(&self, lines: &[LyricLine]) -> bool {
+        !self.is_empty() && self.has_text(&lines.iter().map(|l| l.text.clone()).collect::<Vec<_>>())
+    }
+
+    pub fn has_text(&self, lines: &[String]) -> bool {
+        self.0.iter().any(|rejected| crate::sources::align::same_lyrics(lines, rejected))
+    }
+
+    #[cfg(test)]
+    pub fn of(lines: &[LyricLine]) -> Self {
+        let mut rejected = Rejected::default();
+        rejected.add(lines);
+        rejected
+    }
+
+    #[cfg(test)]
+    pub fn add(&mut self, lines: &[LyricLine]) {
+        self.0.push(lines.iter().map(|l| l.text.clone()).collect());
+    }
+}
+
+fn create_rejected_table(conn: &Connection) {
+    if let Err(e) = conn.execute(
+        "CREATE TABLE IF NOT EXISTS rejected_lyrics (
+            artist TEXT NOT NULL,
+            track TEXT NOT NULL,
+            text TEXT NOT NULL,
+            PRIMARY KEY (artist, track, text)
+        )",
+        [],
+    ) {
+        warn!("Failed to create rejected_lyrics table: {}", e);
+    }
+}
+
+fn reject_in(conn: &Connection, artist: &str, track: &str, lines: &[LyricLine]) {
+    let (artist, track) = song_key(artist, track);
+    let text = lines.iter().map(|l| l.text.trim()).filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n");
+    if let Err(e) = conn.execute("INSERT OR IGNORE INTO rejected_lyrics (artist, track, text) VALUES (?1, ?2, ?3)", params![artist, track, text]) {
+        error!("Failed to remember rejected lyrics: {}", e);
+    }
+}
+
+fn rejected_in(conn: &Connection, artist: &str, track: &str) -> rusqlite::Result<Rejected> {
+    let (artist, track) = song_key(artist, track);
+    let mut q = conn.prepare("SELECT text FROM rejected_lyrics WHERE artist = ?1 AND track = ?2")?;
+    let texts = q.query_map(params![artist, track], |row| row.get::<_, String>(0))?;
+    let lines = texts.map(|text| Ok(text?.lines().map(String::from).collect())).collect::<rusqlite::Result<_>>()?;
+    Ok(Rejected(lines))
+}
+
+fn unreject_in(conn: &Connection, artist: &str, track: &str) {
+    let (artist, track) = song_key(artist, track);
+    if let Err(e) = conn.execute("DELETE FROM rejected_lyrics WHERE artist = ?1 AND track = ?2", params![artist, track]) {
+        error!("Failed to forget rejected lyrics: {}", e);
+    }
+}
+
+/// These lyrics are wrong for the song: never serve them for it again.
+pub fn reject_lyrics(artist: &str, track: &str, lines: &[LyricLine]) {
+    if let Ok(guard) = DB_CONNECTION.lock() {
+        if let Some(conn) = guard.as_ref() {
+            reject_in(conn, artist, track, lines);
+        }
+    }
+}
+
+/// Everything the user rejected for the song.
+pub fn rejected_lyrics(artist: &str, track: &str) -> Rejected {
+    let Ok(guard) = DB_CONNECTION.lock() else {
+        return Rejected::default();
+    };
+    let read = guard.as_ref().map(|conn| rejected_in(conn, artist, track));
+    read.and_then(|r| r.map_err(|e| warn!("rejected_lyrics query error: {}", e)).ok()).unwrap_or_default()
+}
+
+/// "Start over": the song's rejected lyrics may be served again.
+pub fn forget_rejections(artist: &str, track: &str) {
+    if let Ok(guard) = DB_CONNECTION.lock() {
+        if let Some(conn) = guard.as_ref() {
+            unreject_in(conn, artist, track);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Pre-aligned word timing (src/prealign). Keyed by the YouTube videoId and a
 // hash of the lyric text it was aligned to; kept until the user clears it.
 // `lines_json` NULL means the alignment was rejected: don't download again.
@@ -542,10 +643,11 @@ fn entries_in(conn: &Connection) -> u64 {
     .unwrap_or(0)
 }
 
-/// Forget everything: lyrics, translations, word timings and the songs' videos.
+/// Forget everything: lyrics (the rejected ones too), translations, word
+/// timings and the songs' videos.
 fn clear_in(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
-        "DELETE FROM lyrics_cache; DELETE FROM translation_cache; DELETE FROM aligned_cache; DELETE FROM song_video;
+        "DELETE FROM lyrics_cache; DELETE FROM rejected_lyrics; DELETE FROM translation_cache; DELETE FROM aligned_cache; DELETE FROM song_video;
          VACUUM; PRAGMA wal_checkpoint(TRUNCATE);",
     )
 }
@@ -616,10 +718,34 @@ mod tests {
         assert_eq!(video_of_in(&conn, "a", "t").as_deref(), Some("vid2"), "another upload played since");
     }
 
+    fn lines(texts: &[&str]) -> Vec<LyricLine> {
+        texts.iter().map(|t| LyricLine { time: 0.0, text: t.to_string(), duration: None, words: None }).collect()
+    }
+
+    #[test]
+    fn rejected_lyrics_are_kept_per_song_until_it_starts_over() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_rejected_table(&conn);
+        let wrong = lines(&["one wrong line", "two wrong lines", "three wrong lines"]);
+        let right = lines(&["the first right line", "then a second", "and a third one"]);
+        assert!(!rejected_in(&conn, "a", "t").unwrap().has(&wrong));
+        reject_in(&conn, "A", " T ", &wrong);
+        reject_in(&conn, "a", "t", &wrong);
+        let rejected = rejected_in(&conn, "a", "t").unwrap();
+        assert_eq!(rejected.0.len(), 1, "the same lyrics twice are one rejection");
+        assert!(rejected.has(&wrong));
+        assert!(rejected.has(&lines(&["One wrong line!", "two wrong lines", "three wrong lines"])), "in another transcription too");
+        assert!(!rejected.has(&right));
+        assert!(!rejected_in(&conn, "a", "other").unwrap().has(&wrong), "another song's rejections");
+        unreject_in(&conn, "a", "t");
+        assert!(!rejected_in(&conn, "a", "t").unwrap().has(&wrong));
+    }
+
     #[test]
     fn clearing_forgets_lyrics_translations_and_timings() {
         let conn = Connection::open_in_memory().unwrap();
         create_lyrics_table(&conn).unwrap();
+        create_rejected_table(&conn);
         create_aligned_table(&conn);
         create_video_table(&conn);
         create_translation_table(&conn);
@@ -627,9 +753,11 @@ mod tests {
         cache_translation_in(&conn, "k", "x");
         cache_aligned_in(&conn, "v", "h", Some("[1]"));
         remember_video_in(&conn, "a", "t", "v");
+        reject_in(&conn, "a", "t", &lines(&["a", "b", "c"]));
         assert_eq!(entries_in(&conn), 3);
         clear_in(&conn).unwrap();
         assert_eq!(entries_in(&conn), 0);
+        assert!(rejected_in(&conn, "a", "t").unwrap().0.is_empty());
         assert_eq!(video_of_in(&conn, "a", "t"), None);
         assert_eq!(get_translation_in(&conn, "k"), None);
         assert_eq!(get_aligned_in(&conn, "v", "h"), AlignedCache::Miss);

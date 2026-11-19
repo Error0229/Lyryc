@@ -28,8 +28,6 @@ export interface Session {
   pending: boolean;
   /** The pre-aligner is working on this song right now (`prealign-status`). */
   aligning: boolean;
-  /** How "Search again" just ended, when it changed nothing (shown for a moment). */
-  outcome: "same" | "nothing-else" | null;
   /** Bumped when AI providers or routes change: a failed translation retries. */
   llmRevision: number;
   playing: boolean;
@@ -54,7 +52,6 @@ export const useSession = create<Session>()(() => ({
   stage: null,
   pending: false,
   aligning: false,
-  outcome: null,
   llmRevision: 0,
   playing: false,
   locked: true,

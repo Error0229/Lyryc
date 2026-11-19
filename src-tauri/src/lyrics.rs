@@ -11,9 +11,14 @@
 //!    failed. They search by the identified native names first, then the
 //!    player's: QQ and co. list 雪国 / ヨルシカ, not "Snow Country" / Yorushika.
 //!
-//! "Search again" (`refetch`) forgets the cached answer and asks the LLM first,
-//! with web search, then falls back to the player's names: the regex pass is
-//! what usually found the wrong song.
+//! "Search again" (`refetch`) says the lyrics the song has are wrong. They are
+//! remembered as rejected (`Rejected`) and no step serves them for the song
+//! again, in any transcription: to every step they are lyrics it did not find,
+//! so each press moves on to what is next. It asks the LLM first, with web
+//! search, then the player's names: the regex pass is what usually found the
+//! wrong song. When nothing is left the answer is `NotFound`, which lists what
+//! each method came to, so the overlay can say "tried everything" only when
+//! that is true.
 //!
 //! At most `MAX_REQUESTS` LRCLIB requests per song, one at a time, and no URL
 //! twice. A plain-only hit spends one of them looking for a synced entry of the
@@ -23,10 +28,11 @@ use crate::cleaning::{clean_title, normalize_name, Names};
 use crate::llm;
 use crate::prealign::{self, Served};
 use crate::lyrics_cache::{
-    cache_instrumental, cache_lyrics, cache_no_lyrics, forget_lyrics, get_cached_lyrics, remember_video, song_key, CacheResult,
+    cache_instrumental, cache_lyrics, cache_no_lyrics, forget_lyrics, forget_rejections, get_cached_lyrics, reject_lyrics, rejected_lyrics,
+    remember_video, song_key, CacheResult, Rejected,
 };
 use crate::llm::identify::SongIdentity;
-use crate::sources::{self, align, Found, Provider};
+use crate::sources::{self, align, Provider};
 use crate::timing;
 use crate::types::LyricLine;
 use crate::ytmusic::{self, YtLyrics};
@@ -213,6 +219,15 @@ fn has_lyrics(record: &Value) -> bool {
     plain_from_record(record).is_some()
 }
 
+/// A record's lines as they would be shown: its synced text, else its plain.
+fn words_from_record(record: &Value) -> Option<Vec<String>> {
+    if let Some(lines) = synced_from_record(record) {
+        return Some(lines.into_iter().map(|l| l.text).collect());
+    }
+    let plain = plain_from_record(record)?;
+    Some(plain.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect())
+}
+
 /// The LRCLIB entry an estimated result came from.
 #[derive(Clone, Debug)]
 struct PlainSource {
@@ -329,11 +344,30 @@ struct Lookup<'a, E> {
     /// The song is a cover: another length is another arrangement, whose
     /// timing is wrong for this one even when its words are right.
     cover: bool,
+    /// LRCLIB had lyrics the user rejected for the song.
+    turned_down: bool,
 }
 
 impl<'a, E: Effects> Lookup<'a, E> {
     fn new(fx: &'a E, req: &'a Request) -> Self {
-        Lookup { fx, req, asked: HashMap::new(), incomplete: false, instrumental: false, cover: marked_cover(req) }
+        Lookup { fx, req, asked: HashMap::new(), incomplete: false, instrumental: false, cover: marked_cover(req), turned_down: false }
+    }
+
+    /// How asking LRCLIB ended, for `NotFound`.
+    fn end(&self) -> End {
+        match (self.incomplete, self.turned_down) {
+            (true, _) => End::Unavailable,
+            (false, true) => End::Rejected,
+            (false, false) => End::Nothing,
+        }
+    }
+
+    /// The record's lyrics are ones the user rejected for this song: to the
+    /// lookup it is a record without lyrics.
+    fn rejected(&mut self, record: &Value) -> bool {
+        let rejected = !self.req.rejected.is_empty() && words_from_record(record).is_some_and(|words| self.req.rejected.has_text(&words));
+        self.turned_down |= rejected;
+        rejected
     }
 
     async fn ask(&mut self, url: String) -> Option<Value> {
@@ -375,7 +409,7 @@ impl<'a, E: Effects> Lookup<'a, E> {
         let record = self.ask(url).await?;
         // Same names, same length: the flag is about this recording.
         self.instrumental |= record["instrumental"].as_bool() == Some(true);
-        Some(record).filter(has_lyrics)
+        Some(record).filter(|r| has_lyrics(r) && !self.rejected(r))
     }
 
     /// For a cover, only results of the wanted length count (a `want` without
@@ -387,6 +421,7 @@ impl<'a, E: Effects> Lookup<'a, E> {
         if let (true, Some(secs)) = (self.cover, want.duration) {
             results.retain(|r| r["duration"].as_f64().is_some_and(|d| (d - secs).abs() <= 2.0));
         }
+        results.retain(|r| !self.rejected(r));
         best_match(results, want)
     }
 
@@ -426,7 +461,8 @@ impl<'a, E: Effects> Lookup<'a, E> {
         };
         if src.duration > 0.0 {
             let url = lrclib_url("search", &[("track_name", &src.track), ("artist_name", &src.artist)]);
-            if let Some(Value::Array(results)) = self.ask(url).await {
+            if let Some(Value::Array(mut results)) = self.ask(url).await {
+                results.retain(|r| !self.rejected(r));
                 let synced = timing::pick_synced_alternative(&results, src.duration).map(|lrc| parse_lrc_format(&lrc));
                 if let Some(lines) = synced.filter(|l| l.len() >= MIN_RECORD_LINES) {
                     info!("Upgraded plain lyrics to a synced LRCLIB entry for '{}'", src.track);
@@ -476,11 +512,7 @@ impl<'a, E: Effects> Lookup<'a, E> {
     async fn words_of(&mut self, song: &Names) -> Option<Vec<String>> {
         let want = Want { titles: vec![song.title.clone()], artists: vec![song.artist.clone()], duration: None };
         let record = self.search(&[("track_name", &song.title), ("artist_name", &song.artist)], &want).await?;
-        if let Some(lines) = synced_from_record(&record) {
-            return Some(lines.into_iter().map(|l| l.text).collect());
-        }
-        let plain = plain_from_record(&record)?;
-        Some(plain.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect())
+        words_from_record(&record)
     }
 
     /// Step 4: an exact lookup and a search with the identified names.
@@ -605,6 +637,65 @@ impl TimedLyrics {
     }
 }
 
+/// A way the lookup has of finding a song's lyrics, as the overlay names them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Method {
+    Ytmusic,
+    Lrclib,
+    /// QQ Music / NetEase / Kugou.
+    Sources,
+    /// The LLM names the song; LRCLIB and the sources are then asked by those names.
+    Identify,
+    /// The same, searching the web first.
+    WebSearch,
+}
+
+/// How asking one method ended. In order: when a lookup asks a method more
+/// than once, the later end in this list is the one reported.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum End {
+    /// Not asked: switched off in the settings, or not set up.
+    Off,
+    /// Asked, and it had no lyrics for the song (the LLM: it answered).
+    Nothing,
+    /// It had lyrics the user rejected for the song.
+    Rejected,
+    /// It could not be asked: down, refusing (a quota), or failing.
+    Unavailable,
+}
+
+/// One method's part in a lookup that found nothing.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Tried {
+    pub method: Method,
+    pub end: End,
+    /// For `Unavailable`, when it is known: seconds until it is asked again.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_secs: Option<u64>,
+}
+
+/// `fetch_lyrics_timed` found no lyrics: what each method came to, so the
+/// overlay says "tried everything" only when everything could be asked.
+#[derive(Debug, Default, Serialize)]
+pub struct NotFound {
+    pub tried: Vec<Tried>,
+}
+
+impl NotFound {
+    /// A method ended this way; of two ends for one method, the later in `End` stays.
+    fn note(&mut self, method: Method, end: End, retry_secs: Option<u64>) {
+        let tried = Tried { method, end, retry_secs };
+        match self.tried.iter_mut().find(|t| t.method == method) {
+            Some(known) if known.end >= end => {}
+            Some(known) => *known = tried,
+            None => self.tried.push(tried),
+        }
+    }
+}
+
 pub const TIMING_UPDATED_EVENT: &str = "lyrics-timing-updated";
 /// The lookup moved on to a slower pass (`Progress`): the overlay says so.
 pub const PROGRESS_EVENT: &str = "lyrics-progress";
@@ -670,12 +761,14 @@ struct Request {
     refetch: bool,
     /// A lookahead or pre-aligner lookup: lets the song on screen use LRCLIB first.
     background: bool,
+    /// Lyrics the user rejected for the song: never an answer.
+    rejected: Rejected,
 }
 
 impl Request {
     fn new(title: String, artist: String, duration: Option<f64>) -> Self {
         let duration = duration.filter(|d| (1.0..=3600.0).contains(d));
-        Self { title, artist, duration, video_id: None, web_search: false, refetch: false, background: false }
+        Self { title, artist, duration, video_id: None, web_search: false, refetch: false, background: false, rejected: Rejected::default() }
     }
 }
 
@@ -713,6 +806,21 @@ struct SongNames {
     /// Asked, but no answer came (network, quota, overload): the lookup is
     /// incomplete, and its "nothing" must not be remembered.
     failed: bool,
+    /// For a failure, when it is known: seconds until the LLM is asked again.
+    retry_secs: Option<u64>,
+    /// No LLM is set up: there was nobody to ask.
+    off: bool,
+}
+
+impl SongNames {
+    /// How asking the LLM ended, for `NotFound`.
+    fn end(&self) -> End {
+        match (self.failed, self.off) {
+            (true, _) => End::Unavailable,
+            (false, true) => End::Off,
+            (false, false) => End::Nothing,
+        }
+    }
 }
 
 /// Everything the lookup does to the outside world, behind a trait so tests
@@ -724,9 +832,11 @@ trait Effects: Send + Sync {
     /// What the LLM says the song is; empty names when it is not set up,
     /// failed or is unsure.
     fn names(&self, req: &Request, web_search: bool) -> impl Future<Output = SongNames> + Send;
-    fn sources(&self, q: &sources::Query, plain: Option<&[String]>) -> impl Future<Output = Option<Found>> + Send;
-    /// YouTube Music's lyrics for the track; None when it has none or failed.
-    fn ytmusic(&self, video_id: &str) -> impl Future<Output = Option<YtLyrics>> + Send;
+    /// The extra sources' answer, passing over lyrics the user `rejected`.
+    fn sources(&self, q: &sources::Query, plain: Option<&[String]>, rejected: &Rejected) -> impl Future<Output = sources::Outcome> + Send;
+    /// YouTube Music's lyrics for the track; None when it has none, Err when
+    /// it could not be asked.
+    fn ytmusic(&self, video_id: &str) -> impl Future<Output = Result<Option<YtLyrics>, String>> + Send;
     fn save(&self, artist: &str, track: &str, lines: &[LyricLine], source: TimingSource);
     fn save_none(&self, artist: &str, track: &str);
     fn save_instrumental(&self, artist: &str, track: &str);
@@ -778,8 +888,11 @@ impl Effects for Live {
     async fn names(&self, req: &Request, web_search: bool) -> SongNames {
         let id = match llm::identify::identify_song(&req.title, &req.artist, req.duration, web_search).await {
             Ok(Some(id)) => id,
-            Ok(None) => return SongNames::default(),
-            Err(_) => return SongNames { failed: true, ..SongNames::default() },
+            Ok(None) => return SongNames { off: !llm::identify::set_up(), ..SongNames::default() },
+            Err(_) => {
+                let retry_secs = llm::identify::refused_for(web_search).map(|left| left.as_secs());
+                return SongNames { failed: true, retry_secs, ..SongNames::default() };
+            }
         };
         info!(
             "Identified '{}' by '{}' as '{}' by '{}'{}{}",
@@ -802,15 +915,15 @@ impl Effects for Live {
             other => other,
         };
         let cover_of = original.map(|artist| Names { artist, title: id.title_native.clone() });
-        SongNames { names: identified_names(&id), instrumental: id.instrumental, cover_of, failed: false }
+        SongNames { names: identified_names(&id), instrumental: id.instrumental, cover_of, ..SongNames::default() }
     }
-    fn sources(&self, q: &sources::Query, plain: Option<&[String]>) -> impl Future<Output = Option<Found>> + Send {
-        sources::find(q, plain)
+    fn sources(&self, q: &sources::Query, plain: Option<&[String]>, rejected: &Rejected) -> impl Future<Output = sources::Outcome> + Send {
+        sources::find(q, plain, rejected)
     }
-    async fn ytmusic(&self, video_id: &str) -> Option<YtLyrics> {
-        ytmusic::lyrics(video_id).await.unwrap_or_else(|e| {
+    async fn ytmusic(&self, video_id: &str) -> Result<Option<YtLyrics>, String> {
+        ytmusic::lyrics(video_id).await.map_err(|e| {
             warn!("YouTube Music lyrics for {}: {}", video_id, e);
-            None
+            e.to_string()
         })
     }
     fn save(&self, artist: &str, track: &str, lines: &[LyricLine], source: TimingSource) {
@@ -827,21 +940,11 @@ impl Effects for Live {
     }
 }
 
-#[tauri::command]
-pub async fn fetch_lyrics(
-    track_name: String,
-    artist_name: String,
-    duration: Option<f64>,       // seconds, from the player; enables the exact lookup
-    _request_id: Option<String>, // Keep for compatibility
-) -> Result<Vec<LyricLine>, String> {
-    let req = Request::new(track_name, artist_name, duration);
-    fetch_timed(&Live, &req, false).await.map(|(timed, _)| timed.lines)
-}
-
-/// `fetch_lyrics` plus where the timing came from. With `extra_sources`, a
+/// The song's lyrics and where their timing came from. With `extra_sources`, a
 /// plain-only LRCLIB hit answers with the estimate at once and looks for real
 /// timing in the background (`lyrics-timing-updated`), and a track LRCLIB
-/// lacks (or can't answer for) is looked up in the extra sources.
+/// lacks (or can't answer for) is looked up in the extra sources. Nothing
+/// found is `NotFound`: what each method came to.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // flat on purpose: they are the invoke() fields
 pub async fn fetch_lyrics_timed(
@@ -853,7 +956,7 @@ pub async fn fetch_lyrics_timed(
     video_id: Option<String>, // YouTube Music's id for the track, if it plays there
     web_search: Option<bool>, // the user's "identify with web search" opt-in
     refetch: Option<bool>,    // "Search again": the lyrics on screen are wrong
-) -> Result<TimedLyrics, String> {
+) -> Result<TimedLyrics, NotFound> {
     let _ = APP.set(app.clone());
     let mut req = Request::new(track_name, artist_name, duration);
     req.video_id = video_id.filter(|id| ytmusic::is_video_id(id));
@@ -871,10 +974,12 @@ pub async fn fetch_lyrics_timed(
         let _song = song_lock(&req).await;
         let _live = LiveLookup::start();
         // Under the lock: a lookup of the song still running when the user
-        // pressed Search again saves its answer before this forgets it.
+        // pressed Search again saves its answer before this rejects it.
         if req.refetch {
-            forget_song(&req);
-        } else {
+            reject_shown(&req);
+        }
+        req.rejected = rejected_lyrics(&req.artist, &req.title);
+        if !req.refetch {
             adopt_queue_names(&req);
         }
         fetch_timed(&Live, &req, extra_sources).await?
@@ -897,13 +1002,39 @@ pub async fn fetch_lyrics_timed(
     Ok(timed)
 }
 
-/// Everything the app remembers about the song led to the wrong lyrics.
-fn forget_song(req: &Request) {
+/// "Search again": the lyrics the song has are wrong. They are remembered as
+/// rejected, so that no lookup serves them for it again, and the search starts
+/// from nothing. The user's own edit is only dropped: lyrics close to it (the
+/// ones it was made from) may be the right answer.
+///
+/// The LLM's answer about the song is kept: asked again it says the same, or
+/// by chance something else, and either way a request is spent. A call that
+/// failed for this song is tried again; a provider that refuses (429) is not
+/// (`llm::identify`).
+fn reject_shown(req: &Request) {
     info!("Searching again for '{}' by '{}'", req.title, req.artist);
     correct(&req.artist, &req.title);
+    if let CacheResult::Hit(lines, source) = get_cached_lyrics(&req.artist, &req.title) {
+        if TimingSource::from_cache(source.as_deref()) != TimingSource::Edited {
+            reject_lyrics(&req.artist, &req.title, &lines);
+        }
+    }
     forget_lyrics(&req.artist, &req.title);
-    llm::identify::forget(&req.title, &req.artist);
+    llm::identify::retry(&req.title, &req.artist);
     prealign::forget(req.video_id.as_deref());
+}
+
+/// "Start over", after "Search again" ran out of lyrics: nothing is rejected
+/// for the song any more, and the next lookup finds what the first one did.
+#[tauri::command]
+pub async fn start_over(track_name: String, artist_name: String, video_id: Option<String>) {
+    let mut req = Request::new(track_name, artist_name, None);
+    req.video_id = video_id.filter(|id| ytmusic::is_video_id(id));
+    let _song = song_lock(&req).await;
+    info!("Starting over for '{}' by '{}'", req.title, req.artist);
+    correct(&req.artist, &req.title);
+    forget_rejections(&req.artist, &req.title);
+    forget_lyrics(&req.artist, &req.title);
 }
 
 /// The user says the song has no words: remembered like a found instrumental,
@@ -993,6 +1124,8 @@ fn adopt_queue_names(req: &Request) {
         return;
     }
     match get_cached_lyrics(&artist, &title) {
+        // Found under the queue's names, where nothing was rejected.
+        CacheResult::Hit(lines, _) if req.rejected.has(&lines) => return,
         CacheResult::Hit(lines, source) => {
             cache_lyrics(&req.artist, &req.title, &lines, source.as_deref().unwrap_or("lrclib"));
         }
@@ -1074,6 +1207,7 @@ pub async fn lookup_ahead(
         remember_video(artist, title, id); // its lyrics are saved under the queue's names
     }
     let _song = song_lock(&req).await;
+    req.rejected = rejected_lyrics(artist, title);
     let (timed, upgrade) = fetch_timed(&Live, &req, extra_sources).await.ok()?;
     // The overlay translates them now, so the song starts with its translation.
     if let Some(app) = prealign::app() {
@@ -1122,7 +1256,9 @@ async fn fetch_timed<E: Effects>(
     fx: &E,
     req: &Request,
     extra: bool,
-) -> Result<(TimedLyrics, Option<Upgrade>), String> {
+) -> Result<(TimedLyrics, Option<Upgrade>), NotFound> {
+    // What each method came to, should none of them have the song.
+    let mut trail = NotFound::default();
     let negative = match fx.cached(&req.artist, &req.title) {
         CacheResult::Hit(lines, source) => {
             info!("Using cached lyrics for: {} by {}", req.title, req.artist);
@@ -1136,7 +1272,7 @@ async fn fetch_timed<E: Effects>(
         CacheResult::NegativeHit => true,
         CacheResult::Miss => false,
     };
-    if let Some(answer) = from_ytmusic(fx, req, extra, negative).await {
+    if let Some(answer) = from_ytmusic(fx, req, extra, negative, &mut trail).await {
         return Ok(answer);
     }
 
@@ -1147,6 +1283,8 @@ async fn fetch_timed<E: Effects>(
     // for "Search again", which doubts every earlier answer, this one too.
     let mut instrumental = false;
     let settled = |instrumental: bool| instrumental && !req.refetch;
+    // The LLM gave no answer: "nothing found" is then not an answer to remember.
+    let mut llm_failed = false;
     // Names the sources were already asked with (e.g. no LLM set up: always empty).
     let mut tried: Vec<Vec<Names>> = Vec::new();
     // Songs whose words were already looked for.
@@ -1155,13 +1293,15 @@ async fn fetch_timed<E: Effects>(
         let said = match pass {
             Pass::Identified { web_search } => {
                 fx.progress(req, if web_search { Stage::WebSearch } else { Stage::Identify });
-                fx.names(req, web_search).await
+                let said = fx.names(req, web_search).await;
+                trail.note(if web_search { Method::WebSearch } else { Method::Identify }, said.end(), said.retry_secs);
+                said
             }
             Pass::Player | Pass::SourcesOnly => SongNames::default(),
         };
         instrumental |= said.instrumental;
         // A web-search pass the key can't make (free tier) is not this song's failure.
-        run.incomplete |= said.failed && pass != (Pass::Identified { web_search: true });
+        llm_failed |= said.failed && pass != (Pass::Identified { web_search: true });
         if settled(instrumental) {
             break;
         }
@@ -1198,14 +1338,14 @@ async fn fetch_timed<E: Effects>(
             if extra && req.duration.is_some() {
                 fx.progress(req, Stage::Sources);
             }
-            if let Some(timed) = from_sources(fx, req, &names, extra, run.cover).await {
+            if let Some(timed) = from_sources(fx, req, &names, extra, run.cover, &mut trail).await {
                 return Ok((timed, None));
             }
             tried.push(names);
         }
         if let Some(song) = words_from.filter(|s| !worded.contains(s)) {
             fx.progress(req, Stage::OtherRecording);
-            if let Some(timed) = from_words_of(fx, &mut run, req, &song, extra).await {
+            if let Some(timed) = from_words_of(fx, &mut run, req, &song, extra, &mut trail).await {
                 return Ok((timed, None));
             }
             worded.push(song);
@@ -1219,7 +1359,7 @@ async fn fetch_timed<E: Effects>(
             Some(Lrclib::Synced(_)) => "synced",
             Some(Lrclib::Plain { .. }) => "plain only",
             None if instrumental => "instrumental",
-            None if run.incomplete => "no answer",
+            None if run.incomplete || llm_failed => "no answer",
             None => "nothing",
         },
         run.asked.len(),
@@ -1242,25 +1382,46 @@ async fn fetch_timed<E: Effects>(
             fx.save_instrumental(&req.artist, &req.title);
             Ok((TimedLyrics::instrumental(), None))
         }
-        None if negative => Err("No lyrics found (cached)".to_string()),
-        None if run.incomplete => Err("Lyrics service unavailable, try again later".to_string()),
         None => {
-            // Without a length the exact lookups, the sources and a cover's
-            // words never ran: not an answer to remember.
-            if req.duration.is_some() {
+            // "Nothing" is remembered once (`negative`: it already is), and only
+            // as an answer: every question got one, and with a length, without
+            // which the exact lookups, the sources and a cover's words never ran.
+            if !negative && !run.incomplete && !llm_failed && req.duration.is_some() {
                 fx.save_none(&req.artist, &req.title);
             }
-            Err("No lyrics found".to_string())
+            trail.note(Method::Lrclib, run.end(), None);
+            Err(trail)
         }
+    }
+}
+
+/// How asking the extra sources ended, for `NotFound`.
+fn sources_end(out: &sources::Outcome) -> End {
+    match (out.failed, out.rejected) {
+        (true, _) => End::Unavailable,
+        (false, true) => End::Rejected,
+        (false, false) => End::Nothing,
     }
 }
 
 /// Step 5: with the setting on and a length to match recordings by, the extra
 /// sources, whether LRCLIB had nothing or could not answer. A hit is cached.
-async fn from_sources<E: Effects>(fx: &E, req: &Request, names: &[Names], extra: bool, cover: bool) -> Option<TimedLyrics> {
-    let duration = req.duration.filter(|_| extra)?;
-    let q = source_query(&req.title, &req.artist, names, duration);
-    let found = fx.sources(&q, None).await?;
+async fn from_sources<E: Effects>(
+    fx: &E,
+    req: &Request,
+    names: &[Names],
+    extra: bool,
+    cover: bool,
+    trail: &mut NotFound,
+) -> Option<TimedLyrics> {
+    if !extra {
+        trail.note(Method::Sources, End::Off, None);
+        return None;
+    }
+    let q = source_query(&req.title, &req.artist, names, req.duration?);
+    let out = fx.sources(&q, None, &req.rejected).await;
+    trail.note(Method::Sources, sources_end(&out), None);
+    let found = out.found?;
     let source = match (found.timed, cover) {
         (false, _) => TimingSource::SourcesEstimate,
         (true, true) => TimingSource::OriginalTiming,
@@ -1306,6 +1467,7 @@ async fn from_words_of<E: Effects>(
     req: &Request,
     song: &Names,
     extra: bool,
+    trail: &mut NotFound,
 ) -> Option<TimedLyrics> {
     let duration = req.duration?;
     let words = match run.words_of(song).await {
@@ -1315,7 +1477,9 @@ async fn from_words_of<E: Effects>(
             // 汐れいら), and the player's romanized "Reira Ushio" still sounds like it.
             let names = [song.artist.clone(), req.artist.clone()].map(|artist| sources::Name { title: song.title.clone(), artist });
             let q = sources::Query::words_of(names, duration);
-            fx.sources(&q, None).await?.lines.into_iter().map(|l| l.text).collect()
+            let out = fx.sources(&q, None, &req.rejected).await;
+            trail.note(Method::Sources, sources_end(&out), None);
+            out.found?.lines.into_iter().map(|l| l.text).collect()
         }
         None => return None,
     };
@@ -1360,9 +1524,32 @@ async fn from_ytmusic<E: Effects>(
     req: &Request,
     extra: bool,
     negative: bool,
+    trail: &mut NotFound,
 ) -> Option<(TimedLyrics, Option<Upgrade>)> {
-    let yt = fx.ytmusic(req.video_id.as_deref().filter(|_| extra)?).await?;
+    let video_id = req.video_id.as_deref()?; // played elsewhere: not a method for this song
+    if !extra {
+        trail.note(Method::Ytmusic, End::Off, None);
+        return None;
+    }
+    let yt = match fx.ytmusic(video_id).await {
+        Ok(Some(yt)) => yt,
+        Ok(None) => {
+            trail.note(Method::Ytmusic, End::Nothing, None);
+            return None;
+        }
+        Err(_) => {
+            trail.note(Method::Ytmusic, End::Unavailable, None);
+            return None;
+        }
+    };
     info!("YouTube Music has {} line(s) for '{}' (timed: {}, {:?})", yt.lines.len(), req.title, yt.timed, yt.source);
+    // The exact track, and still the wrong words sometimes: rejected, they are
+    // dropped in every form (with LRCLIB's times, or estimated).
+    if req.rejected.has_text(&yt.lines.iter().map(|(_, text)| text.clone()).collect::<Vec<_>>()) {
+        info!("The user rejected YouTube Music's lyrics for '{}'; looking elsewhere", req.title);
+        trail.note(Method::Ytmusic, End::Rejected, None);
+        return None;
+    }
     let timed: Option<Vec<(f64, String)>> = yt.lines.iter().map(|(t, s)| t.map(|t| (t, s.clone()))).collect();
     if let Some(timed) = timed {
         return Some((save_real(fx, req, timed, TimingSource::Ytmusic), None));
@@ -1423,7 +1610,7 @@ fn upgrade_job(req: &Request, estimate: &[LyricLine], src: &PlainSource) -> Opti
 
 /// Real timing for an estimate, cached, as the event to send.
 async fn run_upgrade<E: Effects>(fx: &E, req: &Request, job: Upgrade) -> Option<TimingUpdate> {
-    let found = fx.sources(&job.query, Some(&job.plain)).await?;
+    let found = fx.sources(&job.query, Some(&job.plain), &req.rejected).await.found?;
     if corrections(req) != job.corrections {
         info!("Dropped an upgrade for '{}': the user corrected the song meanwhile", req.title);
         return None;
@@ -1509,6 +1696,7 @@ fn with_durations(mut lyrics: Vec<LyricLine>) -> Vec<LyricLine> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sources::Found;
     use serde_json::json;
     use std::sync::Mutex;
 
@@ -1605,6 +1793,10 @@ mod tests {
         words_only: bool,
         /// The LLM is asked but gives no answer (an outage, a quota).
         llm_fails: bool,
+        /// The provider refuses web search (a free-tier key): asked again in an hour.
+        web_search_refused: bool,
+        /// A source could not be asked.
+        sources_fail: bool,
         /// Every `progress` report, in order.
         stages: Mutex<Vec<Stage>>,
     }
@@ -1657,19 +1849,23 @@ mod tests {
         fn names(&self, _req: &Request, web_search: bool) -> impl Future<Output = SongNames> + Send {
             *self.llm_calls.lock().unwrap() += 1;
             let names = if web_search { self.names_searched.clone() } else { self.names.clone() };
-            let said = SongNames { names, instrumental: self.llm_instrumental, cover_of: self.llm_cover_of.clone(), failed: self.llm_fails };
+            let failed = self.llm_fails || (web_search && self.web_search_refused);
+            let retry_secs = (web_search && self.web_search_refused).then_some(3600);
+            let said = SongNames { names, instrumental: self.llm_instrumental, cover_of: self.llm_cover_of.clone(), failed, retry_secs, off: false };
             async move { said }
         }
-        fn sources(&self, q: &sources::Query, plain: Option<&[String]>) -> impl Future<Output = Option<Found>> + Send {
+        fn sources(&self, q: &sources::Query, plain: Option<&[String]>, rejected: &Rejected) -> impl Future<Output = sources::Outcome> + Send {
             self.calls.lock().unwrap().push(plain.map(<[String]>::len));
             self.searched.lock().unwrap().push(q.names.iter().map(|n| format!("{} / {}", n.title, n.artist)).collect());
             let answer = self.answer.clone().filter(|_| q.any_length || !self.words_only);
-            async move { answer }
+            let turned_down = answer.as_ref().is_some_and(|found| rejected.has(&found.lines));
+            let out = sources::Outcome { found: answer.filter(|_| !turned_down), rejected: turned_down, failed: self.sources_fail };
+            async move { out }
         }
-        fn ytmusic(&self, _video_id: &str) -> impl Future<Output = Option<YtLyrics>> + Send {
+        fn ytmusic(&self, _video_id: &str) -> impl Future<Output = Result<Option<YtLyrics>, String>> + Send {
             *self.yt_calls.lock().unwrap() += 1;
             let yt = self.yt.clone();
-            async move { yt }
+            async move { Ok(yt) }
         }
         fn save(&self, _artist: &str, _track: &str, _lines: &[LyricLine], source: TimingSource) {
             self.saved.lock().unwrap().push(source);
@@ -1940,6 +2136,100 @@ mod tests {
         assert_eq!(fx.llm_calls(), 2, "web search, then without");
         assert_eq!(fx.calls().len(), 1, "the sources once: the empty names repeat");
         assert!(fx.asked("Koi") > 0, "the player's names last");
+    }
+
+    /// Lyrics other than `SYNCED`'s, for the same song.
+    fn other_record(track: &str, artist: &str, duration: f64) -> Value {
+        json!({
+            "trackName": track,
+            "artistName": artist,
+            "duration": duration,
+            "syncedLyrics": "[00:11.00]alpha beta
+[00:21.00]gamma delta
+[00:31.00]epsilon zeta",
+            "plainLyrics": "alpha beta
+gamma delta
+epsilon zeta",
+        })
+    }
+
+    /// "Search again", pressed on the lyrics every fake serves (`SYNCED`).
+    fn searching_again(mut req: Request) -> Request {
+        req.refetch = true;
+        req.rejected = Rejected::of(&parse_lrc_format(SYNCED));
+        req
+    }
+
+    fn end_of(err: &NotFound, method: Method) -> Option<(End, Option<u64>)> {
+        err.tried.iter().find(|t| t.method == method).map(|t| (t.end, t.retry_secs))
+    }
+
+    #[tokio::test]
+    async fn search_again_passes_over_rejected_lyrics_for_lrclibs_next_record() {
+        // Two records name the song; the better match holds the rejected lyrics.
+        let results = json!([record("Koi", "Minori", 265.0, true), other_record("Koi", "Minori", 268.0)]);
+        let fx = Fake::default().rule("search?", json_reply(results));
+        let (timed, _) = fetch_timed(&fx, &searching_again(req()), false).await.unwrap();
+        assert_eq!((timed.source, timed.lines[0].text.as_str()), (TimingSource::Lrclib, "alpha beta"));
+        assert_eq!(fx.saved(), vec![TimingSource::Lrclib]);
+
+        // The exact lookup's record too, in another transcription of the same words.
+        let respelled = json!({"trackName": "Koi", "artistName": "Minori", "duration": 265.0, "syncedLyrics": "[00:09.00]One!
+[00:19.00]two
+[00:29.00]three", "plainLyrics": "x"});
+        let fx = Fake::default().rule("/get?", json_reply(respelled)).rule("search?", json_reply(json!([other_record("Koi", "Minori", 268.0)])));
+        let (timed, _) = fetch_timed(&fx, &searching_again(req()), false).await.unwrap();
+        assert_eq!(timed.lines[0].text, "alpha beta");
+    }
+
+    #[tokio::test]
+    async fn search_again_drops_rejected_ytmusic_lyrics_in_every_form() {
+        for timed in [true, false] {
+            let fx = Fake::default().rule("/get?", json_reply(other_record("Koi", "Minori", 265.0)));
+            let (fx, req) = on_ytmusic(fx, yt(&["one", "two", "three"], timed));
+            let (found, _) = fetch_timed(&fx, &searching_again(req), true).await.unwrap();
+            assert_eq!((found.source, found.lines[0].text.as_str()), (TimingSource::Lrclib, "alpha beta"), "YouTube Music's lines timed: {timed}");
+            assert_eq!(fx.saved(), vec![TimingSource::Lrclib]);
+        }
+    }
+
+    #[tokio::test]
+    async fn search_again_with_nothing_left_says_what_each_method_came_to() {
+        // YouTube Music, LRCLIB and QQ have only the rejected lyrics, and the
+        // provider refuses web search.
+        let fx = Fake { web_search_refused: true, ..Fake::answering(Provider::Qq) }.rule("/get?", json_reply(record("Koi", "Minori", 265.0, true)));
+        let (fx, req) = on_ytmusic(fx, yt(&["one", "two", "three"], true));
+        let err = fetch_timed(&fx, &searching_again(req), true).await.unwrap_err();
+        assert_eq!(end_of(&err, Method::Ytmusic), Some((End::Rejected, None)));
+        assert_eq!(end_of(&err, Method::Lrclib), Some((End::Rejected, None)));
+        assert_eq!(end_of(&err, Method::Sources), Some((End::Rejected, None)));
+        assert_eq!(end_of(&err, Method::Identify), Some((End::Nothing, None)));
+        assert_eq!(end_of(&err, Method::WebSearch), Some((End::Unavailable, Some(3600))), "not tried: say so, and until when");
+        assert!(fx.saved().is_empty(), "the rejected lyrics are never saved again");
+        assert_eq!(fx.saved_none(), 1, "remembered: the next play asks the sources only");
+        assert_eq!(
+            serde_json::to_value(&err.tried[..2]).unwrap(),
+            json!([{"method": "ytmusic", "end": "rejected"}, {"method": "web-search", "end": "unavailable", "retrySecs": 3600}])
+        );
+    }
+
+    #[tokio::test]
+    async fn nothing_found_names_what_could_not_be_asked_or_is_off() {
+        let req = Request::new("SYNC".into(), "Daoko".into(), Some(222.0));
+        let fx = sync_daoko(Fake { sources_fail: true, llm_fails: true, ..Fake::default() });
+        let err = fetch_timed(&fx, &req, true).await.unwrap_err();
+        assert_eq!(end_of(&err, Method::Lrclib), Some((End::Unavailable, None)), "its full-text search was overloaded");
+        assert_eq!(end_of(&err, Method::Sources), Some((End::Unavailable, None)));
+        assert_eq!(end_of(&err, Method::Identify), Some((End::Unavailable, None)));
+        assert_eq!(end_of(&err, Method::Ytmusic), None, "not playing on YouTube Music: nothing to ask it");
+        assert_eq!(end_of(&err, Method::WebSearch), None, "not part of an ordinary lookup");
+
+        // Extra sources off: YouTube Music and the sources are not asked.
+        let (fx, req) = on_ytmusic(Fake::default().rule("search?", json_reply(json!([]))), yt(&["one", "two", "three"], true));
+        let err = fetch_timed(&fx, &req, false).await.unwrap_err();
+        assert_eq!(end_of(&err, Method::Ytmusic), Some((End::Off, None)));
+        assert_eq!(end_of(&err, Method::Sources), Some((End::Off, None)));
+        assert_eq!(end_of(&err, Method::Lrclib), Some((End::Nothing, None)));
     }
 
     #[tokio::test]
@@ -2455,11 +2745,11 @@ mod tests {
         async fn names(&self, _req: &Request, _web_search: bool) -> SongNames {
             SongNames::default()
         }
-        fn sources(&self, q: &sources::Query, plain: Option<&[String]>) -> impl Future<Output = Option<Found>> + Send {
-            sources::find(q, plain)
+        fn sources(&self, q: &sources::Query, plain: Option<&[String]>, rejected: &Rejected) -> impl Future<Output = sources::Outcome> + Send {
+            sources::find(q, plain, rejected)
         }
-        async fn ytmusic(&self, _video_id: &str) -> Option<YtLyrics> {
-            None
+        async fn ytmusic(&self, _video_id: &str) -> Result<Option<YtLyrics>, String> {
+            Ok(None)
         }
         fn save(&self, _artist: &str, _track: &str, _lines: &[LyricLine], _source: TimingSource) {}
         fn save_none(&self, _artist: &str, _track: &str) {}
@@ -2483,12 +2773,65 @@ mod tests {
             let result = fetch_timed(&fx, &Request::new(title.into(), artist.into(), duration), true).await;
             let outcome = match result {
                 Ok((t, _)) => format!("{} lines, {:?}, pending {}", t.lines.len(), t.source, t.pending),
-                Err(e) => e,
+                Err(e) => format!("{:?}", e.tried),
             };
             let statuses = fx.0.lock().unwrap().clone();
             println!("  => {outcome}; {} LRCLIB request(s), {:.1}s
 ", statuses.len(), started.elapsed().as_secs_f64());
             assert!(!statuses.iter().any(|s| s.contains("429")), "rate-limited; stopping");
+        }
+    }
+
+    /// "Search again" pressed until nothing is left, against the live LRCLIB
+    /// and sources: each press must show other lyrics, never a second
+    /// transcription of ones already rejected.
+    /// `cargo test --lib live_search_again -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn live_search_again() {
+        let songs = [
+            ("Good Things Fall Apart", "ILLENIUM, Jon Bellion", 217.0),
+            ("1991", "米津玄師", 230.0),
+            ("Lemon", "米津玄師", 256.0),
+            ("Mr. Brightside", "The Killers", 222.0),
+            ("Somebody Told Me", "The Killers", 197.0),
+        ];
+        let text = |lines: &[LyricLine]| lines.iter().map(|l| l.text.clone()).collect::<Vec<_>>();
+        // Each song's first lyrics: no two songs may pass for one another.
+        let mut firsts: Vec<(&str, Vec<String>)> = Vec::new();
+        for (title, artist, duration) in songs {
+            println!("'{title}' by '{artist}'");
+            let mut req = Request::new(title.into(), artist.into(), Some(duration));
+            let mut seen: Vec<Vec<LyricLine>> = Vec::new();
+            for press in 0..8 {
+                let fx = LiveNoCache(Mutex::new(Vec::new()));
+                match fetch_timed(&fx, &req, true).await {
+                    Ok((t, _)) => {
+                        let head: Vec<&str> = t.lines.iter().take(2).map(|l| l.text.as_str()).collect();
+                        println!("  press {press} => {:?}, {} lines: {head:?}", t.source, t.lines.len());
+                        assert!(!req.rejected.has(&t.lines), "rejected lyrics came back");
+                        let alike: Vec<String> = seen.iter().map(|old| format!("{:.2}", align::lyrics_sim(&text(old), &text(&t.lines)))).collect();
+                        println!("    like the ones before: {alike:?}");
+                        if seen.is_empty() {
+                            firsts.push((title, text(&t.lines)));
+                        }
+                        seen.push(t.lines.clone());
+                        req.rejected.add(&t.lines);
+                        req.refetch = true;
+                    }
+                    Err(e) => {
+                        println!("  press {press} => nothing left: {:?}", e.tried);
+                        break;
+                    }
+                }
+            }
+        }
+        for (i, (a, words)) in firsts.iter().enumerate() {
+            for (b, other) in &firsts[i + 1..] {
+                let sim = align::lyrics_sim(words, other);
+                println!("'{a}' and '{b}': {sim:.2}");
+                assert!(!align::same_lyrics(words, other), "two songs taken for one");
+            }
         }
     }
 

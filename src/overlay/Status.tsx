@@ -7,7 +7,7 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { CaptionsOff, Check, CirclePlay, EqualApproximately, Globe, Music4, RefreshCw, Search, SearchX, Sparkles } from "lucide-react";
+import { CaptionsOff, Check, CirclePlay, EqualApproximately, Globe, Music4, RefreshCw, Search, Sparkles } from "lucide-react";
 import seal from "../../src-tauri/icons/tray/48.png";
 import { fade, spring } from "../design/motion";
 import { useHitRect } from "./hits";
@@ -73,8 +73,6 @@ const ICONS: Record<IconId, ReactNode> = {
   syncing: <Bars />,
   synced: <Check />,
   refetch: <RefreshCw />,
-  same: <Check />,
-  "nothing-else": <SearchX />,
   "no-lyrics": <CaptionsOff />,
   instrumental: <Music4 />,
 };
