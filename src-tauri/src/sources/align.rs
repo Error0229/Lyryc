@@ -186,10 +186,11 @@ const SAME_LYRICS: f64 = 0.7;
 const PIECE: usize = 4;
 
 /// Every run of `PIECE` characters in the text, lines joined, and how often.
+/// A shorter text is one run of its own length, so it still matches itself.
 fn pieces(lines: &[String]) -> HashMap<Vec<char>, usize> {
     let text: Vec<char> = lines.iter().flat_map(|line| norm(line).chars().collect::<Vec<_>>()).collect();
     let mut counts = HashMap::new();
-    for piece in text.windows(PIECE) {
+    for piece in text.windows(PIECE.min(text.len()).max(1)) {
         *counts.entry(piece.to_vec()).or_default() += 1;
     }
     counts
@@ -335,6 +336,9 @@ mod tests {
         let another = s(&["first line here", "second line here", "third one", "and a fourth", "fifth", "sixth line"]);
         assert!(!same_lyrics(&full, &another));
         assert!(!same_lyrics(&[], &[]), "no lines are nobody's lyrics");
+        assert!(same_lyrics(&s(&["ラララ"]), &s(&["ラ・ラ・ラ"])), "shorter than a piece: still itself");
+        assert!(!same_lyrics(&s(&["ラララ"]), &s(&["ルルル"])));
+        assert!(!same_lyrics(&s(&["ラララ"]), &full));
     }
 
     #[test]
