@@ -53,9 +53,12 @@ fn names(v: &Value) -> String {
         .join(" ")
 }
 
+/// `lv`/`kv`/`tv` are the versions the caller already has; NetEase sends a
+/// lyric only when its own version is newer. `lv=1` got an empty lyric for
+/// every song still at version 1 (失忆-上 by Geebar).
 fn lyric_url(c: &Candidate) -> String {
     format!(
-        "https://music.163.com/api/song/lyric?id={}&lv=1&kv=1&tv=-1",
+        "https://music.163.com/api/song/lyric?id={}&lv=-1&kv=-1&tv=-1",
         urlencoding::encode(&c.id)
     )
 }
