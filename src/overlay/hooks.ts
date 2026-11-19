@@ -56,7 +56,7 @@ export function useBackendEvents() {
       lyrics: ({ track, lines, source }) => applyLyrics(track, lines, source),
       progress: ({ track, stage }) => {
         const s = useSession.getState();
-        if (s.status === "loading" && sameTrack(s.track, track)) useSession.setState({ stage });
+        if ((s.status === "loading" || s.refetching) && sameTrack(s.track, track)) useSession.setState({ stage });
       },
       timingFinal: (track) => {
         if (sameTrack(useSession.getState().track, track)) useSession.setState({ pending: false });

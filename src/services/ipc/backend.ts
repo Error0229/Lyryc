@@ -49,15 +49,18 @@ export interface BackendEvents {
 export interface Backend {
   initExtension(): Promise<void>;
   currentTrack(): Promise<Track | null>;
-  /** `extraSources`: the user's opt-in for YouTube Music's lyrics and QQ Music / NetEase / Kugou. */
   /**
-   * `refetch`: "Search again". The backend forgets the cached answer and asks
-   * the LLM (with web search when the provider has it) before the player's names.
+   * `extraSources`: the user's opt-in for YouTube Music's lyrics and QQ Music / NetEase / Kugou.
+   * `refetch`: "Search again". The song's lyrics are wrong: the backend never
+   * serves them for it again, and looks for others. Nothing found rejects
+   * with `NotFound`: what each method came to.
    */
   fetchLyrics(track: Track, extraSources: boolean, webSearch: boolean, refetch?: boolean): Promise<TimedLyrics>;
-  /** Empty when the lyrics are already in the target language. */
   /** The user says the track has no words; "Search again" (`refetch`) undoes it. */
   markInstrumental(track: Track): Promise<void>;
+  /** Forgets what "Search again" rejected for the track: the next lookup finds what the first did. */
+  startOver(track: Track): Promise<void>;
+  /** Empty when the lyrics are already in the target language. */
   translate(lines: LyricLine[], prefs: TranslationPrefs): Promise<Translated[]>;
   furigana(text: string): Promise<Span[]>;
   languages(): Promise<Array<[code: string, name: string]>>;
@@ -209,6 +212,7 @@ const tauriBackend: Backend = {
     }),
 
   markInstrumental: (t) => invoke<void>("mark_instrumental", { trackName: t.title, artistName: t.artist, videoId: t.videoId ?? null }),
+  startOver: (t) => invoke<void>("start_over", { trackName: t.title, artistName: t.artist, videoId: t.videoId ?? null }),
 
   async translate(lines, prefs) {
     const lyrics = lines.map(({ time, text, duration }) => ({ time, text, duration: duration ?? null }));

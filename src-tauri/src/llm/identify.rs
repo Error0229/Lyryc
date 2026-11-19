@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex, OnceLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use super::{
     complete_with, resolve, ChatRequest, Completion, JsonSchema, Lane, LlmError, Target, Task, Tools,
@@ -220,8 +220,8 @@ pub async fn identify_with(
 
 /// How long identification may take (including its turn at the provider);
 /// searching the web takes longer.
-const LIMIT: std::time::Duration = std::time::Duration::from_secs(20);
-const WEB_SEARCH_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+const LIMIT: Duration = Duration::from_secs(20);
+const WEB_SEARCH_LIMIT: Duration = Duration::from_secs(60);
 
 /// Answers per raw (title, artist), including "unsure", for this session: a
 /// song that missed once will miss again, and each call costs the user.
@@ -234,16 +234,65 @@ static ANSWERS: LazyLock<Mutex<Answers>> = LazyLock::new(Default::default);
 /// (a reloading overlay, the lookahead re-checking) would otherwise send a
 /// request each time into a provider that is refusing (429) or overloaded
 /// (503), and spend the quota that's left.
-const RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
+const RETRY_AFTER: Duration = Duration::from_secs(60);
 static FAILED: LazyLock<Mutex<HashMap<(String, String, bool), Instant>>> = LazyLock::new(Default::default);
 
-/// Drop the remembered answers for a song: the lyrics they led to were wrong.
-/// "Search again" also skips a failure's cool-down: the user asked now.
 /// Remember a failed call (and forget expired ones, so the map stays small).
 fn note_failure(key: (String, String, bool)) {
     let mut failed = lock(&FAILED);
     failed.retain(|_, at| at.elapsed() < RETRY_AFTER);
     failed.insert(key, Instant::now());
+}
+
+/// A provider that answers 429 is refusing, whatever the song: it is left
+/// alone for a minute, then two, doubling up to an hour while it keeps
+/// refusing. Nothing skips this wait, "Search again" included: each press
+/// used to send two more requests into a quota that was already spent.
+const REFUSED_FIRST: Duration = Duration::from_secs(60);
+const REFUSED_MAX: Duration = Duration::from_secs(3600);
+
+/// A provider's refusals in a row, and when it may be asked again.
+struct Refusal {
+    times: u32,
+    until: Instant,
+}
+
+/// By provider, model and web search: Gemini's free tier refuses every call
+/// with web search while it answers the plain ones.
+static REFUSED: LazyLock<Mutex<HashMap<String, Refusal>>> = LazyLock::new(Default::default);
+
+fn refusal_key(target: &Target, web_search: bool) -> String {
+    format!("{}|{}|{}|{}", target.label, target.base_url, target.model, web_search)
+}
+
+/// How long a provider is left alone after its `times`-th refusal in a row.
+fn refusal_wait(times: u32) -> Duration {
+    REFUSED_FIRST.saturating_mul(2u32.saturating_pow(times.saturating_sub(1))).min(REFUSED_MAX)
+}
+
+fn note_refusal(key: String, now: Instant) {
+    let mut refused = lock(&REFUSED);
+    let times = refused.get(&key).map_or(0, |r| r.times) + 1;
+    let wait = refusal_wait(times);
+    warn!("The AI provider refused song identification (429); not asking it again for {}s", wait.as_secs());
+    refused.insert(key, Refusal { times, until: now + wait });
+}
+
+/// How long until the provider is asked again, while it is being left alone.
+fn refused_left(key: &str, now: Instant) -> Option<Duration> {
+    lock(&REFUSED).get(key).and_then(|r| r.until.checked_duration_since(now)).filter(|left| !left.is_zero())
+}
+
+/// How long until identification (with or without web search) is asked for
+/// again, while its provider is refusing.
+pub fn refused_for(web_search: bool) -> Option<Duration> {
+    let target = resolve(Task::Cleaning, &[])?;
+    refused_left(&refusal_key(&target, web_search), Instant::now())
+}
+
+/// A provider is set up for identification.
+pub fn set_up() -> bool {
+    resolve(Task::Cleaning, &[]).is_some()
 }
 
 /// A plain map behind a mutex: if a holder ever panicked, the map is still
@@ -252,8 +301,10 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-pub fn forget(raw_title: &str, raw_artist: &str) {
-    lock(&ANSWERS).retain(|(title, artist, _), _| title != raw_title || artist != raw_artist);
+/// "Search again": a call that failed for this song is tried again now, not
+/// after its cool-down. A refusing provider still waits (`REFUSED`), and the
+/// song's answers stay: the model would be asked the same thing again.
+pub fn retry(raw_title: &str, raw_artist: &str) {
     lock(&FAILED).retain(|(title, artist, _), _| title != raw_title || artist != raw_artist);
 }
 
@@ -280,11 +331,20 @@ pub async fn identify_song(
     let Some(target) = resolve(Task::Cleaning, &[]) else {
         return Ok(None);
     };
+    let refusal = refusal_key(&target, web_search);
+    if let Some(left) = refused_left(&refusal, Instant::now()) {
+        return Err(format!("the provider refused (429); asking again in {}s", left.as_secs()));
+    }
     // A song is waiting on this: a provider that takes longer is better skipped.
     let limit = if web_search { WEB_SEARCH_LIMIT } else { LIMIT };
     let call = identify_with(&target, raw_title, raw_artist, duration, web_search);
     let answer = match tokio::time::timeout(limit, call).await {
         Ok(Ok(found)) => found,
+        Ok(Err(e)) if e.status == Some(429) => {
+            warn!("Song identification failed: {e}");
+            note_refusal(refusal, Instant::now());
+            return Err(e.to_string());
+        }
         Ok(Err(e)) => {
             // Not remembered as an answer: a network or quota failure may pass.
             warn!("Song identification failed: {e}");
@@ -297,6 +357,7 @@ pub async fn identify_song(
             return Err("timed out".into());
         }
     };
+    lock(&REFUSED).remove(&refusal);
     lock(&ANSWERS).insert(key, answer.clone());
     Ok(answer)
 }
@@ -411,5 +472,23 @@ mod tests {
             "Title: 【MV】私じゃなかったんだね。(Official Video)\nArtist: マカロニえんぴつ\nDuration: 244 s"
         );
         assert!(prompt("a", "b", None).ends_with("Duration: unknown"));
+    }
+
+    #[test]
+    fn a_refusing_provider_is_left_alone_longer_each_time() {
+        let waits: Vec<u64> = (1..=8).map(|times| refusal_wait(times).as_secs()).collect();
+        assert_eq!(waits, [60, 120, 240, 480, 960, 1920, 3600, 3600], "a minute, doubling up to an hour");
+        assert_eq!(refusal_wait(u32::MAX), REFUSED_MAX);
+
+        // Its own key: REFUSED is shared by every test.
+        let key = "test|a_refusing_provider|model|true".to_string();
+        let t0 = Instant::now();
+        assert_eq!(refused_left(&key, t0), None);
+        note_refusal(key.clone(), t0);
+        assert_eq!(refused_left(&key, t0), Some(REFUSED_FIRST));
+        assert_eq!(refused_left(&key, t0 + REFUSED_FIRST), None, "the wait is over: the next call probes");
+        note_refusal(key.clone(), t0 + REFUSED_FIRST);
+        assert_eq!(refused_left(&key, t0 + REFUSED_FIRST), Some(2 * REFUSED_FIRST), "refused again: twice as long");
+        assert_eq!(refused_left("test|a_refusing_provider|model|false", t0), None, "without web search it is another quota");
     }
 }

@@ -146,6 +146,15 @@ fn retries(lane: Lane) -> u32 {
     }
 }
 
+/// A 429 that names no wait, answering a call someone is watching: asked
+/// again two seconds later it was refused again every time (a quota is not
+/// back that soon), so the retry only spent another request. The caller
+/// decides when to ask next (`identify::REFUSED`). Bulk calls keep their
+/// waits: nobody watches a translation, and its 26 s outlast a short burst.
+fn refused_outright(lane: Lane, reply: &Reply) -> bool {
+    lane == Lane::Quick && reply.status == 429 && reply.retry_after.is_none()
+}
+
 /// How long to wait before retry `attempt` (0-based): 1, 3, 9 s (429: 2, 6,
 /// 18 s), or what the server asked for; `None` if that is longer than we are
 /// willing to wait.
@@ -200,7 +209,7 @@ async fn send_with_retry(ctx: &Ctx<'_>, lane: Lane, build: impl Fn() -> HttpCall
     loop {
         pace(ctx.0, lane).await;
         let reply = send(&build()).await.map_err(|e| ctx.err(None, e))?;
-        if !is_retryable(reply.status) || attempt == retries(lane) {
+        if !is_retryable(reply.status) || attempt == retries(lane) || refused_outright(lane, &reply) {
             return Ok(reply);
         }
         let Some(wait) = backoff(reply.status, reply.retry_after, attempt) else {
@@ -354,6 +363,12 @@ mod tests {
         assert_eq!(backoff(429, Some(Duration::from_secs(3600)), 0), None);
         assert_eq!(retries(Lane::Quick), 1, "a person is waiting on identification");
         assert_eq!(retries(Lane::Bulk), 3, "a translation waits out a 503 spike");
+
+        let reply = |status, retry_after| Reply { status, retry_after, body: String::new() };
+        assert!(refused_outright(Lane::Quick, &reply(429, None)), "a quota is not back in two seconds");
+        assert!(!refused_outright(Lane::Quick, &reply(429, Some(Duration::from_secs(3)))), "the server said when");
+        assert!(!refused_outright(Lane::Quick, &reply(503, None)), "an overload passes");
+        assert!(!refused_outright(Lane::Bulk, &reply(429, None)), "a translation waits a burst out");
     }
 
     #[test]

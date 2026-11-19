@@ -2,6 +2,7 @@
  * Minimal toast queue. `toast()` can be called from anywhere; <Toaster/> renders
  * the stack. Toasts slide/fade in from below and collapse out.
  */
+import { useRef, type RefObject } from "react";
 import { create } from "zustand";
 import { AnimatePresence, motion } from "motion/react";
 import { CircleAlert, CircleCheck, Info, X } from "lucide-react";
@@ -10,13 +11,21 @@ import { cx } from "../lib/cx";
 
 export type ToastTone = "neutral" | "success" | "danger";
 
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
 export interface ToastInput {
   title: string;
   description?: string;
   tone?: ToastTone;
-  action?: { label: string; onClick: () => void };
+  /** What the user can do about it; any of them dismisses the toast. */
+  actions?: ToastAction[];
   /** ms; 0 keeps it until dismissed. */
   duration?: number;
+  /** Toasts about one thing share a slot: a new one replaces the one before it. */
+  slot?: string;
 }
 
 interface ToastItem extends ToastInput {
@@ -30,10 +39,16 @@ export function dismiss(id: number) {
   useToasts.setState((s) => ({ items: s.items.filter((t) => t.id !== id) }));
 }
 
+/** Dismiss whatever is in `slot`: what it said no longer holds. */
+export function dismissSlot(slot: string) {
+  useToasts.setState((s) => ({ items: s.items.filter((t) => t.slot !== slot) }));
+}
+
 export function toast(input: ToastInput): number {
   const id = ++nextId;
   // Same message twice in a row is noise; replace instead of stacking.
-  useToasts.setState((s) => ({ items: [...s.items.filter((t) => t.title !== input.title), { ...input, id }].slice(-3) }));
+  const replaced = (t: ToastItem) => t.title === input.title || (!!input.slot && t.slot === input.slot);
+  useToasts.setState((s) => ({ items: [...s.items.filter((t) => !replaced(t)), { ...input, id }].slice(-3) }));
   const ms = input.duration ?? 5000;
   if (ms > 0) setTimeout(() => dismiss(id), ms);
   return id;
@@ -52,52 +67,67 @@ const placements = {
   strip: "top-1/2 left-3 -translate-y-1/2",
 };
 
-export function Toaster({ placement = "corner" }: { placement?: keyof typeof placements }) {
+type Placement = keyof typeof placements;
+/** Called with each toast's element, as a hook: the overlay reports its rect so it takes clicks while locked. */
+type UseHit = (ref: RefObject<HTMLElement | null>) => void;
+const noHit: UseHit = () => {};
+
+export function Toaster({ placement = "corner", useHit = noHit }: { placement?: Placement; useHit?: UseHit }) {
   const all = useToasts((s) => s.items);
   const strip = placement === "strip";
   const items = strip ? all.slice(-1) : all;
   return (
-    <div aria-live="polite" className={cx("pointer-events-none fixed z-(--z-toast) flex flex-col gap-2", strip ? "max-w-[50vw]" : "w-80", placements[placement])}>
+    <div aria-live="polite" className={cx("pointer-events-none fixed z-(--z-toast) flex flex-col gap-2", strip ? "max-w-[calc(100vw-1.5rem)]" : "w-80", placements[placement])}>
       <AnimatePresence initial={false}>
         {items.map((t) => (
-          <motion.div
-            key={t.id}
-            layout
-            initial={{ opacity: 0, y: 12, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1, transition: spring.gentle }}
-            exit={{ opacity: 0, scale: 0.98, transition: fade("fast") }}
-            role="status"
-            className={cx(
-              "pointer-events-auto flex gap-2.5 rounded-lg border border-glass-line bg-glass text-glass-fg shadow-3 backdrop-blur-xl [&_svg]:size-4",
-              strip ? "items-center px-3 py-2" : "items-start p-3",
-            )}
-          >
-            <span className={cx("shrink-0", !strip && "mt-px")}>{icons[t.tone ?? "neutral"]}</span>
-            <div className={cx("min-w-0 flex-1", strip && "flex items-center gap-3")}>
-              <p className="truncate text-sm font-medium">{t.title}</p>
-              {t.description && !strip && <p className="mt-0.5 text-xs text-glass-fg-muted">{t.description}</p>}
-              {t.action && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    t.action!.onClick();
-                    dismiss(t.id);
-                  }}
-                  className={cx(
-                    "shrink-0 rounded-sm text-xs font-semibold whitespace-nowrap text-glass-fg underline decoration-glass-fg-muted underline-offset-4 hover:decoration-glass-fg",
-                    !strip && "mt-2",
-                  )}
-                >
-                  {t.action.label}
-                </button>
-              )}
-            </div>
-            <button type="button" aria-label="Dismiss" onClick={() => dismiss(t.id)} className="shrink-0 text-glass-fg-muted hover:text-glass-fg">
-              <X />
-            </button>
-          </motion.div>
+          <ToastCard key={t.id} toast={t} strip={strip} useHit={useHit} />
         ))}
       </AnimatePresence>
     </div>
+  );
+}
+
+function ToastCard({ toast: t, strip, useHit }: { toast: ToastItem; strip: boolean; useHit: UseHit }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useHit(ref);
+  return (
+    <motion.div
+      ref={ref}
+      layout
+      initial={{ opacity: 0, y: 12, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1, transition: spring.gentle }}
+      exit={{ opacity: 0, scale: 0.98, transition: fade("fast") }}
+      role="status"
+      className={cx(
+        "pointer-events-auto flex gap-2.5 rounded-lg border border-glass-line bg-glass text-glass-fg shadow-3 backdrop-blur-xl [&_svg]:size-4",
+        strip ? "items-center px-3 py-2" : "items-start p-3",
+      )}
+    >
+      <span className={cx("shrink-0", !strip && "mt-px")}>{icons[t.tone ?? "neutral"]}</span>
+      <div className={cx("min-w-0 flex-1", strip && "flex items-center gap-3")}>
+        <p className="truncate text-sm font-medium">{t.title}</p>
+        {t.description && !strip && <p className="mt-0.5 text-xs text-glass-fg-muted">{t.description}</p>}
+        {t.actions && t.actions.length > 0 && (
+          <div className={cx("flex shrink-0 gap-3", !strip && "mt-2")}>
+            {t.actions.map((a) => (
+              <button
+                key={a.label}
+                type="button"
+                onClick={() => {
+                  a.onClick();
+                  dismiss(t.id);
+                }}
+                className="shrink-0 rounded-sm text-xs font-semibold whitespace-nowrap text-glass-fg underline decoration-glass-fg-muted underline-offset-4 hover:decoration-glass-fg"
+              >
+                {a.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      <button type="button" aria-label="Dismiss" onClick={() => dismiss(t.id)} className="shrink-0 text-glass-fg-muted hover:text-glass-fg">
+        <X />
+      </button>
+    </motion.div>
   );
 }

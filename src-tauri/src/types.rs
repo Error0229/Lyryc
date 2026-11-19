@@ -22,7 +22,7 @@ pub struct LyricLine {
     pub text: String,
     pub duration: Option<f64>,
     /// Word onsets inside the line (pre-aligned timing only). Absent from the
-    /// wire when None, so `fetch_lyrics` payloads and cached rows are unchanged.
+    /// wire when None, so `fetch_lyrics_timed` payloads and cached rows are unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub words: Option<Vec<LyricWord>>,
 }

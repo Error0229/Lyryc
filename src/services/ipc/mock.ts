@@ -17,7 +17,7 @@
  * `ytmusic` serves the lyrics as YouTube Music's own timed lyrics.
  */
 import type { Backend, BackendEvents, SavedChange, SavedSongDetail } from "./backend";
-import type { LookupStage, LyricLine, PrealignStatus, Span, UpdateStatus } from "../../lib/types";
+import type { LookupStage, LyricLine, NotFound, PrealignStatus, Span, UpdateStatus } from "../../lib/types";
 import { translationKey } from "../../lib/lyrics";
 import { englishSong, japaneseSong, readings, type MockSong } from "./mockData";
 
@@ -186,6 +186,17 @@ function furigana(text: string): Span[] {
   return out;
 }
 
+/** Nothing found: LRCLIB had only rejected lyrics, and web search was refused. */
+const NOT_FOUND: NotFound = {
+  tried: [
+    { method: "web-search", end: "unavailable", retrySecs: 3480 },
+    { method: "identify", end: "nothing" },
+    { method: "sources", end: "nothing" },
+    { method: "lrclib", end: "rejected" },
+  ],
+  rejected: true,
+};
+
 export const mockBackend: Backend = {
   initExtension: async () => {},
   currentTrack: async () => (mockScenario === "idle" ? null : song().track),
@@ -198,7 +209,7 @@ export const mockBackend: Backend = {
       await new Promise(() => {}); // stays in that pass
     }
     const found = songs.find((s) => s.track.title === track.title);
-    if (!found || mockScenario === "missing") throw new Error("No lyrics found");
+    if (!found || mockScenario === "missing") throw NOT_FOUND;
     if (mockScenario === "ytmusic") return { lines: found.lines, source: "ytmusic", pending: false };
     if (mockScenario !== "estimate") return { lines: found.lines, source: "lrclib", pending: false };
 
@@ -270,6 +281,7 @@ export const mockBackend: Backend = {
   },
   lookaheadConfigure: async () => {},
   markInstrumental: async () => {},
+  startOver: async () => {},
   async prealignRemoveFiles() {
     setPrealign({ enabled: false, state: "off", download: null, diskBytes: 0 });
     return prealign;

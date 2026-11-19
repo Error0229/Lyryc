@@ -3,7 +3,7 @@ import { phaseOf, statusIcon, type IconInput, type PhaseInput } from "./phase";
 
 const at = (p: Partial<PhaseInput>) => phaseOf({ hasTrack: true, status: "loading", stage: null, source: null, refetching: false, ...p });
 const icon = (i: Partial<IconInput>) =>
-  statusIcon({ phase: "word", stage: null, source: null, syncing: false, justSynced: false, outcome: null, quiet: false, idleHint: false, ...i });
+  statusIcon({ phase: "word", stage: null, source: null, syncing: false, justSynced: false, quiet: false, idleHint: false, ...i });
 
 describe("phaseOf", () => {
   it("is idle without a track", () => {
@@ -26,9 +26,11 @@ describe("phaseOf", () => {
     expect(at({ status: "ready", source: "aligned" })).toBe("word");
   });
 
-  it("puts Search again before everything but idle", () => {
+  it("puts Search again before everything but idle, and follows its passes", () => {
     expect(at({ status: "ready", source: "aligned", refetching: true })).toBe("refetch");
     expect(at({ status: "missing", refetching: true })).toBe("refetch");
+    expect(at({ status: "ready", source: "lrclib", refetching: true, stage: "web-search" })).toBe("identify");
+    expect(at({ status: "missing", refetching: true, stage: "other-recording" })).toBe("sources");
     expect(at({ status: "missing" })).toBe("missing");
     expect(at({ status: "instrumental" })).toBe("instrumental");
   });
@@ -61,10 +63,8 @@ describe("statusIcon", () => {
     expect(icon({ phase: "estimate", justSynced: true })?.id).toBe("estimate");
   });
 
-  it("reports Search again's outcome over the state", () => {
+  it("spins while Search again starts", () => {
     expect(icon({ phase: "refetch" })).toMatchObject({ id: "refetch", motion: "spin" });
-    expect(icon({ phase: "word", outcome: "same" })?.tip).toBe("Same lyrics found");
-    expect(icon({ phase: "missing", outcome: "nothing-else" })?.tip).toBe("Nothing else found");
   });
 
   it("keeps not-found and instrumental in words first, then only an icon", () => {

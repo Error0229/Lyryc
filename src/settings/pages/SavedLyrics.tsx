@@ -3,6 +3,7 @@ import { backend, type CacheSize } from "../../services/ipc/backend";
 import { Button } from "../../ui/Button";
 import { ConfirmDialog } from "../../ui/Dialog";
 import { Row } from "../../ui/Field";
+import { onSongRequest, requestedSong, type SongRef } from "../../state/nav";
 import { SavedLyricsBrowser } from "../saved/SavedLyricsBrowser";
 
 const HINT =
@@ -16,7 +17,14 @@ export function SavedLyrics() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirm, setConfirm] = useState(false);
-  const [browse, setBrowse] = useState(false);
+  // The overlay may ask for one song's editor ("Paste lyrics"): the browser opens on it.
+  const [wanted, setWanted] = useState<SongRef | null>(requestedSong);
+  const [browse, setBrowse] = useState(wanted !== null);
+  useEffect(() => onSongRequest((song) => (setWanted(song), setBrowse(true))), []);
+  const showBrowser = (open: boolean) => {
+    setBrowse(open);
+    if (!open) setWanted(null);
+  };
 
   // Again after browsing: edits there change what's saved.
   useEffect(() => {
@@ -49,14 +57,14 @@ export function SavedLyrics() {
           </>
         }
       >
-        <Button size="sm" disabled={empty || busy} onClick={() => setBrowse(true)}>
+        <Button size="sm" disabled={empty || busy} onClick={() => showBrowser(true)}>
           Browse
         </Button>
         <Button size="sm" variant="ghost" disabled={empty || busy} onClick={() => setConfirm(true)}>
           {busy ? "Clearing…" : empty ? "Nothing saved" : `Clear (${mb(size.bytes)})`}
         </Button>
       </Row>
-      <SavedLyricsBrowser open={browse} onOpenChange={setBrowse} />
+      <SavedLyricsBrowser open={browse} onOpenChange={showBrowser} wanted={wanted} />
       <ConfirmDialog
         open={confirm}
         onOpenChange={setConfirm}

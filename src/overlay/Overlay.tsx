@@ -1,5 +1,5 @@
 /** The always-on-top lyric strip. */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode, type RefObject } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { fade, spring } from "../design/motion";
 import { lineKeys } from "../lib/lyrics";
@@ -9,6 +9,7 @@ import { useSession } from "../state/session";
 import { useSettings } from "../state/settings";
 import { Toaster } from "../ui/Toast";
 import { Controls, UnlockButton, WidthHandles } from "./Controls";
+import { useHitRect } from "./hits";
 import { useBackendEvents, useFurigana, useRows, useSettingsMirror, useStripHeight, useTranslations } from "./hooks";
 import { PILL_OVERLAP_PX, PILL_PX, ROOM_PX, ROOM_X_PX } from "./rows";
 import { LineView } from "./Line";
@@ -62,6 +63,11 @@ function useEscToLock(moving: boolean) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [moving]);
+}
+
+/** A toast takes clicks while the strip is locked too: its actions ("Paste lyrics") must work there. */
+function useToastHit(ref: RefObject<HTMLElement | null>) {
+  useHitRect("toast", ref, true);
 }
 
 /** The pill's distance from the window edge on its side: it reaches PILL_OVERLAP_PX into the strip. */
@@ -172,7 +178,6 @@ export function Overlay() {
     source: s.source,
     syncing: s.pending || s.aligning,
     justSynced,
-    outcome: s.outcome,
     quiet,
     idleHint: launched || stripHovered,
   });
@@ -263,7 +268,7 @@ export function Overlay() {
           {moving ? <Controls tipSide={tipSide} /> : <AnimatePresence>{unlockShown && <UnlockButton tipSide={tipSide} />}</AnimatePresence>}
         </Centred>
       </motion.div>
-      <Toaster placement="strip" />
+      <Toaster placement="strip" useHit={useToastHit} />
     </div>
   );
 }

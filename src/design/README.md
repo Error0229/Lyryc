@@ -183,11 +183,20 @@ while idle).
 | Estimated timing | ≈ | Estimated timing |
 | Syncing words | four bars rising and falling | Syncing to the vocals |
 | Timing improved (2.5 s) | ✓, green | Synced to the vocals / Synced lyrics found |
-| Searching again | arrows, spinning | Searching again |
-| Search again changed nothing (3 s) | ✓ / magnifier with ✕ | Same lyrics found / Nothing else found |
+| Searching again | arrows, spinning, then the pass's icon (sparkle, globe) | Searching again, then the pass's name |
 | Not found (after 6 s) | crossed-out captions | No lyrics found |
 | Instrumental (after 4 s) | ♪ | Instrumental |
 | Lyrics playing, paused | none | — |
+
+**How "Search again" ends is said in words** (`overlay/actions.ts`,
+`searchAgain.ts`): an icon can't say which source the new lyrics are from, or
+what could not be asked. A toast on the strip names the source for 4 s ("New
+lyrics from QQ Music"). When nothing is left it stays until dismissed, says
+"Tried everything" only when every method answered (otherwise it names the ones
+that could not be asked, and for how long), and offers "Paste lyrics" (the
+saved-lyrics editor on this song) and "Start over" (forget what was rejected).
+It takes clicks while the strip is locked. While the search runs, the button's
+name follows the pass ("Trying other sources…").
 
 ## Primitives (`src/ui`)
 

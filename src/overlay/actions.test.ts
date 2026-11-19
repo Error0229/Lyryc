@@ -1,31 +1,49 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Track } from "../lib/types";
+import type { NotFound, TimedLyrics, Track } from "../lib/types";
+import type { ToastInput } from "../ui/Toast";
 
-// The lookups the overlay asks for, and a way to answer them by hand.
+// The lookups the overlay asks for, and a way to answer them by hand: lyrics, a
+// `NotFound` to reject with, or null for some other failure.
 const calls: Track[] = [];
-const answers: Array<(lines: unknown) => void> = [];
+const refetches: boolean[] = [];
+const answers: Array<(r: TimedLyrics | NotFound | null) => void> = [];
+const startedOver: Track[] = [];
 vi.mock("../services/ipc/backend", () => ({
   backend: {
-    fetchLyrics: (t: Track) => {
+    fetchLyrics: (t: Track, _extra: boolean, _web: boolean, refetch = false) => {
       calls.push(t);
-      return new Promise((resolve, reject) => answers.push((r) => (r ? resolve(r) : reject(new Error("none")))));
+      refetches.push(refetch);
+      return new Promise((resolve, reject) => answers.push((r) => (r && "lines" in r ? resolve(r) : reject(r ?? new Error("none")))));
     },
+    startOver: async (t: Track) => void startedOver.push(t),
   },
 }));
 
-const { setTrack } = await import("./actions");
+// What the overlay says in words.
+const toasts: ToastInput[] = [];
+vi.mock("../ui/Toast", () => ({
+  toast: (t: ToastInput) => toasts.push(t),
+  dismissSlot: (slot: string) => {
+    for (let i = toasts.length - 1; i >= 0; i--) if (toasts[i].slot === slot) toasts.splice(i, 1);
+  },
+}));
+
+const { refetchLyrics, setTrack } = await import("./actions");
 const { useSession } = await import("../state/session");
 
 const bare: Track = { title: "細胞", artist: "Sato", duration: null, videoId: "f_VekM6tlqg" } as Track;
 const full: Track = { ...bare, duration: 180 };
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
+function reset() {
+  for (const list of [calls, refetches, answers, startedOver, toasts]) list.length = 0;
+  useSession.setState({ track: null, status: "idle", lyrics: [], source: null, refetching: false, stage: null });
+}
+
+const lines = (...texts: string[]) => texts.map((text, i) => ({ time: i * 5, text, duration: 5 }));
+
 describe("setTrack", () => {
-  beforeEach(() => {
-    calls.length = 0;
-    answers.length = 0;
-    useSession.setState({ track: null, status: "idle" });
-  });
+  beforeEach(reset);
 
   it("searches again when the length arrives while the first search runs", async () => {
     setTrack(bare);
@@ -50,5 +68,75 @@ describe("setTrack", () => {
     setTrack(bare);
     setTrack(full);
     expect(calls.length).toBe(1);
+  });
+});
+
+describe("refetchLyrics (Search again)", () => {
+  beforeEach(reset);
+
+  /** The song playing with lyrics from LRCLIB on screen. */
+  async function showing() {
+    setTrack(full);
+    answers[0]({ lines: lines("wrong", "words", "here"), source: "lrclib", pending: false });
+    await flush();
+    expect(useSession.getState().status).toBe("ready");
+  }
+
+  it("waits for the first lookup: nothing has been seen that could be rejected", () => {
+    setTrack(full);
+    void refetchLyrics();
+    expect(refetches).toEqual([false]);
+  });
+
+  it("shows what it found and says where from", async () => {
+    await showing();
+    void refetchLyrics();
+    expect(refetches).toEqual([false, true]);
+    expect(useSession.getState().refetching).toBe(true);
+    answers[1]({ lines: lines("right", "words", "now"), source: "qq", pending: false });
+    await flush();
+    const s = useSession.getState();
+    expect([s.refetching, s.source, s.lyrics[0].text]).toEqual([false, "qq", "right"]);
+    expect(toasts.map((t) => t.title)).toEqual(["New lyrics from QQ Music"]);
+  });
+
+  it("with nothing left shows none, says what was tried, and offers what is left to do", async () => {
+    await showing();
+    void refetchLyrics();
+    answers[1]({ tried: [{ method: "lrclib", end: "rejected" }, { method: "web-search", end: "unavailable", retrySecs: 600 }], rejected: true });
+    await flush();
+    const s = useSession.getState();
+    expect([s.refetching, s.status, s.lyrics.length]).toEqual([false, "missing", 0]);
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]).toMatchObject({ title: "Nothing else found, but web search couldn't be asked (again in 10 min)", duration: 0 });
+    expect(toasts[0].actions!.map((a) => a.label)).toEqual(["Paste lyrics", "Start over"]);
+
+    // Start over: the rejections are forgotten, and the song is looked up as new.
+    toasts[0].actions![1].onClick();
+    await flush();
+    expect(startedOver).toEqual([full]);
+    expect(refetches).toEqual([false, true, false]);
+    expect(useSession.getState().status).toBe("loading");
+  });
+
+  it("has nothing to start over when nothing was rejected", async () => {
+    setTrack(full);
+    answers[0](null);
+    await flush();
+    void refetchLyrics();
+    answers[1]({ tried: [{ method: "lrclib", end: "nothing" }], rejected: false });
+    await flush();
+    expect(toasts[0].title).toBe("Tried everything. Nothing found.");
+    expect(toasts[0].actions!.map((a) => a.label)).toEqual(["Paste lyrics"]);
+  });
+
+  it("says nothing about a song that is no longer playing", async () => {
+    await showing();
+    void refetchLyrics();
+    setTrack({ ...full, title: "Another", videoId: "another0000" });
+    answers[1]({ tried: [], rejected: false });
+    await flush();
+    expect(toasts).toEqual([]);
+    expect(useSession.getState().refetching).toBe(false);
   });
 });

@@ -201,7 +201,7 @@ pub type LlmState = Arc<Mutex<Store>>;
 static GLOBAL: OnceLock<LlmState> = OnceLock::new();
 
 /// Load the store from `dir` and register it globally, so code paths without
-/// Tauri state (cleaning inside `fetch_lyrics`) see the same settings.
+/// Tauri state (cleaning inside `fetch_lyrics_timed`) see the same settings.
 pub fn init(dir: Option<PathBuf>) -> LlmState {
     let store = match dir {
         Some(dir) => {

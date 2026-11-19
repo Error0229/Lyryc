@@ -20,7 +20,7 @@ export interface LyricWord {
   duration?: number;
 }
 
-/** `fetch_lyrics` payload line (seconds). */
+/** `fetch_lyrics_timed` payload line (seconds). */
 export interface LyricLine {
   time: number;
   text: string;
@@ -127,3 +127,27 @@ export interface HitRect {
 
 /** `lyrics-progress`: the lookup moved on to a slower pass. */
 export type LookupStage = "identify" | "web-search" | "sources" | "other-recording";
+
+/** A way the lookup has of finding lyrics. `sources`: QQ Music / NetEase / Kugou. */
+export type LookupMethod = "ytmusic" | "lrclib" | "sources" | "identify" | "web-search";
+
+/**
+ * How asking one method ended. `off`: switched off or not set up. `nothing`:
+ * asked, no lyrics. `rejected`: it had lyrics the user rejected ("Search
+ * again"). `unavailable`: it could not be asked (down, a quota).
+ */
+export type LookupEnd = "off" | "nothing" | "rejected" | "unavailable";
+
+export interface Tried {
+  method: LookupMethod;
+  end: LookupEnd;
+  /** For `unavailable`, when known: seconds until it is asked again. */
+  retrySecs?: number;
+}
+
+/** What `fetch_lyrics_timed` rejects with: no lyrics, and what each method came to. */
+export interface NotFound {
+  tried: Tried[];
+  /** The user has rejected lyrics for the song: starting over would bring some back. */
+  rejected: boolean;
+}

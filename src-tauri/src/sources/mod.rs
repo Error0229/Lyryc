@@ -24,6 +24,7 @@ mod kugou;
 mod netease;
 mod qq;
 
+use crate::lyrics_cache::Rejected;
 use crate::types::LyricLine;
 use anyhow::Result;
 use breaker::Breaker;
@@ -259,40 +260,61 @@ where
     Ok(check(&timed, q, plain))
 }
 
+/// What asking the providers came to.
+#[derive(Clone, Debug, Default)]
+pub struct Outcome {
+    pub found: Option<Found>,
+    /// A provider had the song, in lyrics the user rejected for it.
+    pub rejected: bool,
+    /// A provider could not be asked: its request failed, or it is paused
+    /// after failing.
+    pub failed: bool,
+}
+
 /// Timing for `q` from the first provider that has some. With `plain`, the
 /// result keeps those lines and takes only times from the source; without it,
-/// the source's own lines are used. Requests run one after another.
-pub async fn find(q: &Query, plain: Option<&[String]>) -> Option<Found> {
-    find_with(&BREAKER, q, |p, name| fetch(&get_json, p, name, q, plain)).await
+/// the source's own lines are used. `rejected` lyrics are passed over, as if
+/// the provider had none. Requests run one after another.
+pub async fn find(q: &Query, plain: Option<&[String]>, rejected: &Rejected) -> Outcome {
+    find_with(&BREAKER, q, rejected, |p, name| fetch(&get_json, p, name, q, plain)).await
 }
 
 /// Each searched name across the providers in order, until one passes.
-async fn find_with<'a, F, Fut>(breaker: &Breaker, q: &'a Query, fetch: F) -> Option<Found>
+async fn find_with<'a, F, Fut>(breaker: &Breaker, q: &'a Query, rejected: &Rejected, fetch: F) -> Outcome
 where
     F: Fn(Provider, &'a Name) -> Fut,
     Fut: Future<Output = Result<Attempt>>,
 {
+    let mut out = Outcome::default();
     for name in q.searches() {
         for p in Provider::ALL {
             if breaker.is_open(p) {
+                out.failed = true;
                 continue;
             }
             let attempt = fetch(p, name).await;
             breaker.record(p, attempt.is_ok());
             match attempt {
-                Err(e) => debug!(
-                    "{:?} failed for '{}' by '{}': {}",
-                    p, name.title, name.artist, e
-                ),
+                Err(e) => {
+                    out.failed = true;
+                    debug!("{:?} failed for '{}' by '{}': {}", p, name.title, name.artist, e);
+                }
                 Ok(Err(miss)) => debug!(
                     "{:?}: {:?} for '{}' by '{}'",
                     p, miss, name.title, name.artist
                 ),
-                Ok(Ok((lines, timed))) => return Some(Found { provider: p, lines, timed }),
+                Ok(Ok((lines, _))) if rejected.has(&lines) => {
+                    out.rejected = true;
+                    debug!("{:?}: lyrics the user rejected for '{}' by '{}'", p, name.title, name.artist);
+                }
+                Ok(Ok((lines, timed))) => {
+                    out.found = Some(Found { provider: p, lines, timed });
+                    return out;
+                }
             }
         }
     }
-    None
+    out
 }
 
 /// The guards on the picked result's timed lines. None of them is "partially
@@ -810,12 +832,31 @@ pub(crate) mod tests {
             Provider::Netease => Ok(Err(Miss::NoSameLength)),
             Provider::Kugou => koi_lines(),
         });
-        let found = find_with(&Breaker::new(), &koi(), |p, n| s.call(p, n))
-            .await
-            .unwrap();
+        let found = find_with(&Breaker::new(), &koi(), &Rejected::default(), |p, n| s.call(p, n)).await.found.unwrap();
         assert_eq!(found.provider, Provider::Kugou);
         let providers: Vec<Provider> = s.calls().into_iter().map(|(p, _)| p).collect();
         assert_eq!(providers, Provider::ALL);
+    }
+
+    #[tokio::test]
+    async fn rejected_lyrics_are_passed_over_for_the_next_provider() {
+        let (lines, _) = koi_lines().unwrap().unwrap();
+        let rejected = Rejected::of(&lines);
+        // QQ has the rejected lyrics; Kugou has others.
+        let s = Script::new(|p, _| match p {
+            Provider::Qq => koi_lines(),
+            Provider::Netease => Ok(Err(Miss::Empty)),
+            Provider::Kugou => Ok(Ok((to_lines(timed(&[(1.0, "some other words"), (5.0, "of another song"), (9.0, "entirely")])), true))),
+        });
+        let out = find_with(&Breaker::new(), &koi(), &rejected, |p, n| s.call(p, n)).await;
+        assert_eq!(out.found.unwrap().provider, Provider::Kugou);
+        assert!(out.rejected && !out.failed);
+
+        // Every provider has only the rejected lyrics: nothing, and it says why.
+        let s = Script::new(|_, _| koi_lines());
+        let out = find_with(&Breaker::new(), &koi(), &rejected, |p, n| s.call(p, n)).await;
+        assert!(out.found.is_none() && out.rejected);
+        assert_eq!(s.calls().len(), Provider::ALL.len(), "one name, each provider asked once");
     }
 
     #[tokio::test]
@@ -832,9 +873,7 @@ pub(crate) mod tests {
             (Provider::Netease, "Snow Country") => koi_lines(),
             _ => Ok(Err(Miss::OtherSong)),
         });
-        let found = find_with(&Breaker::new(), &q, |p, n| s.call(p, n))
-            .await
-            .unwrap();
+        let found = find_with(&Breaker::new(), &q, &Rejected::default(), |p, n| s.call(p, n)).await.found.unwrap();
         assert_eq!(found.provider, Provider::Netease);
         let calls = s.calls();
         assert_eq!(
@@ -850,9 +889,8 @@ pub(crate) mod tests {
 
         // Nothing anywhere: two searches per provider, never a third name.
         let s = Script::new(|_, _| Ok(Err(Miss::Empty)));
-        assert!(find_with(&Breaker::new(), &q, |p, n| s.call(p, n))
-            .await
-            .is_none());
+        let nothing = find_with(&Breaker::new(), &q, &Rejected::default(), |p, n| s.call(p, n)).await;
+        assert!(nothing.found.is_none() && !nothing.failed && !nothing.rejected);
         assert_eq!(s.calls().len(), MAX_SEARCHES * Provider::ALL.len());
         assert!(s.calls().iter().all(|(_, t)| t != "Yukiguni"));
     }
@@ -865,10 +903,11 @@ pub(crate) mod tests {
         });
         let b = Breaker::new();
         for _ in 0..3 {
-            assert!(find_with(&b, &koi(), |p, n| s.call(p, n)).await.is_none());
+            assert!(find_with(&b, &koi(), &Rejected::default(), |p, n| s.call(p, n)).await.found.is_none());
         }
         s.calls.lock().unwrap().clear();
-        find_with(&b, &koi(), |p, n| s.call(p, n)).await;
+        let skipped = find_with(&b, &koi(), &Rejected::default(), |p, n| s.call(p, n)).await;
+        assert!(skipped.failed, "a paused provider was not asked");
         let providers: Vec<Provider> = s.calls().into_iter().map(|(p, _)| p).collect();
         assert_eq!(providers, vec![Provider::Netease, Provider::Kugou]);
 
@@ -881,7 +920,7 @@ pub(crate) mod tests {
         b.record(Provider::Kugou, false);
         b.record(Provider::Kugou, false);
         let two = Query::new([name("恋", "茅原実里"), name("Koi", "Minori")], 265.0);
-        find_with(&b, &two, |p, n| s.call(p, n)).await;
+        find_with(&b, &two, &Rejected::default(), |p, n| s.call(p, n)).await;
         assert_eq!(
             s.calls()
                 .iter()
