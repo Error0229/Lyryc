@@ -195,18 +195,31 @@ impl Shared {
     }
 
     /// An editor's job joins the line. Asked again while it waits, the newer
-    /// lines replace the older: the song stays in `timing`, and the newer
-    /// job's `prealign-timed` answers for both (the editor hears about the
-    /// song, not the ask). It stops a queue job that is running (that one runs
-    /// again later), never another editor's job.
+    /// job takes the older one's place in the line; asked again while it
+    /// runs, the running one stops and the newer one waits its turn. Either
+    /// way the song stays in `timing`, and only the newer job's
+    /// `prealign-timed` is heard: the editor hears about the song, not the
+    /// ask. It also stops a queue job that is running (that one runs again
+    /// later), never another song's editor job.
     fn ask(&mut self, ask: Ask) {
-        self.asked.retain(|a| a.asked.song != ask.asked.song);
-        self.asked.push_back(ask);
+        let song = ask.asked.song.clone();
+        match self.asked.iter_mut().find(|a| a.asked.song == song) {
+            Some(waiting) => *waiting = ask,
+            None => self.asked.push_back(ask),
+        }
         // A job past its last checkpoint finishes anyway; the worker clears the
         // flag, under this lock, when it picks the next one.
-        if self.working_on.is_some() && self.running.is_none() {
+        if self.working_on.is_some() && self.running.as_ref().is_none_or(|r| *r == song) {
             P.cancel.store(true, Ordering::Relaxed);
         }
+    }
+
+    /// An editor's job that ended with a newer one for its song waiting:
+    /// that one answers for the song, so this one keeps nothing. Even one that
+    /// finished past its last checkpoint: its save would make the newer job's
+    /// "nothing changed since" check fail, and lose the user's newer lines.
+    fn superseded(&self, asked: &Asked) -> bool {
+        self.asked.iter().any(|a| a.asked.song == asked.song)
     }
 
     /// The songs being timed for the editor, the running one first.
@@ -456,8 +469,10 @@ async fn worker() {
             }
         }
         if let (Some(asked), Some(lyrics)) = (asked, &job.lyrics) {
-            let cached = get_aligned(&id, &text_key(&lyrics.lines));
-            finish(asked, answer(lyrics, &outcome, cached));
+            if !shared().superseded(&asked) {
+                let cached = get_aligned(&id, &text_key(&lyrics.lines));
+                finish(asked, answer(lyrics, &outcome, cached));
+            }
         }
         emit_status();
     }
@@ -744,7 +759,8 @@ pub fn prealign_status() -> Status {
 /// editor's jobs go ahead of the queue, in the order asked.
 #[tauri::command]
 pub async fn prealign_align(artist: String, track: String, lines: Option<Vec<String>>) -> Result<(), String> {
-    // What the user can fix here first; playing the song comes after.
+    // What the user can fix here first, before anything about the song (and
+    // checked again below, under the lock that queues it).
     ready(&shared())?;
     // The cache is read before taking the lock: the worker and `status` wait on it.
     let (artist, track) = crate::lyrics_cache::song_key(&artist, &track);
@@ -898,18 +914,37 @@ mod tests {
     }
 
     #[test]
-    fn the_editors_songs_are_timed_in_the_order_asked_and_asking_again_replaces_the_waiting_one() {
+    fn the_editors_songs_are_timed_in_the_order_asked_and_asking_again_keeps_the_place() {
         let mut s = Shared::default();
         s.ask(ask("one", "first"));
         s.ask(ask("two", "second"));
         s.ask(ask("again", "first"));
         let tracks = |s: &Shared| s.timing().into_iter().map(|r| r.track).collect::<Vec<_>>();
-        assert_eq!(tracks(&s), ["second", "first"]);
+        assert_eq!(tracks(&s), ["first", "second"]);
         let (job, asked) = s.next().unwrap();
         s.running = asked.map(|a| a.song);
-        assert_eq!((job.song.video_id.as_str(), tracks(&s)), ("two", vec!["second".to_string(), "first".into()]), "the running one is still being timed");
-        assert_eq!(s.next().unwrap().0.song.video_id, "again", "the newer lines");
+        assert_eq!((job.song.video_id.as_str(), tracks(&s)), ("again", vec!["first".to_string(), "second".into()]), "the newer lines, in the older one's place");
+        assert_eq!(s.next().unwrap().0.song.video_id, "two");
         assert!(s.next().is_none());
+    }
+
+    #[test]
+    fn asking_again_for_the_song_running_stops_it_and_only_the_newer_job_answers() {
+        let _guard = CANCEL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut s = Shared::default();
+        s.ask(ask("older", "song"));
+        let (_, older) = s.next().unwrap();
+        let older = older.unwrap();
+        s.working_on = Some("song — a".into());
+        s.running = Some(older.song.clone());
+        P.cancel.store(false, Ordering::Relaxed);
+        s.ask(ask("newer", "song"));
+        assert!(P.cancel.load(Ordering::Relaxed), "the older lines make way");
+        // The older one ends (stopped, or finished past its last checkpoint): it
+        // keeps nothing and says nothing; the newer one runs.
+        assert!(s.superseded(&older));
+        assert_eq!(s.next().unwrap().0.song.video_id, "newer");
+        assert!(!s.superseded(&older), "switched off: nothing newer, so it says it was stopped");
     }
 
     #[test]

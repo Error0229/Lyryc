@@ -55,6 +55,16 @@ trait Face {
     fn codepages(&self) -> u32;
 }
 
+/// OS/2's ulCodePageRange1 (big-endian at byte 78), which version 1 added;
+/// 0 for a version 0 table, or none.
+fn codepage_range(os2: &[u8]) -> u32 {
+    let version = os2.get(0..2).map_or(0, |b| u16::from_be_bytes([b[0], b[1]]));
+    match os2.get(78..82) {
+        Some(b) if version >= 1 => u32::from_be_bytes([b[0], b[1], b[2], b[3]]),
+        _ => 0,
+    }
+}
+
 /// The scripts a font writes, in `SCRIPTS` order.
 fn scripts_of(face: &impl Face) -> Vec<&'static str> {
     let pages = face.codepages();
@@ -95,9 +105,8 @@ mod directwrite {
         }
 
         fn codepages(&self) -> u32 {
-            // OS/2 version 1 and later: ulCodePageRange1 at byte 78, big-endian.
             let os2 = self.face.font_table(u32::from_le_bytes(*b"OS/2")).ok().flatten().unwrap_or_default();
-            os2.get(78..82).map_or(0, |b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+            super::codepage_range(&os2)
         }
     }
 
@@ -167,6 +176,17 @@ mod tests {
 
     fn font(name: &str, scripts: &[&'static str]) -> SystemFont {
         SystemFont { name: name.into(), scripts: scripts.to_vec() }
+    }
+
+    #[test]
+    fn the_code_pages_are_read_only_from_a_table_that_has_them() {
+        let mut os2 = vec![0u8; 86];
+        os2[78..82].copy_from_slice(&(1u32 << 17).to_be_bytes());
+        assert_eq!(codepage_range(&os2), 0, "version 0: those bytes are something else");
+        os2[1] = 1;
+        assert_eq!(codepage_range(&os2), 1 << 17);
+        assert_eq!(codepage_range(&os2[..78]), 0, "cut short");
+        assert_eq!(codepage_range(&[]), 0, "no table");
     }
 
     #[test]
