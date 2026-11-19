@@ -24,12 +24,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Tag matches package.json
+      - name: Tag matches package.json and extension/manifest.json
         shell: bash
         run: |
           version=$(node -p "require('./package.json').version")
+          ext_version=$(node -p "require('./extension/manifest.json').version")
           if [ "$GITHUB_REF_NAME" != "v$version" ]; then
             echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $version"
+            exit 1
+          fi
+          if [ "$ext_version" != "$version" ]; then
+            echo "::error::extension/manifest.json version $ext_version does not match package.json version $version"
             exit 1
           fi
 

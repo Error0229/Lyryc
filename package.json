@@ -10,7 +10,8 @@
     "tauri": "tauri",
     "dev:debug": "cross-env RUST_LOG=debug tauri dev",
     "test": "vitest run --reporter=basic",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "version": "node -e \"const fs=require('fs'),p='extension/manifest.json',v=require('./package.json').version;fs.writeFileSync(p,fs.readFileSync(p,'utf8').replace(/\\x22version\\x22:\\s*\\x22[^\\x22]+\\x22/,'\\x22version\\x22: \\x22'+v+'\\x22'))\" && git add extension/manifest.json"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
