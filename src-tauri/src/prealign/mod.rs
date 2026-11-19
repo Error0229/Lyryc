@@ -422,9 +422,9 @@ fn answer(lyrics: &Lyrics, outcome: &Result<&'static str, Failure>, cached: Alig
 async fn fetch(paths: &assets::Paths, video_id: &str) -> Result<ytdlp::Audio, String> {
     let (exe, tmp) = (paths.ytdlp(), paths.tmp());
     match ytdlp::fetch(&exe, &tmp, video_id, None).await {
-        Err(e) if ytdlp::needs_sign_in(&e) => {
+        Err(e) if ytdlp::is_private(&e) => {
             let jar = crate::cookies::youtube(&tmp).await.map_err(|why| format!("it's a private video, and {why}"))?;
-            ytdlp::fetch(&exe, &tmp, video_id, Some(&jar.path)).await.map_err(|e| match ytdlp::needs_sign_in(&e) {
+            ytdlp::fetch(&exe, &tmp, video_id, Some(&jar.path)).await.map_err(|e| match ytdlp::is_private(&e) {
                 true => "it's a private video that the account signed in to YouTube in the browser can't play".into(),
                 false => e,
             })

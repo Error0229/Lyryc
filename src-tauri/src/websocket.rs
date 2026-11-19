@@ -41,13 +41,12 @@ type ClientConnections = Arc<Mutex<HashMap<String, mpsc::UnboundedSender<Message
 /// The connected extensions, for whoever needs to ask them something.
 static CLIENTS: std::sync::OnceLock<ClientConnections> = std::sync::OnceLock::new();
 
-/// Sends a message to every connected extension; how many it reached.
-pub async fn send_to_extension(message_type: &str, data: serde_json::Value) -> usize {
-    let Some(clients) = CLIENTS.get() else { return 0 };
+/// Sends a message to one connected extension; whether it went.
+pub async fn send_to_client(client: &str, message_type: &str, data: serde_json::Value) -> bool {
+    let Some(clients) = CLIENTS.get() else { return false };
     let message = ExtensionMessage { message_type: message_type.into(), data, timestamp: now_ms() };
     let text = serde_json::to_string(&message).expect("a message serializes");
-    let clients = clients.lock().await;
-    clients.values().filter(|tx| tx.send(Message::Text(text.clone())).is_ok()).count()
+    clients.lock().await.get(client).is_some_and(|tx| tx.send(Message::Text(text)).is_ok())
 }
 
 fn now_ms() -> u64 {
@@ -304,8 +303,9 @@ async fn handle_connection(
                             }
                         }
                         // Holds the user's sign-in: never logged.
-                        "YOUTUBE_COOKIES" => crate::cookies::on_reply(&extension_msg.data),
+                        "YOUTUBE_COOKIES" => crate::cookies::on_reply(&client_id, &extension_msg.data),
                         "UPCOMING_TRACKS" => {
+                            crate::cookies::on_queue(&client_id);
                             crate::lyrics::on_upcoming(&extension_msg.data);
                             crate::prealign::on_upcoming(&extension_msg.data);
                         }

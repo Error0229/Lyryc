@@ -41,14 +41,26 @@ struct Reply {
     error: Option<String>,
 }
 
-/// Who waits for the extension's answer. One at a time: pre-align fetches one
-/// video at a time, and an answer is good for whoever asked last.
-static WAITING: Mutex<Option<oneshot::Sender<Reply>>> = Mutex::new(None);
+/// The connection that sends YouTube Music's queue: the browser playing it,
+/// signed in to the account that owns the uploads. Another browser or profile
+/// may be connected too, signed out or as someone else.
+static PLAYER: Mutex<Option<String>> = Mutex::new(None);
 
-/// The extension's answer to `COOKIES_REQUEST`.
-pub fn on_reply(data: &serde_json::Value) {
-    let reply = Reply::deserialize(data).unwrap_or(Reply { cookies: vec![], error: Some("its answer had the wrong shape".into()) });
-    if let Some(tx) = WAITING.lock().unwrap().take() {
+/// Who waits for an answer, and from which connection. One at a time:
+/// pre-align fetches one video at a time.
+static WAITING: Mutex<Option<(String, oneshot::Sender<Reply>)>> = Mutex::new(None);
+
+/// `client` sent YouTube Music's queue.
+pub fn on_queue(client: &str) {
+    *PLAYER.lock().unwrap() = Some(client.to_string());
+}
+
+/// `client`'s answer to `COOKIES_REQUEST`. Only the connection asked is heard.
+pub fn on_reply(client: &str, data: &serde_json::Value) {
+    let mut waiting = WAITING.lock().unwrap();
+    if waiting.as_ref().is_some_and(|(asked, _)| asked == client) {
+        let reply = Reply::deserialize(data).unwrap_or(Reply { cookies: vec![], error: Some("its answer had the wrong shape".into()) });
+        let (_, tx) = waiting.take().unwrap();
         let _ = tx.send(reply);
     }
 }
@@ -66,9 +78,11 @@ impl Drop for Jar {
 
 /// YouTube's cookies from the browser, in a file under `dir`, or why not.
 pub async fn youtube(dir: &Path) -> Result<Jar, String> {
+    let client = PLAYER.lock().unwrap().clone().ok_or("the browser extension isn't connected")?;
     let (tx, rx) = oneshot::channel();
-    *WAITING.lock().unwrap() = Some(tx);
-    if crate::websocket::send_to_extension("COOKIES_REQUEST", serde_json::json!({})).await == 0 {
+    *WAITING.lock().unwrap() = Some((client.clone(), tx));
+    if !crate::websocket::send_to_client(&client, "COOKIES_REQUEST", serde_json::json!({})).await {
+        WAITING.lock().unwrap().take();
         return Err("the browser extension isn't connected".into());
     }
     let reply = match tokio::time::timeout(ANSWER, rx).await {
@@ -78,8 +92,18 @@ pub async fn youtube(dir: &Path) -> Result<Jar, String> {
     let text = netscape(&reply)?;
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let jar = Jar { path: dir.join("youtube-cookies.txt") };
-    std::fs::write(&jar.path, text).map_err(|e| e.to_string())?;
+    write_private(&jar.path, &text).map_err(|e| e.to_string())?;
     Ok(jar)
+}
+
+/// Readable by the user alone. On Windows the user's profile already is.
+fn write_private(path: &Path, text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options.open(path)?.write_all(text.as_bytes())
 }
 
 /// The cookies in the Netscape format yt-dlp reads, or why they won't do.
@@ -94,7 +118,11 @@ fn netscape(reply: &Reply) -> Result<String, String> {
         return Err("the browser isn't signed in to YouTube".into());
     }
     let mut out = String::from("# Netscape HTTP Cookie File\n");
-    for c in &reply.cookies {
+    // A tab or line break would split a line; real cookies have neither.
+    let fits = |c: &&Cookie| ![&c.name, &c.value, &c.path].iter().any(|s| s.contains(['\t', '\n', '\r']));
+    // HttpOnly cookies go in as plain lines: yt-dlp sends them either way, and
+    // the `#HttpOnly_` prefix only keeps them from scripts, which it has none of.
+    for c in reply.cookies.iter().filter(fits) {
         // A cookie for subdomains is written with a leading dot, a host's without.
         let domain = c.domain.trim_start_matches('.');
         let (domain, subdomains) = if c.host_only { (domain.to_string(), "FALSE") } else { (format!(".{domain}"), "TRUE") };
@@ -135,11 +163,32 @@ mod tests {
     }
 
     #[test]
-    fn an_answer_goes_to_whoever_waits() {
+    fn only_the_browser_asked_is_heard() {
         let (tx, mut rx) = oneshot::channel();
-        *WAITING.lock().unwrap() = Some(tx);
-        on_reply(&json!({"cookies": "not a list"}));
+        *WAITING.lock().unwrap() = Some(("brave".into(), tx));
+        on_reply("chrome", &json!({"cookies": []}));
+        assert!(rx.try_recv().is_err(), "another browser's answer is not the one asked for");
+        on_reply("brave", &json!({"cookies": "not a list"}));
         assert!(rx.try_recv().unwrap().error.is_some(), "a malformed answer is an answer, not a wait to the timeout");
-        on_reply(&json!({"cookies": []})); // nobody waits: dropped
+        on_reply("brave", &json!({"cookies": []})); // nobody waits: dropped
+    }
+
+    #[test]
+    fn a_cookie_that_would_split_a_line_is_left_out() {
+        let r = reply(json!({"cookies": [
+            {"domain": ".youtube.com", "path": "/", "name": "SAPISID", "value": "abc"},
+            {"domain": ".youtube.com", "path": "/", "name": "odd", "value": "a\tb\nc"},
+        ]}));
+        assert_eq!(netscape(&r).unwrap().lines().count(), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_file_is_the_users_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!("lyryc-cookies-test-{}", std::process::id()));
+        write_private(&path, "x").unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        let _ = std::fs::remove_file(path);
     }
 }

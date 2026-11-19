@@ -30,10 +30,11 @@ impl Drop for Audio {
     }
 }
 
-/// yt-dlp's error says the video plays only for a signed-in account: a
-/// private one (the user's own upload) or a bot check.
-pub fn needs_sign_in(err: &str) -> bool {
-    err.contains("Private video") || err.to_lowercase().contains("sign in")
+/// yt-dlp's error says the video is private: the user's own upload, which
+/// plays only for their account. Not a bot check: the sign-in is lent for
+/// uploads alone.
+pub fn is_private(err: &str) -> bool {
+    err.contains("Private video")
 }
 
 /// With `cookies`, as the account they sign in to.
@@ -46,12 +47,11 @@ pub async fn fetch(exe: &Path, tmp: &Path, video_id: &str, cookies: Option<&Path
     let mut cmd = command(exe);
     cmd.args(["--no-playlist", "--no-warnings", "--quiet", "--no-progress", "--no-part", "--no-mtime", "--no-cache-dir"])
         .args(["-f", FORMATS, "--print", "after_move:%(duration)s\t%(filepath)s", "-o"])
-        .arg(&template);
+        .arg(&template)
+        .arg(format!("https://music.youtube.com/watch?v={video_id}"));
     if let Some(jar) = cookies {
         cmd.arg("--cookies").arg(jar);
     }
-    cmd
-        .arg(format!("https://music.youtube.com/watch?v={video_id}"));
     let out = match tokio::time::timeout(TIMEOUT, cmd.output()).await {
         Ok(Ok(out)) => out,
         Ok(Err(e)) => return Err(format!("yt-dlp: {e}")),
@@ -93,11 +93,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn knows_a_video_that_needs_the_account() {
+    fn knows_a_private_video() {
         let private = "ERROR: [youtube] QEZNnSvJRig: Private video. If the owner of this video has granted you access, please sign in. Use --cookies-from-browser";
-        assert!(needs_sign_in(private));
-        assert!(needs_sign_in("ERROR: [youtube] x: Sign in to confirm you're not a bot"));
-        assert!(!needs_sign_in("ERROR: [youtube] x: Video unavailable"));
+        assert!(is_private(private));
+        assert!(!is_private("ERROR: [youtube] x: Sign in to confirm you're not a bot"), "the sign-in is for uploads only");
+        assert!(!is_private("ERROR: [youtube] x: Video unavailable"));
     }
 
     #[test]
