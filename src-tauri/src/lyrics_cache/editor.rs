@@ -40,17 +40,22 @@ pub struct SavedSong {
 }
 
 /// A saved translation of the song: one line per lyric line. A song has one
-/// per language, style, prompt and model; `made_with` tells them apart. The
-/// editor sends back only `key` and `lines`.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+/// per language, style, prompt and model; `made_with` tells them apart. One
+/// without it isn't served (`translation::cache::get`) and isn't listed.
+#[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SavedTranslation {
     key: String,
     lines: Vec<String>,
-    #[serde(default)]
-    made_with: Option<MadeWith>,
-    #[serde(default)]
+    made_with: MadeWith,
     cached_at: i64,
+}
+
+/// A translation's lines as the user edited them.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct TranslationEdit {
+    key: String,
+    lines: Vec<String>,
 }
 
 /// Saved word timing of the song for one YouTube video. `rejected`: aligned
@@ -81,7 +86,7 @@ pub enum Change {
     /// changed, the translations and the word timing are dropped instead.
     /// New times alone keep both: an alignment is made from the audio and the
     /// words, so aligning again would only make the same one.
-    Save { lines: Vec<LyricLine>, translations: Vec<SavedTranslation> },
+    Save { lines: Vec<LyricLine>, translations: Vec<TranslationEdit> },
     /// Forget the lyrics (or "nothing found"): looked up again next time.
     Forget,
     /// A song without lyrics: nothing was found, or it has no words.
@@ -143,7 +148,7 @@ fn all_translations(conn: &Connection) -> rusqlite::Result<Vec<(String, SavedTra
         let lines = v["translated_lines"].as_array().map(Vec::as_slice).unwrap_or_default();
         let field = |l: &Value, f: &str| l[f].as_str().unwrap_or_default().to_string();
         let original = lines.iter().map(|l| field(l, "original_text")).collect::<Vec<_>>().join("\n");
-        let made_with = serde_json::from_value(v["made_with"].clone()).ok();
+        let Ok(made_with) = serde_json::from_value(v["made_with"].clone()) else { continue };
         let lines = lines.iter().map(|l| field(l, "translated_text")).collect();
         out.push((original, SavedTranslation { key, lines, made_with, cached_at }));
     }
@@ -310,23 +315,47 @@ fn apply(conn: &Connection, artist: &str, track: &str, change: Change) -> rusqli
     Ok(realign)
 }
 
-/// A saved song's lines and where their timing came from; None without lyrics.
-pub(crate) fn saved_lines(artist: &str, track: &str) -> Option<(Vec<LyricLine>, Option<String>)> {
+/// What a song's row holds: its lines (None: "nothing found" or instrumental)
+/// and where they came from. A background job notes it when queued, and
+/// writes only over the same.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SavedRow {
+    pub lines: Option<Vec<LyricLine>>,
+    pub source: Option<String>,
+}
+
+fn saved_row_in(conn: &Connection, artist: &str, track: &str) -> rusqlite::Result<Option<SavedRow>> {
     let (artist, track) = song_key(artist, track);
-    let row = with_db(|c| row(c, &artist, &track)).ok().flatten()?;
-    Some((row.lines?, row.source))
+    Ok(row(conn, &artist, &track)?.map(|r| SavedRow { lines: r.lines, source: r.source }))
+}
+
+/// The song's row now; None when nothing is saved for it.
+pub(crate) fn saved_row(artist: &str, track: &str) -> Result<Option<SavedRow>, String> {
+    with_db(|c| saved_row_in(c, artist, track))
 }
 
 /// Lines the aligner timed for the user (lyrics pasted without times), saved
 /// as if they pressed Save: the song's lyrics are these now, the user's own.
-/// The word timing stays in the aligned cache, where serving finds it.
-pub(crate) fn save_timed(artist: &str, track: &str, lines: Vec<LyricLine>) -> Result<(), String> {
+/// Only over the row they were queued against (`was`): a save, delete or
+/// mark meanwhile is the user's newer word, and stays. The word timing stays
+/// in the aligned cache, where serving finds it.
+pub(crate) fn save_timed(artist: &str, track: &str, was: &Option<SavedRow>, lines: Vec<LyricLine>) -> Result<(), String> {
     let lines = lines.into_iter().map(|l| LyricLine { words: None, ..l }).collect();
-    let realign = with_db(|c| change_in(c, artist, track, Change::Save { lines, translations: vec![] }))?;
+    let realign = with_db(|c| save_timed_in(c, artist, track, was, lines))?;
     for id in &realign {
         crate::prealign::forget(Some(id));
     }
     Ok(())
+}
+
+fn save_timed_in(conn: &Connection, artist: &str, track: &str, was: &Option<SavedRow>, lines: Vec<LyricLine>) -> rusqlite::Result<Vec<String>> {
+    let tx = conn.unchecked_transaction()?;
+    if saved_row_in(&tx, artist, track)? != *was {
+        return Err(refuse("the song's lyrics changed while it was being timed, so these weren't saved"));
+    }
+    let realign = apply(&tx, artist, track, Change::Save { lines, translations: vec![] })?;
+    tx.commit()?;
+    Ok(realign)
 }
 
 /// Tells the overlay (and Settings) that a song's saved lyrics changed.
@@ -389,7 +418,14 @@ mod tests {
             .zip(translated)
             .map(|(l, t)| serde_json::json!({ "time": l.time, "text": l.text, "original_text": l.text, "translated_text": t }))
             .collect();
-        serde_json::json!({ "success": true, "translated_lines": tl }).to_string()
+        serde_json::json!({ "success": true, "translated_lines": tl, "made_with": made_with("en", "natural") }).to_string()
+    }
+
+    fn made_with(target: &str, style: &str) -> Value {
+        serde_json::json!({
+            "target_language": target, "style": style, "custom_prompt": null, "preserve_rhyme": true,
+            "preserve_meaning": true, "maintain_structure": true, "provider": "GitHub", "model": "gpt-4.1",
+        })
     }
 
     /// A cache with one song, its translation and its word timing.
@@ -413,31 +449,28 @@ mod tests {
         detail_in(conn, "A", "T").unwrap().unwrap()
     }
 
-    fn save(lines: Vec<LyricLine>, translations: Vec<SavedTranslation>) -> Change {
+    fn save(lines: Vec<LyricLine>, translations: Vec<TranslationEdit>) -> Change {
         Change::Save { lines, translations }
     }
 
-    /// A translation's lines as the editor sends them back: key and lines only.
-    fn edit(key: &str, lines: &[&str]) -> SavedTranslation {
-        serde_json::from_value(serde_json::json!({ "key": key, "lines": lines })).unwrap()
+    fn edit(key: &str, lines: &[&str]) -> TranslationEdit {
+        TranslationEdit { key: key.into(), lines: lines.iter().map(|l| l.to_string()).collect() }
     }
 
     #[test]
     fn each_translation_says_what_made_it_newest_first() {
         let (conn, lines) = cache();
-        let made_with = serde_json::json!({
-            "target_language": "zh-TW", "style": "poetic", "custom_prompt": null, "preserve_rhyme": true,
-            "preserve_meaning": true, "maintain_structure": true, "provider": "GitHub", "model": "gpt-4.1",
-        });
         let mut v: Value = serde_json::from_str(&translation(&lines, &["黎明的街", "與你同行"])).unwrap();
-        v["made_with"] = made_with;
+        v["made_with"] = made_with("zh-TW", "poetic");
         cache_translation_in(&conn, "k2", &v.to_string());
         conn.execute("UPDATE translation_cache SET cached_at = 0 WHERE key = 'k'", []).unwrap();
+        // One that doesn't say what made it is never served, so it isn't one of the song's.
+        v.as_object_mut().unwrap().remove("made_with");
+        cache_translation_in(&conn, "k3", &v.to_string());
         let d = detail(&conn);
         assert_eq!(d.translations.iter().map(|t| t.key.as_str()).collect::<Vec<_>>(), ["k2", "k"]);
-        let by = d.translations[0].made_with.as_ref().unwrap();
+        let by = &d.translations[0].made_with;
         assert_eq!((by.target_language.as_str(), by.style.as_str(), by.model.as_str()), ("zh-TW", "poetic", "gpt-4.1"));
-        assert_eq!(d.translations[1].made_with, None, "one made before it was recorded");
     }
 
     #[test]
@@ -547,6 +580,27 @@ mod tests {
         assert!(change_in(&conn, "a", "t", save(vec![line(1.0, "new words")], vec![])).is_err());
         let d = detail(&conn);
         assert_eq!((d.lines[0].text.as_str(), d.song.translations, d.song.timings), ("夜明けの街を", 1, 1));
+    }
+
+    #[test]
+    fn timed_lines_are_saved_only_over_the_lyrics_they_were_asked_for() {
+        let (conn, lines) = cache();
+        let was = saved_row_in(&conn, "a", "t").unwrap();
+        let timed = vec![line(2.0, "pasted"), line(5.0, "words")];
+        // The user saved other lyrics meanwhile: theirs stay.
+        change_in(&conn, "a", "t", save(vec![line(1.0, "the user's own")], vec![])).unwrap();
+        assert!(save_timed_in(&conn, "a", "t", &was, timed.clone()).is_err());
+        assert_eq!(detail(&conn).lines[0].text, "the user's own");
+        // Deleted meanwhile: not brought back.
+        let was = saved_row_in(&conn, "a", "t").unwrap();
+        change_in(&conn, "a", "t", Change::Forget).unwrap();
+        assert!(save_timed_in(&conn, "a", "t", &was, timed.clone()).is_err());
+        assert!(detail_in(&conn, "a", "t").unwrap().is_none());
+        // Untouched: saved.
+        change_in(&conn, "a", "t", save(lines, vec![])).unwrap();
+        let was = saved_row_in(&conn, "a", "t").unwrap();
+        save_timed_in(&conn, "a", "t", &was, timed).unwrap();
+        assert_eq!(detail(&conn).lines[0].text, "pasted");
     }
 
     #[test]

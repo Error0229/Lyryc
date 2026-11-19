@@ -32,6 +32,7 @@ pub(crate) mod romanize;
 mod ytdlp;
 
 use crate::lyrics::{TimingSource, TimingUpdate, TIMING_UPDATED_EVENT};
+use crate::lyrics_cache::SavedRow;
 use crate::lyrics_cache::{cache_aligned, get_aligned, video_of, AlignedCache};
 use crate::types::LyricLine;
 use crate::ytmusic;
@@ -118,13 +119,20 @@ struct Waiter {
 }
 
 /// Who asked for a job in the editor (`prealign_align`), and what to do with
-/// its answer. `pasted`: the lines are lyrics pasted without times, saved with
-/// the times the aligner hears; otherwise they are the song's saved lines,
-/// which keep their times and get word timing.
+/// its answer.
 #[derive(Clone, Debug, PartialEq)]
 struct Asked {
     song: SongRef,
-    pasted: bool,
+    purpose: Purpose,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum Purpose {
+    /// Lyrics pasted without times: saved with the times the aligner hears,
+    /// over the song's row as it was when asked (`was`) and nothing newer.
+    Pasted { was: Option<SavedRow> },
+    /// The song's saved lines: they keep their times and get word timing.
+    Saved,
 }
 
 struct Ask {
@@ -187,8 +195,10 @@ impl Shared {
     }
 
     /// An editor's job joins the line. Asked again while it waits, the newer
-    /// lines replace the older. It stops a queue job that is running (that one
-    /// runs again later), never another editor's job.
+    /// lines replace the older: the song stays in `timing`, and the newer
+    /// job's `prealign-timed` answers for both (the editor hears about the
+    /// song, not the ask). It stops a queue job that is running (that one runs
+    /// again later), never another editor's job.
     fn ask(&mut self, ask: Ask) {
         self.asked.retain(|a| a.asked.song != ask.asked.song);
         self.asked.push_back(ask);
@@ -458,15 +468,25 @@ const STOPPED: &str = "it was stopped before it finished";
 /// The editor's job never ran: switched off while it waited.
 const TURNED_OFF: &str = "word-level timing was turned off";
 
-/// An editor's job ended: keep what it was for (pasted lyrics are saved with
-/// their times; a saved song's word timing is in the cache already), let the
-/// overlay show it, and tell Settings how it went.
+type SaveTimed = fn(&str, &str, &Option<SavedRow>, Vec<LyricLine>) -> Result<(), String>;
+
+/// What an ended job leaves: pasted lyrics are saved with their times
+/// (`save`); a saved song's word timing is in the cache already. A job that
+/// failed or was stopped saves nothing and says why.
+fn keep(asked: &Asked, timed: Result<Vec<LyricLine>, String>, save: SaveTimed) -> Result<(), String> {
+    let lines = timed?;
+    match &asked.purpose {
+        Purpose::Pasted { was } => save(&asked.song.artist, &asked.song.track, was, lines),
+        Purpose::Saved => Ok(()),
+    }
+}
+
+/// An editor's job ended: keep what it was for, let the overlay show it, and
+/// tell Settings how it went.
 fn finish(asked: Asked, timed: Result<Vec<LyricLine>, String>) {
-    let Asked { song, pasted } = asked;
-    let saved = timed.and_then(|lines| match pasted {
-        true => crate::lyrics_cache::save_timed(&song.artist, &song.track, lines),
-        false => Ok(()),
-    });
+    let saved = keep(&asked, timed, crate::lyrics_cache::save_timed);
+    let Asked { song, purpose } = asked;
+    let pasted = matches!(purpose, Purpose::Pasted { .. });
     match &saved {
         Ok(()) => info!("Pre-align: timed '{}' by '{}' for the editor", song.track, song.artist),
         Err(why) => info!("Pre-align: couldn't time '{}' by '{}' for the editor: {}", song.track, song.artist, why),
@@ -724,40 +744,48 @@ pub fn prealign_status() -> Status {
 /// editor's jobs go ahead of the queue, in the order asked.
 #[tauri::command]
 pub async fn prealign_align(artist: String, track: String, lines: Option<Vec<String>>) -> Result<(), String> {
+    // What the user can fix here first; playing the song comes after.
+    ready(&shared())?;
+    // The cache is read before taking the lock: the worker and `status` wait on it.
     let (artist, track) = crate::lyrics_cache::song_key(&artist, &track);
-    let pasted = lines.is_some();
-    let lyrics = match lines {
-        Some(pasted) => Lyrics { lines: untimed(&pasted), real_timing: false },
+    let row = crate::lyrics_cache::saved_row(&artist, &track)?;
+    let (lyrics, purpose) = match lines {
+        Some(pasted) => (Lyrics { lines: untimed(&pasted), real_timing: false }, Purpose::Pasted { was: row }),
         None => {
-            let (lines, source) = crate::lyrics_cache::saved_lines(&artist, &track).ok_or("this song has no saved lyrics to time")?;
-            Lyrics { lines, real_timing: crate::lyrics::times_this_recording(source.as_deref()) }
+            let row = row.ok_or("this song has no saved lyrics to time")?;
+            let real_timing = crate::lyrics::times_this_recording(row.source.as_deref());
+            (Lyrics { lines: row.lines.ok_or("this song has no saved lyrics to time")?, real_timing }, Purpose::Saved)
         }
     };
     if lyrics.lines.len() < MIN_LINES {
         return Err(format!("it takes at least {MIN_LINES} lines"));
     }
+    let video_id = video_of(&artist, &track).ok_or("this song hasn't played on YouTube Music yet. Play it there once, then try again")?;
+    // The aligner hears the same words in the same audio the same way every time.
+    if purpose == Purpose::Saved && get_aligned(&video_id, &text_key(&lyrics.lines)) != AlignedCache::Miss {
+        return Err("these lyrics were already aligned with this song's video. Delete that word timing to align them again".into());
+    }
+    info!("Pre-align: timing {} {:?} lines of '{}' by '{}' ({})", lyrics.lines.len(), purpose, track, artist, video_id);
+    let song = SongRef { artist: artist.clone(), track: track.clone() };
+    let job = Job { song: Song { video_id, title: track, artist, duration: None }, lyrics: Some(lyrics) };
     {
         let mut s = shared();
-        // What the user can fix here first; playing the song comes after.
-        match state(&s) {
-            "ready" => {}
-            "off" => return Err("word-level timing is off. Turn it on under Lyrics & sync".into()),
-            "downloading" => return Err("word-level timing is still downloading its files. Try again when it's ready".into()),
-            _ => return Err(s.error.clone().unwrap_or_else(|| "word-level timing is unavailable".into())),
-        }
-        let video_id = video_of(&artist, &track).ok_or("this song hasn't played on YouTube Music yet. Play it there once, then try again")?;
-        // The aligner hears the same words in the same audio the same way every time.
-        if !pasted && get_aligned(&video_id, &text_key(&lyrics.lines)) != AlignedCache::Miss {
-            return Err("these lyrics were already aligned with this song's video. Delete that word timing to align them again".into());
-        }
-        info!("Pre-align: timing {} {} lines of '{}' by '{}' ({})", lyrics.lines.len(), if pasted { "pasted" } else { "saved" }, track, artist, video_id);
-        let song = SongRef { artist: artist.clone(), track: track.clone() };
-        let job = Job { song: Song { video_id, title: track, artist, duration: None }, lyrics: Some(lyrics) };
-        s.ask(Ask { asked: Asked { song, pasted }, job });
+        ready(&s)?; // switched off meanwhile
+        s.ask(Ask { asked: Asked { song, purpose }, job });
     }
     P.wake.notify_one();
     emit_status();
     Ok(())
+}
+
+/// Can the editor's job run: on, downloaded, no error. Else what to do about it.
+fn ready(s: &Shared) -> Result<(), String> {
+    match state(s) {
+        "ready" => Ok(()),
+        "off" => Err("word-level timing is off. Turn it on under Lyrics & sync".into()),
+        "downloading" => Err("word-level timing is still downloading its files. Try again when it's ready".into()),
+        _ => Err(s.error.clone().unwrap_or_else(|| "word-level timing is unavailable".into())),
+    }
 }
 
 /// Pasted lines as lyrics that have no times yet. A blank line is no line.
@@ -836,7 +864,23 @@ mod tests {
 
     fn ask(id: &str, track: &str) -> Ask {
         let song = SongRef { artist: "a".into(), track: track.into() };
-        Ask { asked: Asked { song, pasted: true }, job: job(id) }
+        Ask { asked: Asked { song, purpose: Purpose::Pasted { was: None } }, job: job(id) }
+    }
+
+    #[test]
+    fn an_ended_job_saves_pasted_lyrics_and_only_what_was_timed() {
+        fn saved(_: &str, _: &str, _: &Option<SavedRow>, _: Vec<LyricLine>) -> Result<(), String> {
+            Err("saved".into()) // marks that it was called
+        }
+        let pasted = ask("a", "t").asked;
+        let own = Asked { purpose: Purpose::Saved, ..pasted.clone() };
+        let lines = || Ok(vec![line("one")]);
+        assert_eq!(keep(&pasted, lines(), saved), Err("saved".into()), "pasted lines are saved");
+        assert_eq!(keep(&own, lines(), saved), Ok(()), "a saved song's timing is in the cache already");
+        // Switched off while it ran: stopped, and nothing written.
+        let stopped = answer(&job("a").lyrics.unwrap(), &Err(Failure::Cancelled), AlignedCache::Miss);
+        assert_eq!(keep(&pasted, stopped, saved), Err(STOPPED.into()));
+        assert_eq!(keep(&pasted, Err("not heard".into()), saved), Err("not heard".into()));
     }
 
     #[test]

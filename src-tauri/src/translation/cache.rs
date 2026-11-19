@@ -33,10 +33,11 @@ pub fn key(lyrics: &[LyricLine], config: &TranslationConfig, target: &Target) ->
     format!("{:x}", h.finalize())
 }
 
-/// A stored translation for these lines, with the lines' current times.
+/// A stored translation for these lines, with the lines' current times. One
+/// that doesn't say what made it (`made_with`) is translated again.
 pub fn get(key: &str, lyrics: &[LyricLine]) -> Option<TranslationResult> {
     let mut hit: TranslationResult = serde_json::from_str(&get_translation(key)?).ok()?;
-    if hit.translated_lines.len() != lyrics.len() {
+    if hit.translated_lines.len() != lyrics.len() || hit.made_with.is_none() {
         return None;
     }
     for (t, l) in hit.translated_lines.iter_mut().zip(lyrics) {
@@ -48,9 +49,10 @@ pub fn get(key: &str, lyrics: &[LyricLine]) -> Option<TranslationResult> {
 }
 
 /// Keep a translation only when every line got one: a partial answer is
-/// shown this time but asked again next time, never stuck.
+/// shown this time but asked again next time, never stuck. And only one that
+/// says what made it: nothing else is served.
 pub fn put(key: &str, result: &TranslationResult) {
-    let complete = result.success && result.translated_lines.iter().all(|l| l.translation_confidence != Some(0.0));
+    let complete = result.success && result.made_with.is_some() && result.translated_lines.iter().all(|l| l.translation_confidence != Some(0.0));
     if let (true, Ok(json)) = (complete, serde_json::to_string(result)) {
         cache_translation(key, &json);
     }

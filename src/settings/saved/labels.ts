@@ -57,19 +57,14 @@ function phrases(m: MadeWith, language: LanguageName): string[] {
   return [language(m.target_language), style, `${m.model} (${m.provider})`, off.length ? `not keeping ${off.join(", ")}` : ""];
 }
 
-const UNKNOWN = "Earlier settings";
-
 /**
  * Short names for a song's translations, to pick one: only what tells them
  * apart ("Poetic style" / "Natural style"), the language when nothing does.
- * One made before its settings were recorded is "Earlier settings".
  */
 export function translationNames(list: readonly SavedTranslation[], language: LanguageName): string[] {
-  const all = list.map((t) => t.madeWith && phrases(t.madeWith, language));
-  const known = all.filter((p): p is string[] => !!p);
-  const differs = (k: number) => new Set(known.map((p) => p[k])).size > 1;
+  const all = list.map((t) => phrases(t.madeWith, language));
+  const differs = (k: number) => new Set(all.map((p) => p[k])).size > 1;
   const names = all.map((p) => {
-    if (!p) return UNKNOWN;
     const told = p.filter((x, k) => x && differs(k));
     return capital((told.length ? told : [p[0]]).join(" · "));
   });
@@ -79,8 +74,7 @@ export function translationNames(list: readonly SavedTranslation[], language: La
 
 /** Everything that made it, and when: "Japanese · poetic style · gpt-4.1 (GitHub) · Nov 3". */
 export function translationMadeWith(t: SavedTranslation, language: LanguageName): string {
-  const made = t.madeWith ? phrases(t.madeWith, language).filter(Boolean) : ["Made before its settings were recorded"];
-  return capital([...made, date(t.cachedAt)].join(" · "));
+  return capital([...phrases(t.madeWith, language).filter(Boolean), date(t.cachedAt)].join(" · "));
 }
 
 const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);

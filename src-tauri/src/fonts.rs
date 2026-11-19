@@ -141,7 +141,8 @@ mod tests {
     }
 
     const LATIN: &str = "AaZzéß";
-    const HAN: &str = "あアの漢这们说這們說汉";
+    /// Latin and the samples of all four CJK scripts, in one font.
+    const LATIN_AND_HAN: &str = "AaZzéßあアの漢这们说這們說汉";
 
     #[test]
     fn a_font_writes_the_scripts_it_has_every_sample_of() {
@@ -153,17 +154,12 @@ mod tests {
 
     #[test]
     fn a_cjk_font_is_listed_for_what_it_is_made_for_not_all_it_carries() {
-        let jp = Fake { chars: const_format(), codepages: 1 << 17 };
+        let jp = Fake { chars: LATIN_AND_HAN, codepages: 1 << 17 };
         assert_eq!(scripts_of(&jp), ["latin", "ja"], "a Japanese font with Chinese characters too");
-        let sc = Fake { chars: const_format(), codepages: (1 << 18) | 1 };
+        let sc = Fake { chars: LATIN_AND_HAN, codepages: (1 << 18) | 1 };
         assert_eq!(scripts_of(&sc), ["latin", "zh"]);
-        let unsaid = Fake { chars: const_format(), codepages: 0 };
+        let unsaid = Fake { chars: LATIN_AND_HAN, codepages: 0 };
         assert_eq!(scripts_of(&unsaid), ["latin", "ja", "zh", "zh-tw"], "claims none: what it carries");
-    }
-
-    /// Latin and the Han samples of all four, in one font.
-    fn const_format() -> &'static str {
-        Box::leak(format!("{LATIN}{HAN}").into_boxed_str())
     }
 
     fn font(name: &str, scripts: &[&'static str]) -> SystemFont {
@@ -183,9 +179,11 @@ mod tests {
         let fonts = listed(installed());
         let scripts = |name: &str| fonts.iter().find(|f| f.name == name).map(|f| f.scripts.clone());
         assert!(scripts("Segoe UI").is_some_and(|s| s.contains(&"latin")));
-        assert!(scripts("Yu Gothic").is_some_and(|s| s.contains(&"ja") && !s.contains(&"zh")));
-        assert!(scripts("Microsoft YaHei").is_some_and(|s| s.contains(&"zh") && !s.contains(&"ja")));
-        assert!(scripts("Malgun Gothic").is_some_and(|s| s.contains(&"ko")));
+        // The CJK fonts are optional on some Windows images: judged where installed.
+        let judged = |name: &str, made_for: &str, not: &str| scripts(name).is_none_or(|s| s.contains(&made_for) && !s.contains(&not));
+        assert!(judged("Yu Gothic", "ja", "zh"));
+        assert!(judged("Microsoft YaHei", "zh", "ja"));
+        assert!(judged("Malgun Gothic", "ko", "ja"));
         assert!(!fonts.iter().any(|f| ["Wingdings", "Webdings", "Symbol"].contains(&f.name.as_str())), "symbol fonts");
     }
 

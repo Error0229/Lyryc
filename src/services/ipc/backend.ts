@@ -163,8 +163,8 @@ export interface SavedSong {
 export interface SavedTranslation {
   key: string;
   lines: string[];
-  /** What made it (a song has one per language, style, prompt and model); null for one made before this was recorded. */
-  madeWith: MadeWith | null;
+  /** What made it: a song has one per language, style, prompt and model. */
+  madeWith: MadeWith;
   /** Unix seconds. */
   cachedAt: number;
 }
