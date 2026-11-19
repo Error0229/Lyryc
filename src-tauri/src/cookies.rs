@@ -76,8 +76,9 @@ impl Drop for Jar {
     }
 }
 
-/// YouTube's cookies from the browser, in a file under `dir`, or why not.
-pub async fn youtube(dir: &Path) -> Result<Jar, String> {
+/// YouTube's cookies from the browser, in a file under `dir` for `video_id`'s
+/// run, or why not.
+pub async fn youtube(dir: &Path, video_id: &str) -> Result<Jar, String> {
     let client = PLAYER.lock().unwrap().clone().ok_or("the browser extension isn't connected")?;
     let (tx, rx) = oneshot::channel();
     *WAITING.lock().unwrap() = Some((client.clone(), tx));
@@ -87,20 +88,26 @@ pub async fn youtube(dir: &Path) -> Result<Jar, String> {
     }
     let reply = match tokio::time::timeout(ANSWER, rx).await {
         Ok(Ok(reply)) => reply,
-        _ => return Err("the browser extension didn't answer. Update it and reload it in the browser's extensions page".into()),
+        _ => {
+            WAITING.lock().unwrap().take();
+            return Err("the browser extension didn't answer. Update it and reload it in the browser's extensions page".into());
+        }
     };
     let text = netscape(&reply)?;
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let jar = Jar { path: dir.join("youtube-cookies.txt") };
+    // The guard first: a write that fails partway leaves nothing behind.
+    let jar = Jar { path: dir.join(format!("cookies-{video_id}.txt")) };
     write_private(&jar.path, &text).map_err(|e| e.to_string())?;
     Ok(jar)
 }
 
-/// Readable by the user alone. On Windows the user's profile already is.
+/// Readable by the user alone. On Windows the user's profile already is. Made
+/// anew: an existing file would keep its own permissions.
 fn write_private(path: &Path, text: &str) -> std::io::Result<()> {
     use std::io::Write;
+    let _ = std::fs::remove_file(path);
     let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create_new(true);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
     options.open(path)?.write_all(text.as_bytes())
