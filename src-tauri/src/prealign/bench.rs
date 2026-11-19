@@ -86,7 +86,7 @@ async fn parity() {
             (read_wav(&Path::new(dir).join(format!("{id}.wav"))), 0.0, 0.0)
         } else {
             let t0 = Instant::now();
-            let fetched = ytdlp::fetch(&paths.ytdlp(), &paths.tmp(), t["videoId"].as_str().unwrap()).await.expect("yt-dlp");
+            let fetched = ytdlp::fetch(&paths.ytdlp(), &paths.tmp(), t["videoId"].as_str().unwrap(), None).await.expect("yt-dlp");
             let dl = t0.elapsed().as_secs_f64();
             let t0 = Instant::now();
             let wav = audio::decode_16k(&fetched.path).expect("decode");

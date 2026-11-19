@@ -70,7 +70,10 @@ limit is safest. With no working keyring, Lyryc falls back to plain text in
 `http://` address (a local Ollama or LM Studio) sends the key unencrypted. Your AI provider gets song titles and the lyrics you
 translate. Lyrics lookups send the title, artist and length to the lyrics sites.
 Word timing downloads the song's audio, aligns it locally and deletes it. The
-extension talks only to the app, on `localhost:8765`.
+extension talks only to the app, on `localhost:8765`. Your own uploads to
+YouTube Music are private videos, so for those the extension lends the app the
+browser's YouTube cookies (its `cookies` permission). They are used for that
+one download, written to a temporary file deleted right after, and never logged.
 
 ## What Lyryc remembers
 

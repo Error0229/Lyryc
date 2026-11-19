@@ -38,6 +38,22 @@ use tokio::sync::mpsc;
 
 type ClientConnections = Arc<Mutex<HashMap<String, mpsc::UnboundedSender<Message>>>>;
 
+/// The connected extensions, for whoever needs to ask them something.
+static CLIENTS: std::sync::OnceLock<ClientConnections> = std::sync::OnceLock::new();
+
+/// Sends a message to every connected extension; how many it reached.
+pub async fn send_to_extension(message_type: &str, data: serde_json::Value) -> usize {
+    let Some(clients) = CLIENTS.get() else { return 0 };
+    let message = ExtensionMessage { message_type: message_type.into(), data, timestamp: now_ms() };
+    let text = serde_json::to_string(&message).expect("a message serializes");
+    let clients = clients.lock().await;
+    clients.values().filter(|tx| tx.send(Message::Text(text.clone())).is_ok()).count()
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64
+}
+
 pub struct WebSocketServer {
     port: u16,
     pub clients: ClientConnections,
@@ -46,11 +62,8 @@ pub struct WebSocketServer {
 
 impl WebSocketServer {
     pub fn new(port: u16) -> Self {
-        Self {
-            port,
-            clients: Arc::new(Mutex::new(HashMap::new())),
-            track_callback: None,
-        }
+        let clients = Arc::clone(CLIENTS.get_or_init(ClientConnections::default));
+        Self { port, clients, track_callback: None }
     }
 
     pub fn set_track_callback<F>(&mut self, callback: F)
@@ -290,6 +303,8 @@ async fn handle_connection(
                                 error!("Failed to parse TrackUpdate from: {}", extension_msg.data);
                             }
                         }
+                        // Holds the user's sign-in: never logged.
+                        "YOUTUBE_COOKIES" => crate::cookies::on_reply(&extension_msg.data),
                         "UPCOMING_TRACKS" => {
                             crate::lyrics::on_upcoming(&extension_msg.data);
                             crate::prealign::on_upcoming(&extension_msg.data);
@@ -316,7 +331,8 @@ async fn handle_connection(
                         }
                     }
                 } else {
-                    warn!("Failed to parse message: {}", text);
+                    // Not the text: it may hold the user's cookies.
+                    warn!("Failed to parse a {}-byte message", text.len());
                 }
             }
             Message::Binary(_) => {
