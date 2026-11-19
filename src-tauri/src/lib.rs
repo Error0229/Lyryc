@@ -5,6 +5,7 @@ use tokio::sync::Mutex;
 // Module declarations
 mod cleaning;
 mod commands;
+mod cookies;
 mod furigana;
 mod llm;
 mod logging;

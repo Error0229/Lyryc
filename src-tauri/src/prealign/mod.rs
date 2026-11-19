@@ -417,6 +417,22 @@ fn answer(lyrics: &Lyrics, outcome: &Result<&'static str, Failure>, cached: Alig
     }
 }
 
+/// The video's audio. One that plays only for the account (the user's own
+/// upload) is fetched again with the browser's sign-in.
+async fn fetch(paths: &assets::Paths, video_id: &str) -> Result<ytdlp::Audio, String> {
+    let (exe, tmp) = (paths.ytdlp(), paths.tmp());
+    match ytdlp::fetch(&exe, &tmp, video_id, None).await {
+        Err(e) if ytdlp::is_private(&e) => {
+            let jar = crate::cookies::youtube(&tmp, video_id).await.map_err(|why| format!("it's a private video, and {why}"))?;
+            ytdlp::fetch(&exe, &tmp, video_id, Some(&jar.path)).await.map_err(|e| match ytdlp::is_private(&e) {
+                true => "it's a private video that the account signed in to YouTube in the browser can't play".into(),
+                false => e,
+            })
+        }
+        other => other,
+    }
+}
+
 fn check_cancel() -> Result<(), Failure> {
     if P.cancel.load(Ordering::Relaxed) || !enabled() {
         Err(Failure::Cancelled)
@@ -452,7 +468,7 @@ async fn run(job: &Job, model: &mut Option<model::Model>, verified: &mut bool) -
         return Err(AlignError::TooLong.into()); // before downloading it
     }
     assets::update_ytdlp_if_due(&paths).await;
-    let fetched = ytdlp::fetch(&paths.ytdlp(), &paths.tmp(), &song.video_id).await?;
+    let fetched = fetch(&paths, &song.video_id).await?;
     let (path, listed) = (fetched.path.clone(), fetched.duration);
     let wav = tokio::task::spawn_blocking(move || audio::decode_16k(&path)).await.map_err(|e| e.to_string())??;
     drop(fetched); // the file is deleted here; only the samples remain, in memory

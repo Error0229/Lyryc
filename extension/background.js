@@ -62,6 +62,9 @@ function connectToDesktopApp() {
           case 'pong':
             console.log('🟢 [Background] Received pong from desktop app');
             break;
+          case 'COOKIES_REQUEST':
+            sendYouTubeCookies();
+            break;
           case 'PLAYBACK_COMMAND':
             console.log('🟢 [Background] Received PLAYBACK_COMMAND:', message.data);
             // Forward playback command to content script
@@ -105,6 +108,29 @@ function connectToDesktopApp() {
   } catch (error) {
     console.error('🔴 [Background] ❌ Failed to create WebSocket connection:', error);
     isConnectedToApp = false;
+  }
+}
+
+// The app asks for YouTube's sign-in only to fetch the user's own uploads,
+// which are private videos. The cookies go to the app alone and are never logged.
+// The sign-in cookies live on .youtube.com: Chrome returns them only with host
+// access to youtube.com itself (the manifest's *.youtube.com), not just music.
+async function sendYouTubeCookies() {
+  let data;
+  try {
+    const all = await chrome.cookies.getAll({ url: 'https://music.youtube.com/' });
+    if (!all.length) {
+      const granted = await chrome.permissions.contains({ origins: ['https://*.youtube.com/*'] });
+      throw new Error(granted ? 'the browser has no YouTube cookies' : 'no access to youtube.com: reload the extension and allow it');
+    }
+    data = {
+      cookies: all.map(({ domain, hostOnly, path, secure, expirationDate, name, value }) => ({ domain, hostOnly, path, secure, expirationDate, name, value })),
+    };
+  } catch (error) {
+    data = { error: String(error && error.message || error) };
+  }
+  if (websocket && websocket.readyState === WebSocket.OPEN) {
+    websocket.send(JSON.stringify({ message_type: 'YOUTUBE_COOKIES', data, timestamp: Date.now() }));
   }
 }
 

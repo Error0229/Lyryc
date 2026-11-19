@@ -30,7 +30,15 @@ impl Drop for Audio {
     }
 }
 
-pub async fn fetch(exe: &Path, tmp: &Path, video_id: &str) -> Result<Audio, String> {
+/// yt-dlp's error says the video is private: the user's own upload, which
+/// plays only for their account. Not a bot check: the sign-in is lent for
+/// uploads alone.
+pub fn is_private(err: &str) -> bool {
+    err.contains("Private video")
+}
+
+/// With `cookies`, as the account they sign in to.
+pub async fn fetch(exe: &Path, tmp: &Path, video_id: &str, cookies: Option<&Path>) -> Result<Audio, String> {
     if !crate::ytmusic::is_video_id(video_id) {
         return Err(format!("not a video id: {video_id:?}"));
     }
@@ -41,6 +49,9 @@ pub async fn fetch(exe: &Path, tmp: &Path, video_id: &str) -> Result<Audio, Stri
         .args(["-f", FORMATS, "--print", "after_move:%(duration)s\t%(filepath)s", "-o"])
         .arg(&template)
         .arg(format!("https://music.youtube.com/watch?v={video_id}"));
+    if let Some(jar) = cookies {
+        cmd.arg("--cookies").arg(jar);
+    }
     let out = match tokio::time::timeout(TIMEOUT, cmd.output()).await {
         Ok(Ok(out)) => out,
         Ok(Err(e)) => return Err(format!("yt-dlp: {e}")),
@@ -80,6 +91,14 @@ fn cleanup(tmp: &Path, video_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn knows_a_private_video() {
+        let private = "ERROR: [youtube] QEZNnSvJRig: Private video. If the owner of this video has granted you access, please sign in. Use --cookies-from-browser";
+        assert!(is_private(private));
+        assert!(!is_private("ERROR: [youtube] x: Sign in to confirm you're not a bot"), "the sign-in is for uploads only");
+        assert!(!is_private("ERROR: [youtube] x: Video unavailable"));
+    }
 
     #[test]
     fn audio_is_deleted_when_dropped() {
