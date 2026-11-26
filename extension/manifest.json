@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Lyryc Music Detector",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Detects currently playing music from multiple streaming platforms",
   "minimum_chrome_version": "111",
   
