@@ -64,6 +64,18 @@ describe("setTrack", () => {
     expect(useSession.getState()).toMatchObject({ status: "ready", source: "aligned" });
   });
 
+  it("leaves a running Search again alone when the video id arrives", async () => {
+    setTrack({ ...full, videoId: null } as unknown as Track);
+    answers[0]({ lines: lines("one", "two", "three"), source: "lrclib", pending: false });
+    await flush();
+    void refetchLyrics();
+    setTrack(full);
+    expect(calls.length).toBe(2); // the first lookup and Search again only
+    answers[1]({ lines: lines("new", "words", "here"), source: "qq", pending: false });
+    await flush();
+    expect(useSession.getState()).toMatchObject({ refetching: false, source: "qq" });
+  });
+
   it("does not ask again when only the length arrives while lyrics show", async () => {
     setTrack(bare);
     answers[0]({ lines: lines("one", "two", "three"), source: "lrclib", pending: false });

@@ -27,7 +27,9 @@ export function setTrack(track: Track) {
     useSession.setState({ track });
     const searching = shown.status === "missing" || shown.status === "loading";
     if (searching) useSession.setState({ status: "loading" });
-    if (searching || (!shown.track!.videoId && track.videoId)) void loadLyrics(track);
+    // Not over a running "Search again": it owns the request and its cleanup.
+    const lateId = !shown.track!.videoId && !!track.videoId && !shown.refetching;
+    if (searching || lateId) void loadLyrics(track);
     return;
   }
   useSession.setState({ track, lyrics: [], source: null, status: "loading", translations: {}, retimedAt: 0, refetching: false, stage: null, pending: false, aligning: false, syncFailed: false, searched: null });
