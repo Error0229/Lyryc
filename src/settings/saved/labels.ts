@@ -3,14 +3,14 @@ import type { MadeWith, SavedSong, SavedTranslation } from "../../services/ipc/b
 
 const SOURCES: Record<string, string> = {
   lrclib: "LRCLIB",
-  "lrclib-estimate": "LRCLIB, estimated timing",
+  "lrclib-estimate": "LRCLIB, not synced",
   qq: "QQ Music",
   netease: "NetEase",
   kugou: "Kugou",
   ytmusic: "YouTube Music",
-  "ytmusic-estimate": "YouTube Music, estimated timing",
-  "cover-estimate": "Original's words, estimated timing",
-  "sources-estimate": "Estimated timing",
+  "ytmusic-estimate": "YouTube Music, not synced",
+  "cover-estimate": "Original's words, not synced",
+  "sources-estimate": "Not synced",
   "original-timing": "Original's timing",
   edited: "Edited by you",
 };

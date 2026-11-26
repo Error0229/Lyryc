@@ -92,6 +92,10 @@ pub struct Status {
     aligned: u32,
     /// The saved songs being timed for the editor: the running one first, then the waiting ones.
     timing: Vec<SongRef>,
+    /// Songs on screen whose word timing is on its way (queued or running),
+    /// named as the player named them. One that leaves without word timing
+    /// arriving could not be synced.
+    waiting: Vec<SongRef>,
 }
 
 /// A saved song, named as the cache keys it (`lyrics_cache::song_key`).
@@ -222,6 +226,16 @@ impl Shared {
         self.asked.iter().any(|a| a.asked.song == asked.song)
     }
 
+    /// A queue job ended. Done (aligned, rejected or skipped) and not replaced
+    /// by newer lyrics: no word timing is coming for a waiter still left. One
+    /// whose job was replaced ("Search again") waits for the new job.
+    fn end_job(&mut self, id: &str, finished: bool) {
+        self.queue.end(id, finished);
+        if self.queue.is_done(id) {
+            self.waiters.remove(id);
+        }
+    }
+
     /// The songs being timed for the editor, the running one first.
     fn timing(&self) -> Vec<SongRef> {
         self.running.iter().cloned().chain(self.asked.iter().map(|a| a.asked.song.clone())).collect()
@@ -261,6 +275,7 @@ pub fn on_track(url: &str) {
     };
     let mut s = shared();
     s.queue.playing(&id);
+    // Only other songs' waiters go, so the overlay needs no status for it.
     s.waiters.retain(|v, _| *v == id);
 }
 
@@ -356,6 +371,7 @@ pub fn serve(video_id: Option<&str>, title: &str, artist: &str, duration: Option
             }
             drop(s);
             P.wake.notify_one();
+            emit_status();
             Served::Pending
         }
     }
@@ -460,7 +476,7 @@ async fn worker() {
             let mut s = shared();
             // The editor's job was never the queue's: the song's turn there still comes.
             if asked.is_none() {
-                s.queue.end(&id, finished);
+                s.end_job(&id, finished);
             }
             s.working_on = None;
             s.running = None;
@@ -661,6 +677,7 @@ fn status() -> Status {
         working_on: s.working_on.clone(),
         aligned: s.aligned,
         timing: s.timing(),
+        waiting: s.waiters.values().map(|w| SongRef { artist: w.artist.clone(), track: w.title.clone() }).collect(),
     }
 }
 
@@ -897,6 +914,29 @@ mod tests {
         let stopped = answer(&job("a").lyrics.unwrap(), &Err(Failure::Cancelled), AlignedCache::Miss);
         assert_eq!(keep(&pasted, stopped, saved), Err(STOPPED.into()));
         assert_eq!(keep(&pasted, Err("not heard".into()), saved), Err("not heard".into()));
+    }
+
+    fn waiter(id: &str) -> Waiter {
+        Waiter { title: id.into(), artist: "a".into(), hash: "h".into(), lyrics: job(id).lyrics.unwrap() }
+    }
+
+    #[test]
+    fn a_finished_job_drops_its_waiter_but_not_a_replacement_jobs() {
+        let mut s = Shared::default();
+        s.queue.set_current(job("v"));
+        s.waiters.insert("v".into(), waiter("v"));
+        s.queue.next().unwrap();
+        s.end_job("v", false);
+        assert!(s.waiters.contains_key("v"), "preempted: it runs again");
+
+        s.queue.next().unwrap();
+        s.queue.forget("v"); // Search again while it runs: newer lyrics, a newer waiter
+        s.end_job("v", true);
+        assert!(s.waiters.contains_key("v"), "the replacement job still owes it");
+
+        s.queue.next().unwrap();
+        s.end_job("v", true);
+        assert!(!s.waiters.contains_key("v"), "done: nothing more is coming");
     }
 
     #[test]

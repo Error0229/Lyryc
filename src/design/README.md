@@ -180,8 +180,9 @@ while idle).
 | Looking up | magnifier, breathing | Looking up lyrics |
 | Identifying | sparkle, breathing | Identifying the song / Searching the web |
 | Other sources | globe, breathing | Trying other sources / Finding the original's words |
-| Estimated timing | ≈ | Estimated timing |
-| Syncing words | four bars rising and falling | Syncing to the vocals |
+| Not synced (words known, line times spread by syllables) | ≈ | Not synced / Original's words, not synced |
+| Syncing words (queued or running for this song) | four bars rising and falling | Syncing to the vocals |
+| Sync failed (the aligner gave up on it) | ≈ | Couldn't sync to the vocals |
 | Timing improved (2.5 s) | ✓, green | Synced to the vocals / Synced lyrics found |
 | Searching again | arrows, spinning, then the pass's icon (sparkle, globe) | Searching again, then the pass's name |
 | Not found (after 6 s; at once after Search again) | crossed-out captions, clickable | No lyrics found (or how Search again ended) · Click to paste lyrics |

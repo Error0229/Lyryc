@@ -73,17 +73,18 @@ export function useBackendEvents() {
 }
 
 /**
- * The pre-aligner names the song it works on ("Title — Artist"). While that
- * is this song, its word timing is on the way; when it stops without sending
- * any (a rejected alignment, a failed download), nothing more is coming.
+ * The pre-aligner lists the songs on screen it owes word timing (queued or
+ * running). While this song is listed, word timing is on its way. When it
+ * leaves the list, the timing was sent first (it is showing now) or the
+ * aligner gave up (a rejected alignment, a failed download): nothing more is
+ * coming.
  */
-function followAligner(st: PrealignStatus) {
+export function followAligner(st: PrealignStatus) {
   const s = useSession.getState();
-  const cut = st.workingOn?.lastIndexOf(" — ") ?? -1;
-  const working = cut < 0 ? null : { title: st.workingOn!.slice(0, cut), artist: st.workingOn!.slice(cut + 3) };
-  const mine = sameTrack(s.track, working);
+  const mine = st.waiting.some((w) => sameTrack(s.track, { title: w.track, artist: w.artist }));
   if (mine === s.aligning) return;
-  useSession.setState(mine ? { aligning: true } : { aligning: false, pending: false });
+  if (mine) useSession.setState({ aligning: true, syncFailed: false });
+  else useSession.setState({ aligning: false, pending: false, syncFailed: s.source !== "aligned" });
 }
 
 /**

@@ -96,6 +96,8 @@ export interface IconInput {
   source: LyricsSource | null;
   /** Better timing is on its way (an upgrade, or the pre-aligner working on this song). */
   syncing: boolean;
+  /** The pre-aligner gave up on this song: no word timing is coming. */
+  syncFailed: boolean;
   /** Timing just improved (for 2.5 s). */
   justSynced: boolean;
   /** The "not found" / "instrumental" message has had its moment. */
@@ -129,7 +131,8 @@ export function statusIcon(i: IconInput): StatusIcon | null {
       return { id: "sources", tip: STAGE_NAME[i.stage === "other-recording" ? "other-recording" : "sources"], motion: "breathe" };
     case "estimate":
       if (i.syncing) return SYNCING;
-      return { id: "estimate", tip: i.source === "cover-estimate" ? "Original's words, estimated" : "Estimated timing" };
+      if (i.syncFailed) return { id: "estimate", tip: "Couldn't sync to the vocals" };
+      return { id: "estimate", tip: i.source === "cover-estimate" ? "Original's words, not synced" : "Not synced" };
     case "line":
       return i.syncing ? SYNCING : null;
     case "refetch":
