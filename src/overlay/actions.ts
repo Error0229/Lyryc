@@ -48,7 +48,8 @@ async function loadLyrics(track: Track) {
     const r = await backend.fetchLyrics(track, extraSources, identifyWithSearch);
     if (id === request) applyLyrics(track, r.lines, r.source, r.pending);
   } catch {
-    if (id === request) useSession.setState({ status: "missing" });
+    // A lookup asked again over lyrics showing (a late video id) keeps them.
+    if (id === request && useSession.getState().status !== "ready") useSession.setState({ status: "missing" });
   }
 }
 
@@ -174,6 +175,8 @@ function install(raw: LyricLine[], source: LyricsSource, pending: boolean) {
     retimedAt: s.lyrics.length && lines.length ? performance.now() : s.retimedAt,
     stage: null,
     pending,
+    // Word timing arrived: whatever order the aligner's status came in, it synced.
+    ...(source === "aligned" && { syncFailed: false }),
   });
 }
 

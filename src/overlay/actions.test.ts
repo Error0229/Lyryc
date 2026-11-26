@@ -64,6 +64,17 @@ describe("setTrack", () => {
     expect(useSession.getState()).toMatchObject({ status: "ready", source: "aligned" });
   });
 
+  it("keeps the lyrics showing when the late-id lookup fails", async () => {
+    setTrack({ ...full, videoId: null } as unknown as Track);
+    answers[0]({ lines: lines("one", "two", "three"), source: "lrclib", pending: false });
+    await flush();
+    setTrack(full);
+    answers[1](null);
+    await flush();
+    expect(useSession.getState()).toMatchObject({ status: "ready", source: "lrclib" });
+    expect(useSession.getState().lyrics.length).toBe(3);
+  });
+
   it("leaves a running Search again alone when the video id arrives", async () => {
     setTrack({ ...full, videoId: null } as unknown as Track);
     answers[0]({ lines: lines("one", "two", "three"), source: "lrclib", pending: false });
@@ -196,5 +207,17 @@ describe("followAligner (word timing on its way)", () => {
     useSession.setState({ source: "aligned" }); // the timing landed first
     followAligner(status([]));
     expect(useSession.getState().syncFailed).toBe(false);
+  });
+
+  it("clears a failure when word timing lands after the status", async () => {
+    const { followAligner } = await import("./hooks");
+    const { applyLyrics } = await import("./actions");
+    setTrack(full);
+    answers[0]({ lines: lines("one", "two", "three"), source: "lrclib-estimate", pending: false });
+    await flush();
+    followAligner(status(me));
+    followAligner(status([])); // the status came first
+    applyLyrics(full, lines("one", "two", "three"), "aligned");
+    expect(useSession.getState()).toMatchObject({ source: "aligned", syncFailed: false });
   });
 });
