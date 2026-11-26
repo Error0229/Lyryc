@@ -226,6 +226,16 @@ impl Shared {
         self.asked.iter().any(|a| a.asked.song == asked.song)
     }
 
+    /// A queue job ended. Done (aligned, rejected or skipped) and not replaced
+    /// by newer lyrics: no word timing is coming for a waiter still left. One
+    /// whose job was replaced ("Search again") waits for the new job.
+    fn end_job(&mut self, id: &str, finished: bool) {
+        self.queue.end(id, finished);
+        if self.queue.is_done(id) {
+            self.waiters.remove(id);
+        }
+    }
+
     /// The songs being timed for the editor, the running one first.
     fn timing(&self) -> Vec<SongRef> {
         self.running.iter().cloned().chain(self.asked.iter().map(|a| a.asked.song.clone())).collect()
@@ -471,17 +481,12 @@ async fn worker() {
             let mut s = shared();
             // The editor's job was never the queue's: the song's turn there still comes.
             if asked.is_none() {
-                s.queue.end(&id, finished);
+                s.end_job(&id, finished);
             }
             s.working_on = None;
             s.running = None;
             if matches!(outcome, Ok("aligned")) {
                 s.aligned += 1;
-            }
-            // Skipped (a failed download, too long, ...): no word timing is coming.
-            // A preempted job runs again; a finished one answered its waiter already.
-            if matches!(outcome, Err(Failure::Skip(_))) {
-                s.waiters.remove(&id);
             }
         }
         if let (Some(asked), Some(lyrics)) = (asked, &job.lyrics) {
@@ -639,7 +644,6 @@ async fn run(job: &Job, model: &mut Option<model::Model>, verified: &mut bool) -
     let aligned = result?;
     if reject::track_rejected(&aligned) {
         cache_aligned(&song.video_id, &hash, None);
-        notify_waiter(&song.video_id); // nothing to send: it stops waiting
         return Ok("rejected (low confidence)");
     }
     let json = serde_json::to_string(&aligned).map_err(|e| e.to_string())?;
@@ -915,6 +919,29 @@ mod tests {
         let stopped = answer(&job("a").lyrics.unwrap(), &Err(Failure::Cancelled), AlignedCache::Miss);
         assert_eq!(keep(&pasted, stopped, saved), Err(STOPPED.into()));
         assert_eq!(keep(&pasted, Err("not heard".into()), saved), Err("not heard".into()));
+    }
+
+    fn waiter(id: &str) -> Waiter {
+        Waiter { title: id.into(), artist: "a".into(), hash: "h".into(), lyrics: job(id).lyrics.unwrap() }
+    }
+
+    #[test]
+    fn a_finished_job_drops_its_waiter_but_not_a_replacement_jobs() {
+        let mut s = Shared::default();
+        s.queue.set_current(job("v"));
+        s.waiters.insert("v".into(), waiter("v"));
+        s.queue.next().unwrap();
+        s.end_job("v", false);
+        assert!(s.waiters.contains_key("v"), "preempted: it runs again");
+
+        s.queue.next().unwrap();
+        s.queue.forget("v"); // Search again while it runs: newer lyrics, a newer waiter
+        s.end_job("v", true);
+        assert!(s.waiters.contains_key("v"), "the replacement job still owes it");
+
+        s.queue.next().unwrap();
+        s.end_job("v", true);
+        assert!(!s.waiters.contains_key("v"), "done: nothing more is coming");
     }
 
     #[test]
