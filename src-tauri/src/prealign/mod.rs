@@ -275,13 +275,8 @@ pub fn on_track(url: &str) {
     };
     let mut s = shared();
     s.queue.playing(&id);
-    let before = s.waiters.len();
+    // Only other songs' waiters go, so the overlay needs no status for it.
     s.waiters.retain(|v, _| *v == id);
-    let changed = s.waiters.len() != before;
-    drop(s);
-    if changed {
-        emit_status();
-    }
 }
 
 /// `UPCOMING_TRACKS` from the extension's queue reader.

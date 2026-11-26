@@ -20,7 +20,8 @@ export function setTrack(track: Track) {
     // Keep them, and ask again: a search without them, finished or still
     // running, skipped most of the sources. Word timing is kept per video id,
     // so lyrics already showing without one (a cache hit is that fast) ask
-    // again too; the same lines come back as a timing swap.
+    // again too; the same lines come back as a timing swap, so the status
+    // stays "ready" meanwhile (only a search still owed goes back to loading).
     // (loadLyrics' request counter drops the stale one's answer.)
     if (!gainsDetail(shown.track!, track)) return;
     useSession.setState({ track });
