@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { NotFound, TimedLyrics, Track } from "../lib/types";
+import type { NotFound, PrealignStatus, TimedLyrics, Track } from "../lib/types";
 
 // The lookups the overlay asks for, and a way to answer them by hand: lyrics, a
 // `NotFound` to reject with, or null for some other failure.
@@ -51,6 +51,25 @@ describe("setTrack", () => {
     expect(useSession.getState().status).toBe("missing");
     setTrack(full);
     expect(calls.length).toBe(2);
+  });
+
+  it("asks again when the video id arrives after cached lyrics showed: word timing is kept per video", async () => {
+    setTrack({ ...full, videoId: null } as unknown as Track);
+    answers[0]({ lines: lines("one", "two", "three"), source: "lrclib", pending: false });
+    await flush();
+    setTrack(full);
+    expect(calls.map((t) => t.videoId ?? null)).toEqual([null, full.videoId]);
+    answers[1]({ lines: lines("one", "two", "three"), source: "aligned", pending: false });
+    await flush();
+    expect(useSession.getState()).toMatchObject({ status: "ready", source: "aligned" });
+  });
+
+  it("does not ask again when only the length arrives while lyrics show", async () => {
+    setTrack(bare);
+    answers[0]({ lines: lines("one", "two", "three"), source: "lrclib", pending: false });
+    await flush();
+    setTrack(full);
+    expect(calls.length).toBe(1);
   });
 
   it("does not search again for a message that adds nothing", () => {
@@ -133,5 +152,37 @@ describe("refetchLyrics (Search again)", () => {
     answers[1]({ tried: [], rejected: false });
     await flush();
     expect(useSession.getState()).toMatchObject({ refetching: false, searched: null });
+  });
+});
+
+describe("followAligner (word timing on its way)", () => {
+  beforeEach(reset);
+  const status = (waiting: PrealignStatus["waiting"]): PrealignStatus =>
+    ({ enabled: true, state: "ready", download: null, error: null, diskBytes: 0, workingOn: null, aligned: 0, timing: [], waiting });
+  const me = [{ artist: full.artist, track: full.title }];
+
+  it("syncs while the song is listed, queued or running", async () => {
+    const { followAligner } = await import("./hooks");
+    setTrack(full);
+    followAligner(status(me));
+    expect(useSession.getState()).toMatchObject({ aligning: true, syncFailed: false });
+    followAligner(status([{ artist: "Other", track: "Song" }]));
+    expect(useSession.getState().aligning).toBe(false);
+  });
+
+  it("says it failed when the song leaves the list without word timing, not when it arrived", async () => {
+    const { followAligner } = await import("./hooks");
+    setTrack(full);
+    answers[0]({ lines: lines("one", "two", "three"), source: "lrclib-estimate", pending: false });
+    await flush();
+    followAligner(status(me));
+    followAligner(status([]));
+    expect(useSession.getState().syncFailed).toBe(true);
+
+    followAligner(status(me)); // asked again (Search again): waiting once more
+    expect(useSession.getState().syncFailed).toBe(false);
+    useSession.setState({ source: "aligned" }); // the timing landed first
+    followAligner(status([]));
+    expect(useSession.getState().syncFailed).toBe(false);
   });
 });

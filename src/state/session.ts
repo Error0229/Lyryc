@@ -37,8 +37,10 @@ export interface Session {
   stage: LookupStage | null;
   /** Better timing may still arrive for these lyrics (`TimedLyrics.pending`). */
   pending: boolean;
-  /** The pre-aligner is working on this song right now (`prealign-status`). */
+  /** Word timing for this song is on its way: queued or running (`prealign-status`). */
   aligning: boolean;
+  /** The pre-aligner gave up on this song: it stopped waiting and no word timing came. */
+  syncFailed: boolean;
   /** How the last "Search again" ended, for the status icon to name; null for a song it never ran on. */
   searched: Searched | null;
   /** Bumped when AI providers or routes change: a failed translation retries. */
@@ -65,6 +67,7 @@ export const useSession = create<Session>()(() => ({
   stage: null,
   pending: false,
   aligning: false,
+  syncFailed: false,
   searched: null,
   llmRevision: 0,
   playing: false,

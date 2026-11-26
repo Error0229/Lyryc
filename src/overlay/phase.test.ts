@@ -3,7 +3,7 @@ import { phaseOf, statusIcon, type IconInput, type PhaseInput } from "./phase";
 
 const at = (p: Partial<PhaseInput>) => phaseOf({ hasTrack: true, status: "loading", stage: null, source: null, refetching: false, ...p });
 const icon = (i: Partial<IconInput>) =>
-  statusIcon({ phase: "word", stage: null, source: null, syncing: false, justSynced: false, quiet: false, idleHint: false, searched: null, justSearched: false, ...i });
+  statusIcon({ phase: "word", stage: null, source: null, syncing: false, syncFailed: false, justSynced: false, quiet: false, idleHint: false, searched: null, justSearched: false, ...i });
 
 describe("phaseOf", () => {
   it("is idle without a track", () => {
@@ -49,10 +49,11 @@ describe("statusIcon", () => {
     expect(icon({ phase: "sources", stage: "other-recording" })?.tip).toBe("Finding the original's words");
   });
 
-  it("says estimated, or syncing when better timing is on its way", () => {
-    expect(icon({ phase: "estimate" })?.id).toBe("estimate");
-    expect(icon({ phase: "estimate", source: "cover-estimate" })?.tip).toBe("Original's words, estimated");
+  it("says not synced, syncing when better timing is on its way, or that syncing failed", () => {
+    expect(icon({ phase: "estimate" })).toMatchObject({ id: "estimate", tip: "Not synced" });
+    expect(icon({ phase: "estimate", source: "cover-estimate" })?.tip).toBe("Original's words, not synced");
     expect(icon({ phase: "estimate", syncing: true })).toMatchObject({ id: "syncing", motion: "bars" });
+    expect(icon({ phase: "estimate", syncFailed: true })?.tip).toBe("Couldn't sync to the vocals");
     expect(icon({ phase: "line", syncing: true })?.id).toBe("syncing");
   });
 

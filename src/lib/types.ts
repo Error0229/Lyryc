@@ -68,6 +68,8 @@ export interface PrealignStatus {
   aligned: number;
   /** Saved songs being timed for the editor (`alignLyrics`), the running one first; names as the cache keys them. */
   timing: SongRef[];
+  /** Songs on screen whose word timing is on its way (queued or running), as the player names them. */
+  waiting: SongRef[];
 }
 
 /** A saved song, by the names the cache keys it under. */

@@ -189,6 +189,7 @@ export function Overlay() {
     stage: s.stage,
     source: s.source,
     syncing: s.pending || s.aligning,
+    syncFailed: s.syncFailed,
     justSynced,
     quiet,
     idleHint: launched || stripHovered,

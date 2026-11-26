@@ -17,18 +17,19 @@ export function setTrack(track: Track) {
   const shown = useSession.getState();
   if (sameTrack(shown.track, track)) {
     // The player often sends the length and video id a moment after the title.
-    // Keep them, and search again unless lyrics are already showing: a search
-    // without them, finished or still running, skipped most of the sources.
+    // Keep them, and ask again: a search without them, finished or still
+    // running, skipped most of the sources. Word timing is kept per video id,
+    // so lyrics already showing without one (a cache hit is that fast) ask
+    // again too; the same lines come back as a timing swap.
     // (loadLyrics' request counter drops the stale one's answer.)
     if (!gainsDetail(shown.track!, track)) return;
     useSession.setState({ track });
-    if (shown.status === "missing" || shown.status === "loading") {
-      useSession.setState({ status: "loading" });
-      void loadLyrics(track);
-    }
+    const searching = shown.status === "missing" || shown.status === "loading";
+    if (searching) useSession.setState({ status: "loading" });
+    if (searching || (!shown.track!.videoId && track.videoId)) void loadLyrics(track);
     return;
   }
-  useSession.setState({ track, lyrics: [], source: null, status: "loading", translations: {}, retimedAt: 0, refetching: false, stage: null, pending: false, aligning: false, searched: null });
+  useSession.setState({ track, lyrics: [], source: null, status: "loading", translations: {}, retimedAt: 0, refetching: false, stage: null, pending: false, aligning: false, syncFailed: false, searched: null });
   playhead.reset();
   void loadLyrics(track);
 }
@@ -108,7 +109,7 @@ export async function startOver() {
   const { track } = useSession.getState();
   if (!track) return;
   ++request; // answers on their way are for the song as it was
-  useSession.setState({ lyrics: [], source: null, status: "loading", translations: {}, refetching: false, stage: null, pending: false, searched: null });
+  useSession.setState({ lyrics: [], source: null, status: "loading", translations: {}, refetching: false, stage: null, pending: false, syncFailed: false, searched: null });
   try {
     await backend.startOver(track);
   } catch (e) {

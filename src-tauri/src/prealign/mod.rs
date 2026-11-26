@@ -92,6 +92,10 @@ pub struct Status {
     aligned: u32,
     /// The saved songs being timed for the editor: the running one first, then the waiting ones.
     timing: Vec<SongRef>,
+    /// Songs on screen whose word timing is on its way (queued or running),
+    /// named as the player named them. One that leaves without word timing
+    /// arriving could not be synced.
+    waiting: Vec<SongRef>,
 }
 
 /// A saved song, named as the cache keys it (`lyrics_cache::song_key`).
@@ -261,7 +265,13 @@ pub fn on_track(url: &str) {
     };
     let mut s = shared();
     s.queue.playing(&id);
+    let before = s.waiters.len();
     s.waiters.retain(|v, _| *v == id);
+    let changed = s.waiters.len() != before;
+    drop(s);
+    if changed {
+        emit_status();
+    }
 }
 
 /// `UPCOMING_TRACKS` from the extension's queue reader.
@@ -356,6 +366,7 @@ pub fn serve(video_id: Option<&str>, title: &str, artist: &str, duration: Option
             }
             drop(s);
             P.wake.notify_one();
+            emit_status();
             Served::Pending
         }
     }
@@ -466,6 +477,11 @@ async fn worker() {
             s.running = None;
             if matches!(outcome, Ok("aligned")) {
                 s.aligned += 1;
+            }
+            // Skipped (a failed download, too long, ...): no word timing is coming.
+            // A preempted job runs again; a finished one answered its waiter already.
+            if matches!(outcome, Err(Failure::Skip(_))) {
+                s.waiters.remove(&id);
             }
         }
         if let (Some(asked), Some(lyrics)) = (asked, &job.lyrics) {
@@ -623,6 +639,7 @@ async fn run(job: &Job, model: &mut Option<model::Model>, verified: &mut bool) -
     let aligned = result?;
     if reject::track_rejected(&aligned) {
         cache_aligned(&song.video_id, &hash, None);
+        notify_waiter(&song.video_id); // nothing to send: it stops waiting
         return Ok("rejected (low confidence)");
     }
     let json = serde_json::to_string(&aligned).map_err(|e| e.to_string())?;
@@ -661,6 +678,7 @@ fn status() -> Status {
         working_on: s.working_on.clone(),
         aligned: s.aligned,
         timing: s.timing(),
+        waiting: s.waiters.values().map(|w| SongRef { artist: w.artist.clone(), track: w.title.clone() }).collect(),
     }
 }
 
